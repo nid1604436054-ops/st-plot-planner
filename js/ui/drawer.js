@@ -1,12 +1,13 @@
-// 主面板：右侧抽屉 + 五个功能页签
+// 主面板：顶部下拉抽屉 + 六个功能页签（五个模块 + 设置）
 // 页签间跳转用全局事件 pp-switch-tab，避免页签模块反向依赖本文件
 import { worldbookTab } from "./tabs/tab-worldbook.js";
 import { guidanceTab } from "./tabs/tab-guidance.js";
 import { eventsTab } from "./tabs/tab-events.js";
 import { injectionsTab } from "./tabs/tab-injections.js";
 import { storageTab } from "./tabs/tab-storage.js";
+import { settingsTab } from "./tabs/tab-settings.js";
 
-const TABS = [worldbookTab, guidanceTab, eventsTab, injectionsTab, storageTab];
+const TABS = [worldbookTab, guidanceTab, eventsTab, injectionsTab, storageTab, settingsTab];
 let activeId = TABS[0].id;
 
 export function initDrawer() {

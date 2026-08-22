@@ -14,7 +14,7 @@ export class ApiError extends Error {
 function requireConfig() {
     const { baseUrl, model } = settings.api;
     if (!baseUrl || !model) {
-        throw new ApiError('请先在「扩展设置 → 剧情规划器」里配置 API 地址和模型');
+        throw new ApiError('请先在「剧情规划器 → 设置」页签里配置 API 地址和模型');
     }
 }
 

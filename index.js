@@ -1,15 +1,13 @@
 // 剧情规划器 (Plot Planner) — SillyTavern 第三方扩展入口
-// 装配：扩展设置区块 + 右侧抽屉面板；挂接聊天切换 / 新消息事件
+// 装配：顶部下拉主面板 + 魔法棒菜单入口；挂接聊天切换 / 新消息事件
 // 依赖酒馆全局环境（jQuery / toastr / SillyTavern），纯浏览器端 ES Module，无构建步骤
 import { eventSource, event_types } from "/script.js";
-import { initSettingsPanel } from "./js/ui/settingsPanel.js";
 import { initDrawer, openDrawer } from "./js/ui/drawer.js";
 import { initWandMenu } from "./js/ui/wandMenu.js";
 import { replayScopedInjections, tickInjectionExpiries } from "./js/injection.js";
 import { scanAndApplyStorage } from "./js/store.js";
 
 jQuery(() => {
-    initSettingsPanel();
     initDrawer();
     initWandMenu();
 

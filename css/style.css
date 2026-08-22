@@ -171,7 +171,6 @@
 .pp-option { margin-top: 6px; text-align: left; width: 100%; }
 
 /* 修复：酒馆 .menu_button 是 width:min-content，中文没有空格会被挤成单字竖排 */
-.plot-planner-ext .menu_button,
 .pp-drawer .menu_button {
     width: auto;
     white-space: nowrap;
@@ -184,8 +183,7 @@
     white-space: normal;
 }
 
-/* 模型输入行：输入框占满 + 拉取按钮不换行 */
-.pp-model-row {
+/* 模型输入行：输入框占满 + 拉取按钮不换行 */.pp-model-row {
     display: flex;
     gap: 8px;
     align-items: center;
@@ -204,14 +202,6 @@
 .pp-group-title {
     font-weight: bold;
     opacity: 0.7;
-}
-
-/* 设置区块（扩展面板内）布局：flex 放在包装层，不覆盖酒馆抽屉的开/关 display */
-.plot-planner-ext .pp-settings-body {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-top: 8px;
 }
 
 /* 抽屉内表单控件占满宽度 */
