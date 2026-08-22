@@ -1,5 +1,7 @@
 // 主面板：顶部下拉抽屉 + 六个功能页签（五个模块 + 设置）
-// 高度：默认一直伸到聊天输入框上沿；右下角可手动拖拉，拉过的高度本次会话内记住
+// 高度自适应内容：面板跟着内容长高，封顶在聊天输入框上沿，超出部分内部滚动；
+// 右下角手柄可手动拉——条目很多时可拉下去盖住输入框一次看更多。
+// 用户手动拉过后（本次打开期间）不再自动适配，关掉重开恢复自适应。
 // 页签间跳转用全局事件 pp-switch-tab，避免页签模块反向依赖本文件
 import { worldbookTab } from "./tabs/tab-worldbook.js";
 import { guidanceTab } from "./tabs/tab-guidance.js";
@@ -11,32 +13,42 @@ import { settingsTab } from "./tabs/tab-settings.js";
 const TABS = [worldbookTab, guidanceTab, eventsTab, injectionsTab, storageTab, settingsTab];
 let activeId = TABS[0].id;
 
-// 用户手动拉过的高度（px）；0 = 没拉过，每次打开都按“贴到输入框上沿”重算
-let userHeight = 0;
-// 上次 open 时我们写入的高度，用来在关闭时判断“当前高度是否被用户拉过”
+// 上次自动适配写入的高度；当前内联高度与它不一致 = 用户拖过，停止自动适配
 let lastApplied = 0;
+let fitQueued = false;
 
 function drawerEl() {
     return document.getElementById('pp_drawer');
 }
 
-function computeDefaultHeight() {
+function contentEl() {
+    return document.getElementById('pp_tab_content');
+}
+
+// 自动适配的上限：聊天输入框上沿（拿不到就退回 min(640px, 75vh)）
+function capToInput() {
     const el = drawerEl();
     const top = el.getBoundingClientRect().top;
-    const maxAvail = Math.max(240, window.innerHeight - top - 8);
     const form = document.getElementById('form_sheld') ?? document.getElementById('send_form');
     if (form) {
         const h = form.getBoundingClientRect().top - top - 8;
-        if (h > 240) return Math.min(h, maxAvail);
+        if (h > 240) return h;
     }
-    return Math.min(640, maxAvail);
+    return Math.min(640, window.innerHeight * 0.75);
 }
 
-function applyHeight() {
+function fitHeight() {
     const el = drawerEl();
+    if (!el?.classList.contains('pp-open')) return;
+    const current = parseFloat(el.style.height);
+    if (Number.isFinite(current) && lastApplied && Math.abs(current - lastApplied) > 2) return; // 用户拖过
+    const content = contentEl();
     const top = el.getBoundingClientRect().top;
     const maxAvail = Math.max(240, window.innerHeight - top - 8);
-    const h = Math.round(Math.min(userHeight || computeDefaultHeight(), maxAvail));
+    // 头部+页签条等非滚动部分的开销 = 面板高 - 内容可视高
+    const overhead = el.offsetHeight - content.clientHeight;
+    const needed = content.scrollHeight + overhead + 8;
+    const h = Math.round(Math.min(Math.max(240, needed), Math.min(capToInput(), maxAvail)));
     lastApplied = h;
     el.style.height = `${h}px`;
 }
@@ -61,26 +73,40 @@ export function initDrawer() {
     });
     document.addEventListener('pp-switch-tab', e => activateTab(e.detail?.id));
 
-    // 窗口尺寸变了：开着就按新视口重新夹取高度（用户拉过的长度仍保留，只夹到不超出屏幕）
+    // 内容增删/展开/换页签都触发自动适配；childList 就够（勾选、输入不改变结构）
+    const observer = new MutationObserver(() => {
+        if (fitQueued) return;
+        fitQueued = true;
+        requestAnimationFrame(() => {
+            fitQueued = false;
+            fitHeight();
+        });
+    });
+    observer.observe(contentEl(), { childList: true, subtree: true });
+
+    // 窗口尺寸变化：把当前高度夹进新视口（用户拖过的也夹，但不重置）
     $(window).on('resize', () => {
-        if (drawerEl()?.classList.contains('pp-open')) applyHeight();
+        const el = drawerEl();
+        if (!el?.classList.contains('pp-open')) return;
+        const top = el.getBoundingClientRect().top;
+        const maxAvail = Math.max(240, window.innerHeight - top - 8);
+        const current = parseFloat(el.style.height) || lastApplied || 0;
+        el.style.height = `${Math.round(Math.max(240, Math.min(current, maxAvail)))}px`;
     });
 }
 
 export function openDrawer() {
-    applyHeight();
-    $('#pp_drawer').addClass('pp-open');
+    const el = drawerEl();
+    el.style.height = '';
+    lastApplied = 0;
+    $(el).addClass('pp-open');
     activateTab(activeId);
 }
 
 export function closeDrawer() {
     const el = drawerEl();
-    // 拖拉手柄改的是元素内联高度：和上次打开时写入的不一样，说明用户拉过，记住它
-    const h = parseFloat(el.style.height);
-    if (Number.isFinite(h) && Math.abs(h - lastApplied) > 4) {
-        userHeight = Math.round(h);
-    }
     el.style.height = '';
+    lastApplied = 0;
     $(el).removeClass('pp-open');
 }
 
@@ -88,7 +114,8 @@ export function activateTab(id) {
     const tab = TABS.find(t => t.id === id) ?? TABS[0];
     activeId = tab.id;
     $('.pp-tab').removeClass('pp-active').filter(`[data-tab="${tab.id}"]`).addClass('pp-active');
-    const container = document.getElementById('pp_tab_content');
+    const container = contentEl();
     container.innerHTML = '';
     tab.render(container);
+    fitHeight();
 }
