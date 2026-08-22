@@ -1,26 +1,25 @@
-// M1 世界书：导入（酒馆原生 JSON / 纯文本）+ 关键词/正则检索
+// M1 世界书：导入（酒馆原生 JSON / 纯文本单条）+ 关键词检索
 // 检索结果只喂给插件自己的规划调用，不影响主对话的提示词（开发方案 §M1）
+// 只保留「内容 + 关键词匹配」：酒馆原生的常驻 / 次要关键词 / 正则等格式一律不采用
 import { settings, newId } from "./settings.js";
 
 // 数据结构：
 // Lorebook  { id, name, enabled, source, entries: LoreEntry[] }
-// LoreEntry { uid, comment, keys[], secondaryKeys[], regex[], content, constant, order, disabled }
+// LoreEntry { uid, comment, keys[], content, disabled }
+// 命中规则：条目已启用且任一关键词出现在扫描文本里（大小写不敏感）
 
 export function normalizeEntry(raw = {}, index = 0) {
     return {
         uid: raw.uid ?? index,
         comment: raw.comment || `条目 ${index + 1}`,
         keys: (Array.isArray(raw.key) ? raw.key : (raw.keys ?? [])).filter(Boolean).map(String),
-        secondaryKeys: (Array.isArray(raw.keysecondary) ? raw.keysecondary : (raw.secondaryKeys ?? [])).filter(Boolean).map(String),
-        regex: (raw.regex ?? []).filter(Boolean).map(String),
         content: String(raw.content ?? ''),
-        constant: Boolean(raw.constant),
-        order: Number.isFinite(raw.order) ? raw.order : 100,
         disabled: Boolean(raw.disable ?? raw.disabled),
     };
 }
 
-// 导入酒馆原生世界书 JSON（entries 为对象或数组均可）
+// 导入酒馆原生世界书 JSON（entries 为对象或数组均可）。
+// 只取标题 / 关键词 / 内容 / 原禁用状态，常驻等其余格式信息丢弃
 export function importSillyTavernJson(text, name) {
     const data = JSON.parse(text);
     const rawEntries = data.entries ?? data;
@@ -37,38 +36,20 @@ export function importSillyTavernJson(text, name) {
     };
 }
 
-// 导入纯文本。格式约定（开发方案 §M1）：
-//   - 单独一行 “---” 分隔条目
-//   - 条目首行可为 “# 标题 | 关键词1,关键词2”
-//   - 关键词段以 [常驻] 开头表示 constant
-export function importPlainText(text, name) {
-    const blocks = text.split(/^\s*---\s*$/m).map(b => b.trim()).filter(Boolean);
-    if (!blocks.length) throw new Error('未解析到任何内容块');
-    const entries = blocks.map((block, i) => {
-        const lines = block.split('\n');
-        let comment = `条目 ${i + 1}`;
-        let keys = [];
-        let constant = false;
-        let content = block;
-        const header = lines[0].match(/^#\s*(.+?)(?:\s*\|\s*(.*))?$/);
-        if (header) {
-            comment = header[1].trim();
-            let keyPart = (header[2] ?? '').trim();
-            if (/^\[常驻\]/.test(keyPart)) {
-                constant = true;
-                keyPart = keyPart.replace(/^\[常驻\]\s*/, '');
-            }
-            keys = keyPart ? keyPart.split(/[,，]/).map(s => s.trim()).filter(Boolean) : [];
-            content = lines.slice(1).join('\n').trim();
-        }
-        return { uid: i, comment, keys, secondaryKeys: [], regex: [], content, constant, order: 100, disabled: false };
-    });
+// 纯文本：一次粘贴的整块就是一条条目，不做任何切块解析
+export function createTextBook(name, keys = [], content = '') {
     return {
         id: newId('lb-'),
         name: name || '导入的文本世界书',
         enabled: true,
         source: 'plain-text',
-        entries,
+        entries: [{
+            uid: 0,
+            comment: name || '条目 1',
+            keys: keys.map(String).filter(Boolean),
+            content,
+            disabled: false,
+        }],
     };
 }
 
@@ -81,22 +62,45 @@ export function removeLorebook(id) {
     settings.lorebooks = settings.lorebooks.filter(b => b.id !== id);
 }
 
+export function findEntry(bookId, uid) {
+    const book = settings.lorebooks.find(b => b.id === bookId);
+    const entry = book?.entries.find(e => String(e.uid) === String(uid));
+    return entry ?? null;
+}
+
+export function addEntry(bookId, { comment, keys, content }) {
+    const book = settings.lorebooks.find(b => b.id === bookId);
+    if (!book) return null;
+    const uid = book.entries.reduce((m, e) => Math.max(m, Number(e.uid) || 0), -1) + 1;
+    const entry = {
+        uid,
+        comment: comment || `条目 ${book.entries.length + 1}`,
+        keys: (keys ?? []).map(String).filter(Boolean),
+        content: content ?? '',
+        disabled: false,
+    };
+    book.entries.push(entry);
+    return entry;
+}
+
+export function removeEntry(bookId, uid) {
+    const book = settings.lorebooks.find(b => b.id === bookId);
+    if (!book) return;
+    book.entries = book.entries.filter(e => String(e.uid) !== String(uid));
+}
+
 function enabledBooks() {
     return settings.lorebooks.filter(b => b.enabled);
 }
 
-function toRegex(pattern) {
-    try {
-        return new RegExp(pattern, 'i');
-    } catch {
-        return null; // 无效正则直接跳过
-    }
+export function parseKeys(text) {
+    return String(text ?? '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
 }
 
 /**
  * 检索：扫描 scanText，返回跨所有启用书籍的命中条目。
- * 命中规则：constant 恒命中；任一主关键词子串命中（若设有次关键词，还需任一次关键词命中）；
- * 任一正则 test 通过。按 order 升序截断，总量受 maxChars 限制。
+ * 命中规则：条目启用、内容非空、且任一关键词（子串，大小写不敏感）出现在扫描文本里。
+ * 按 maxEntries 截断，总量受 maxChars 限制。
  */
 export function scanLorebooks(scanText, { maxEntries, maxChars } = {}) {
     const opts = settings.retrieval;
@@ -108,24 +112,14 @@ export function scanLorebooks(scanText, { maxEntries, maxChars } = {}) {
     for (const book of enabledBooks()) {
         for (const entry of book.entries) {
             if (entry.disabled || !entry.content) continue;
-            let hit = entry.constant;
-            if (!hit && entry.keys.length) {
-                const primary = entry.keys.some(k => haystack.includes(String(k).toLowerCase()));
-                const secondaryOk = !entry.secondaryKeys.length
-                    || entry.secondaryKeys.some(k => haystack.includes(String(k).toLowerCase()));
-                hit = primary && secondaryOk;
+            const keys = Array.isArray(entry.keys) ? entry.keys : [];
+            if (keys.some(k => haystack.includes(String(k).toLowerCase()))) {
+                hits.push({ book, entry });
             }
-            if (!hit && entry.regex.length) {
-                hit = entry.regex.some(p => {
-                    const re = toRegex(p);
-                    return re && re.test(String(scanText ?? ''));
-                });
-            }
-            if (hit) hits.push({ book, entry });
         }
     }
 
-    hits.sort((a, b) => (a.entry.order - b.entry.order) || (a.entry.uid - b.entry.uid));
+    hits.sort((a, b) => (Number(a.entry.uid) || 0) - (Number(b.entry.uid) || 0));
 
     let used = 0;
     const included = [];

@@ -1,11 +1,16 @@
-// 世界书页签：导入（酒馆 JSON / 纯文本粘贴）、书籍与条目级启停、删除、检索测试
+// 世界书页签：导入（酒馆 JSON / 纯文本单条粘贴）、书改名/启停/删除、
+// 条目级编辑（标题/关键词/内容/删除/添加）、检索测试
 import { settings, save } from "../../settings.js";
-import { importSillyTavernJson, importPlainText, addLorebook, removeLorebook, scanLorebooks } from "../../lorebook.js";
+import {
+    importSillyTavernJson, createTextBook, addLorebook, removeLorebook,
+    findEntry, addEntry, removeEntry, scanLorebooks, parseKeys,
+} from "../../lorebook.js";
 import { collectRecentChat, formatChatLog } from "../../context.js";
 import { escapeHtml, clamp, readFileAsText } from "../../utils.js";
 
-// 展开着条目列表的书 id：页签重渲染后仍保持展开状态
+// 展开状态跨页签重渲染保持：展开条目列表的书 / 正在添加条目的书
 const openBooks = new Set();
+let addingEntry = null;
 
 export const worldbookTab = {
     id: 'worldbook',
@@ -20,10 +25,12 @@ export const worldbookTab = {
                 <div id="pp_wb_scan" class="menu_button">检索测试</div>
             </div>
             <div id="pp_wb_txt_editor" style="display:none">
-                <label class="pp-label">名称</label>
+                <label class="pp-label">书名</label>
                 <input id="pp_wb_txt_name" class="text_pole textarea_compact" type="text" placeholder="文本世界书名称" />
-                <label class="pp-label">内容：“---” 单独一行分隔条目；每条第一行可写 “# 标题 | 关键词1,关键词2”，关键词前加 [常驻] 表示一直生效</label>
-                <textarea id="pp_wb_txt_content" class="text_pole textarea_compact" rows="8" placeholder="# 皇宫布局 | 皇宫,王室&#10;皇宫分为前三殿后六宫……&#10;---&#10;# 龙骑士团 | 龙骑士&#10;龙骑士团直属王室……"></textarea>
+                <label class="pp-label">本条关键词（可选，逗号分隔；之后可随时在条目旁修改）</label>
+                <input id="pp_wb_txt_keys" class="text_pole textarea_compact" type="text" placeholder="扑克,德扑" />
+                <label class="pp-label">内容（整块作为一条条目导入，不分块）</label>
+                <textarea id="pp_wb_txt_content" class="text_pole textarea_compact" rows="8" placeholder="粘贴这一条的完整内容……"></textarea>
                 <div class="pp-btn-row">
                     <div id="pp_wb_txt_confirm" class="menu_button">确认导入</div>
                     <div id="pp_wb_txt_cancel" class="menu_button">取消</div>
@@ -33,7 +40,7 @@ export const worldbookTab = {
         </div>
         <div id="pp_wb_scan_wrap" class="pp-section" style="display:none">
             <b>检索测试</b>
-            <span class="pp-muted">输入一段测试剧情，看会命中哪些条目；留空则用最近 ${settings.retrieval.scanDepth} 层对话来测。</span>
+            <span class="pp-muted">输入一段测试剧情，看会命中哪些条目；留空则用最近 ${settings.retrieval.scanDepth} 层对话来测。命中规则：条目已启用，且任一关键词出现在这段文本里。</span>
             <textarea id="pp_wb_scan_text" class="text_pole textarea_compact" rows="3" placeholder="例如：她推开皇宫侧门，撞见了龙骑士团的队长"></textarea>
             <div class="pp-btn-row">
                 <div id="pp_wb_scan_run" class="menu_button">测试命中</div>
@@ -65,6 +72,7 @@ export const worldbookTab = {
         container.querySelector('#pp_wb_txt_cancel').addEventListener('click', () => {
             txtEditor.style.display = 'none';
             container.querySelector('#pp_wb_txt_name').value = '';
+            container.querySelector('#pp_wb_txt_keys').value = '';
             container.querySelector('#pp_wb_txt_content').value = '';
         });
         container.querySelector('#pp_wb_txt_confirm').addEventListener('click', () => {
@@ -73,18 +81,18 @@ export const worldbookTab = {
                 toastr.warning('请先粘贴内容');
                 return;
             }
-            try {
-                const name = container.querySelector('#pp_wb_txt_name').value.trim() || '导入的文本世界书';
-                const book = importPlainText(content, name);
-                addLorebook(book);
-                openBooks.add(book.id);
-                save();
-                toastr.success(`已导入「${book.name}」：${book.entries.length} 个条目`);
-                container.querySelector('#pp_wb_txt_cancel').click();
-                renderBooks(container);
-            } catch (err) {
-                toastr.error(`导入失败：${err.message}`);
-            }
+            const name = container.querySelector('#pp_wb_txt_name').value.trim();
+            const book = createTextBook(
+                name,
+                parseKeys(container.querySelector('#pp_wb_txt_keys').value),
+                content,
+            );
+            addLorebook(book);
+            openBooks.add(book.id);
+            save();
+            toastr.success(`已导入「${book.name}」，可在条目旁补充关键词`);
+            container.querySelector('#pp_wb_txt_cancel').click();
+            renderBooks(container);
         });
 
         const scanWrap = container.querySelector('#pp_wb_scan_wrap');
@@ -109,15 +117,6 @@ export const worldbookTab = {
     },
 };
 
-function entryKeySummary(e) {
-    if (e.constant) return '常驻';
-    const parts = [];
-    if (e.keys.length) parts.push(e.keys.join('、'));
-    if (e.secondaryKeys.length) parts.push(`次要：${e.secondaryKeys.join('、')}`);
-    if (e.regex.length) parts.push(`正则×${e.regex.length}`);
-    return parts.join(' · ') || '（无关键词，不会命中）';
-}
-
 function enabledCount(book) {
     return book.entries.filter(e => !e.disabled).length;
 }
@@ -137,32 +136,56 @@ function renderBooks(container) {
     }
     list.innerHTML = settings.lorebooks.map(b => {
         const open = openBooks.has(b.id);
+        const adding = addingEntry === b.id;
         return `
         <div class="pp-book">
             <div class="pp-item">
                 <div class="pp-item-main">
-                    <span class="pp-item-title">${escapeHtml(b.name)}</span>
+                    <input type="text" class="pp-book-name" data-bname="${b.id}" value="${escapeHtml(b.name)}" title="点击修改书名" />
                 </div>
                 <div class="pp-item-ops">
                     <span class="menu_button" data-toggle="${b.id}">条目 ${enabledCount(b)}/${b.entries.length} <i class="fa-solid fa-chevron-${open ? 'down' : 'right'}"></i></span>
                     <label><input type="checkbox" data-en="${b.id}" ${b.enabled ? 'checked' : ''} /> 启用</label>
-                    <span class="menu_button fa-solid fa-trash" data-del="${b.id}" title="删除"></span>
+                    <span class="menu_button fa-solid fa-trash" data-del="${b.id}" title="删除整本"></span>
                 </div>
             </div>
             <div class="pp-entries" ${open ? '' : 'hidden'}>
                 <div class="pp-btn-row">
+                    <span class="menu_button" data-add="${b.id}">添加条目</span>
                     <span class="menu_button" data-all="${b.id}">全选</span>
                     <span class="menu_button" data-none="${b.id}">全不选</span>
                 </div>
+                ${adding ? `
+                <div class="pp-entry-add">
+                    <input type="text" class="text_pole textarea_compact" data-add-name="${b.id}" placeholder="条目标题" />
+                    <input type="text" class="text_pole textarea_compact" data-add-keys="${b.id}" placeholder="检索关键词，逗号分隔" />
+                    <textarea class="text_pole textarea_compact" data-add-content="${b.id}" rows="5" placeholder="条目内容"></textarea>
+                    <div class="pp-btn-row">
+                        <span class="menu_button" data-add-confirm="${b.id}">确认添加</span>
+                        <span class="menu_button" data-add-cancel="${b.id}">取消</span>
+                    </div>
+                </div>` : ''}
                 ${b.entries.map(e => `
-                <div class="pp-entry-row">
-                    <input type="checkbox" data-een="${b.id}:${e.uid}" ${e.disabled ? '' : 'checked'} title="启用/停用该条目" />
-                    <span class="pp-entry-name">${escapeHtml(e.comment)}</span>
-                    <span class="pp-muted">${escapeHtml(entryKeySummary(e))}</span>
+                <div class="pp-entry">
+                    <div class="pp-entry-row">
+                        <input type="checkbox" data-een="${b.id}:${e.uid}" ${e.disabled ? '' : 'checked'} title="启用/停用该条目" />
+                        <input type="text" class="text_pole pp-entry-name" data-ename="${b.id}:${e.uid}" value="${escapeHtml(e.comment)}" placeholder="条目标题" title="条目标题，可直接修改" />
+                        <input type="text" class="text_pole pp-entry-keys" data-ekeys="${b.id}:${e.uid}" value="${escapeHtml((e.keys ?? []).join(','))}" placeholder="关键词，逗号分隔" title="检索关键词，逗号分隔；留空则不会命中" />
+                        <span class="menu_button fa-solid fa-pen" data-eedit="${b.id}:${e.uid}" title="编辑内容"></span>
+                        <span class="menu_button fa-solid fa-trash" data-edel="${b.id}:${e.uid}" title="删除条目"></span>
+                    </div>
                 </div>`).join('')}
             </div>
         </div>`;
     }).join('');
+
+    list.querySelectorAll('[data-bname]').forEach(el => el.addEventListener('change', () => {
+        const book = settings.lorebooks.find(b => b.id === el.dataset.bname);
+        if (!book) return;
+        book.name = el.value.trim() || book.name;
+        el.value = book.name;
+        save();
+    }));
 
     list.querySelectorAll('[data-toggle]').forEach(el => el.addEventListener('click', () => {
         const id = el.dataset.toggle;
@@ -181,15 +204,89 @@ function renderBooks(container) {
         save();
         renderBooks(container);
     }));
+
     list.querySelectorAll('[data-een]').forEach(el => el.addEventListener('change', () => {
         const [bookId, uid] = el.dataset.een.split(':');
-        const book = settings.lorebooks.find(b => b.id === bookId);
-        const entry = book?.entries.find(e => String(e.uid) === uid);
+        const entry = findEntry(bookId, uid);
         if (!entry) return;
         entry.disabled = !el.checked;
         save();
         updateBookCount(list, bookId);
     }));
+    list.querySelectorAll('[data-ename]').forEach(el => el.addEventListener('change', () => {
+        const [bookId, uid] = el.dataset.ename.split(':');
+        const entry = findEntry(bookId, uid);
+        if (!entry) return;
+        entry.comment = el.value.trim() || '未命名';
+        if (!el.value.trim()) el.value = entry.comment;
+        save();
+    }));
+    list.querySelectorAll('[data-ekeys]').forEach(el => el.addEventListener('change', () => {
+        const [bookId, uid] = el.dataset.ekeys.split(':');
+        const entry = findEntry(bookId, uid);
+        if (!entry) return;
+        entry.keys = parseKeys(el.value);
+        el.value = entry.keys.join(',');
+        save();
+    }));
+    list.querySelectorAll('[data-eedit]').forEach(el => el.addEventListener('click', () => {
+        const [bookId, uid] = el.dataset.eedit.split(':');
+        const entry = findEntry(bookId, uid);
+        if (!entry) return;
+        const row = el.closest('.pp-entry');
+        const existing = row.querySelector('.pp-entry-edit');
+        if (existing) {
+            existing.remove();
+            return;
+        }
+        // 内容编辑框就地展开，不整体重渲染，避免长列表滚动位置丢失
+        const editor = document.createElement('div');
+        editor.className = 'pp-entry-edit';
+        editor.innerHTML = `
+            <textarea class="text_pole textarea_compact" rows="6" placeholder="条目内容"></textarea>
+            <div class="pp-btn-row"><span class="menu_button pp-entry-save">保存内容</span></div>`;
+        editor.querySelector('textarea').value = entry.content;
+        editor.querySelector('.pp-entry-save').addEventListener('click', () => {
+            entry.content = editor.querySelector('textarea').value.trim();
+            save();
+            toastr.success('内容已保存');
+        });
+        row.appendChild(editor);
+    }));
+    list.querySelectorAll('[data-edel]').forEach(el => el.addEventListener('click', () => {
+        const [bookId, uid] = el.dataset.edel.split(':');
+        removeEntry(bookId, uid);
+        save();
+        renderBooks(container);
+    }));
+
+    list.querySelectorAll('[data-add]').forEach(el => el.addEventListener('click', () => {
+        addingEntry = addingEntry === el.dataset.add ? null : el.dataset.add;
+        renderBooks(container);
+    }));
+    list.querySelectorAll('[data-add-cancel]').forEach(el => el.addEventListener('click', () => {
+        addingEntry = null;
+        renderBooks(container);
+    }));
+    list.querySelectorAll('[data-add-confirm]').forEach(el => el.addEventListener('click', () => {
+        const id = el.dataset.addConfirm;
+        const q = attr => list.querySelector(`[data-add-${attr}="${id}"]`);
+        const content = q('content').value.trim();
+        if (!content) {
+            toastr.warning('内容不能为空');
+            return;
+        }
+        addEntry(id, {
+            comment: q('name').value.trim(),
+            keys: parseKeys(q('keys').value),
+            content,
+        });
+        addingEntry = null;
+        save();
+        toastr.success('已添加条目');
+        renderBooks(container);
+    }));
+
     list.querySelectorAll('[data-all]').forEach(el => el.addEventListener('click', () => {
         setAllEntries(el.dataset.all, false, container);
     }));
