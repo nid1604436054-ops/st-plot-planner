@@ -6,16 +6,19 @@ import { initDrawer, openDrawer } from "./js/ui/drawer.js";
 import { initWandMenu } from "./js/ui/wandMenu.js";
 import { replayScopedInjections, tickInjectionExpiries } from "./js/injection.js";
 import { scanAndApplyStorage } from "./js/store.js";
-import { syncMemory, persistMemory } from "./js/memoryTable.js";
+import { syncMemory, mergeMirrorFromSource, persistMemory } from "./js/memoryTable.js";
 
-// 记忆表格镜像自动同步：聊天切换 / 新消息 / 编辑消息后跑一次（后台静默）
+// 记忆表格自动维护：同步原表库（含备份/清空保护），有变化时把新内容合并进镜像
+// （用户编辑过的镜像行不会被覆盖，删除过的行内容不变不复活）
 function autoSyncMemory() {
     try {
-        const r = syncMemory({ auto: true });
+        const r = syncMemory();
         if (r.wiped && r.state.wipeAlert && !r.state.wipeAlert.notified) {
             r.state.wipeAlert.notified = true;
             persistMemory();
-            toastr.warning('剧情规划器：检测到记忆表格疑似被清空，已保留镜像备份，可在「记忆表格」页恢复');
+            toastr.warning('剧情规划器：检测到记忆表格疑似被清空，已保留原表库备份，可在「记忆表格」页恢复');
+        } else if (r.changed) {
+            mergeMirrorFromSource();
         }
     } catch (e) {
         console.warn('[PlotPlanner] 记忆表格自动同步失败', e);

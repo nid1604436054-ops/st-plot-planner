@@ -276,6 +276,47 @@
 
 /* ---------- 记忆表格页 ---------- */
 
+/* 镜像/原表列表容器 */
+.pp-mem-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* 行容器：行 + 就地展开的内容编辑框 */
+.pp-mem-rowwrap {
+    display: flex;
+    flex-direction: column;
+}
+
+/* 行内容编辑框：每列一个输入区 */
+.pp-mem-editrow {
+    margin: 2px 0 8px 26px;
+    padding: 8px;
+    border: 1px dashed var(--SmartThemeBorderColor, #3a3a3a);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* 行状态徽标变体：新=绿 / 已改=黄 / 原表已更新=橙 / 原表已删=灰 */
+.pp-mem-badge.pp-mem-badge-edit { color: #e0c97f; }
+.pp-mem-badge.pp-mem-badge-src { color: #e0a06a; }
+.pp-mem-badge.pp-mem-badge-gone { color: #9a9a9a; }
+
+/* 原表库展开的只读行 */
+.pp-mem-srclist {
+    flex-basis: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 0;
+    font-size: 0.88em;
+    overflow-y: auto;
+    max-height: 200px;
+}
+
 /* 清空事故警告横幅 */
 .pp-mem-wipe {
     border: 1px solid #b35b5b;
