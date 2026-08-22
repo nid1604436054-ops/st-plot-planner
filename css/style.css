@@ -26,11 +26,12 @@
     transition: height 0.25s ease;
 }
 
-/* 支持相对色语法的浏览器（Chrome 119+）：直接剥掉主题色的 alpha 通道，得到精确实色 */
+/* 支持相对色语法的浏览器（Chrome 119+）：把主题色剥掉 alpha 通道得到精确实色。
+   注意输出必须显式写 / 1，省略的话 alpha 会继承原色（仍是半透明） */
 @supports (background: hsl(from rebeccapurple h s l)) {
     .pp-drawer {
         background-image: none;
-        background-color: hsl(from var(--SmartThemeBlurTintColor, rgb(20, 22, 28)) h s l);
+        background-color: hsl(from var(--SmartThemeBlurTintColor, rgb(20, 22, 28)) h s l / 1);
     }
 }
 
