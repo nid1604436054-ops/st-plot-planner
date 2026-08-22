@@ -1,0 +1,81 @@
+// M4 隐身注入：把幕后内容写进主对话提示词（模型可见、聊天界面不渲染）
+// 所有对酒馆 setExtensionPrompt 的调用集中在本文件（兼容层，见开发方案 §4）
+import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from "/script.js";
+import { getTavernContext } from "./context.js";
+import { settings, save } from "./settings.js";
+
+const POSITION_IN_PROMPT = extension_prompt_types?.IN_PROMPT ?? 0;
+const ROLE_SYSTEM = extension_prompt_roles?.SYSTEM ?? 0;
+const ROLE_USER = extension_prompt_roles?.USER ?? 1;
+
+const promptKey = id => `pp:${id}`;
+
+function roleValue(role) {
+    return role === 'user' ? ROLE_USER : ROLE_SYSTEM;
+}
+
+// 写入一条注入；enabled=false 时等价于撤销
+export function applyInjection(item) {
+    setExtensionPrompt(
+        promptKey(item.id),
+        item.enabled ? String(item.content ?? '') : '',
+        POSITION_IN_PROMPT,
+        Number(item.depth) || 4,
+        false,
+        roleValue(item.role),
+    );
+}
+
+export function revokeInjection(id) {
+    setExtensionPrompt(promptKey(id), '', POSITION_IN_PROMPT, 4, false, ROLE_SYSTEM);
+}
+
+export function addInjection(item) {
+    // scope=chat 的注入绑定创建时的聊天
+    if (item.scope === 'chat' && item.chatId === undefined) {
+        item.chatId = getTavernContext().chatId;
+    }
+    settings.injections.push(item);
+    applyInjection(item);
+    save();
+}
+
+export function updateInjection(item) {
+    applyInjection(item);
+    save();
+}
+
+export function removeInjection(id) {
+    settings.injections = settings.injections.filter(i => i.id !== id);
+    revokeInjection(id);
+    save();
+}
+
+// 聊天切换：撤销不属于当前聊天的 scope=chat 注入，重放其余启用的
+export function replayScopedInjections() {
+    const chatId = getTavernContext().chatId;
+    for (const item of settings.injections) {
+        const foreign = item.scope === 'chat' && item.chatId !== undefined && item.chatId !== chatId;
+        if (foreign || !item.enabled) {
+            revokeInjection(item.id);
+        } else {
+            applyInjection(item);
+        }
+    }
+}
+
+// 每收到一条消息，推进「按层数过期」的计数（开发方案 §M4 生命周期）
+export function tickInjectionExpiries() {
+    let changed = false;
+    for (const item of settings.injections) {
+        if (item.enabled && item.expires?.type === 'layers') {
+            item.age = (item.age ?? 0) + 1;
+            if (item.age >= item.expires.layers) {
+                item.enabled = false;
+                revokeInjection(item.id);
+                changed = true;
+            }
+        }
+    }
+    if (changed) save();
+}

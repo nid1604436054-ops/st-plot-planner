@@ -1,0 +1,12 @@
+{
+    "display_name": "剧情规划器 (Plot Planner)",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "css/style.css",
+    "author": "your-github-name",
+    "version": "0.1.0",
+    "homePage": "https://github.com/your-github-name/st-plot-planner",
+    "auto_update": true
+}
