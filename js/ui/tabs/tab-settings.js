@@ -6,6 +6,39 @@ import { escapeHtml } from "../../utils.js";
 
 // 拉取过的模型列表缓存：页签每次激活都会重渲染，缓存避免切换后下拉列表丢失
 let modelIds = [];
+// true = 手动填模型名（拉取的列表里没有时用），false = 下拉选择
+let manualModel = false;
+
+// 重建模型下拉框；当前已保存的模型若不在列表里，作为「当前自定义」置顶保留
+function rebuildModelSelect(container) {
+    const select = container.querySelector('#pp_set_model');
+    if (!select) return;
+    const current = settings.api.model;
+    let html = '';
+    if (!modelIds.length) {
+        html += `<option value="">${current ? `当前自定义：${escapeHtml(current)}` : '请先点「获取模型列表」'}</option>`;
+    } else {
+        if (!current || !modelIds.includes(current)) {
+            html += `<option value="${escapeHtml(current)}" selected>${current ? `当前自定义：${escapeHtml(current)}` : '（未选择）'}</option>`;
+        }
+        html += modelIds.map(id => `<option value="${escapeHtml(id)}" ${id === current ? 'selected' : ''}>${escapeHtml(id)}</option>`).join('');
+    }
+    select.innerHTML = html;
+}
+
+// 按 manualModel 切换 下拉框/手动输入框 两个控件
+function applyModelMode(container) {
+    const select = container.querySelector('#pp_set_model');
+    const text = container.querySelector('#pp_set_model_text');
+    const toggle = container.querySelector('#pp_set_model_toggle');
+    if (!select || !text || !toggle) return;
+    select.hidden = manualModel;
+    text.hidden = !manualModel;
+    toggle.textContent = manualModel ? '改为下拉' : '手动输入';
+    toggle.title = manualModel ? '切换回下拉选择' : '列表里没有想要的模型？点这里手动填模型名';
+    if (manualModel) text.value = settings.api.model;
+    else rebuildModelSelect(container);
+}
 
 export const settingsTab = {
     id: 'settings',
@@ -21,12 +54,11 @@ export const settingsTab = {
             <input id="pp_set_key" class="text_pole textarea_compact" type="password" placeholder="sk-..." autocomplete="off" />
             <label class="pp-label">模型</label>
             <div class="pp-model-row">
-                <input id="pp_set_model" class="text_pole textarea_compact" type="text" list="pp_model_list" placeholder="点右侧按钮拉取列表" autocomplete="off" />
-                <div id="pp_set_fetch_models" class="menu_button" title="从 API 拉取可用模型列表，之后点击输入框即可下拉选择">获取模型列表</div>
+                <select id="pp_set_model" class="text_pole"></select>
+                <input id="pp_set_model_text" class="text_pole textarea_compact" type="text" placeholder="手动填写模型名" hidden autocomplete="off" />
+                <div id="pp_set_model_toggle" class="menu_button">手动输入</div>
+                <div id="pp_set_fetch_models" class="menu_button" title="从 API 拉取可用模型列表，之后在下拉框中选择">获取模型列表</div>
             </div>
-            <datalist id="pp_model_list">${
-                modelIds.map(id => `<option value="${escapeHtml(id)}"></option>`).join('')
-            }</datalist>
             <div class="pp-btn-row">
                 <div id="pp_set_test" class="menu_button">测试连接</div>
             </div>
@@ -72,7 +104,6 @@ export const settingsTab = {
 
         bind('#pp_set_base', () => settings.api.baseUrl, v => settings.api.baseUrl = String(v).trim());
         bind('#pp_set_key', () => settings.api.apiKey, v => settings.api.apiKey = String(v).trim());
-        bind('#pp_set_model', () => settings.api.model, v => settings.api.model = String(v).trim());
         bindNum('#pp_set_temp', () => settings.api.temperature, v => settings.api.temperature = v);
         bindNum('#pp_set_maxtok', () => settings.api.maxTokens, v => settings.api.maxTokens = v);
         bindNum('#pp_set_scan', () => settings.retrieval.scanDepth, v => settings.retrieval.scanDepth = v);
@@ -80,9 +111,21 @@ export const settingsTab = {
         bindNum('#pp_set_maxch', () => settings.retrieval.maxChars, v => settings.retrieval.maxChars = v);
         bindNum('#pp_set_ctx', () => settings.retrieval.contextLayers, v => settings.retrieval.contextLayers = v);
 
+        applyModelMode(container);
+        container.querySelector('#pp_set_model').addEventListener('change', () => {
+            settings.api.model = String(container.querySelector('#pp_set_model').value || '').trim();
+            save();
+        });
+        container.querySelector('#pp_set_model_text').addEventListener('change', () => {
+            settings.api.model = String(container.querySelector('#pp_set_model_text').value || '').trim();
+            save();
+        });
+        container.querySelector('#pp_set_model_toggle').addEventListener('click', () => {
+            manualModel = !manualModel;
+            applyModelMode(container);
+        });
+
         container.querySelector('#pp_set_fetch_models').addEventListener('click', async function () {
-            const input = container.querySelector('#pp_set_model');
-            const list = container.querySelector('#pp_model_list');
             const result = container.querySelector('#pp_set_test_result');
             this.classList.add('disabled');
             result.textContent = '正在拉取模型列表……';
@@ -92,13 +135,14 @@ export const settingsTab = {
                 settings.api.apiKey = String(container.querySelector('#pp_set_key').value || '').trim();
                 save();
                 modelIds = await fetchModels();
-                list.innerHTML = modelIds.map(id => `<option value="${escapeHtml(id)}"></option>`).join('');
-                if (!input.value.trim()) {
-                    input.value = modelIds[0];
+                if (!settings.api.model) {
                     settings.api.model = modelIds[0];
                     save();
                 }
-                result.textContent = `已获取 ${modelIds.length} 个模型，点击模型输入框下拉选择`;
+                // 拉到列表就切回下拉模式，方便直接选
+                manualModel = false;
+                applyModelMode(container);
+                result.textContent = `已获取 ${modelIds.length} 个模型，点击「模型」下拉框选择`;
                 toastr.success(`已获取 ${modelIds.length} 个模型`);
             } catch (err) {
                 result.textContent = '';

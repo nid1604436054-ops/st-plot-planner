@@ -189,6 +189,7 @@
     align-items: center;
 }
 
+.pp-model-row select,
 .pp-model-row input {
     flex: 1;
     min-width: 0;
