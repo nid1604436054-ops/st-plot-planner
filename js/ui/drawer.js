@@ -4,13 +4,14 @@
 // 用户手动拉过后（本次打开期间）不再自动适配，关掉重开恢复自适应。
 // 页签间跳转用全局事件 pp-switch-tab，避免页签模块反向依赖本文件
 import { worldbookTab } from "./tabs/tab-worldbook.js";
+import { memoryTab } from "./tabs/tab-memory.js";
 import { guidanceTab } from "./tabs/tab-guidance.js";
 import { eventsTab } from "./tabs/tab-events.js";
 import { injectionsTab } from "./tabs/tab-injections.js";
 import { storageTab } from "./tabs/tab-storage.js";
 import { settingsTab } from "./tabs/tab-settings.js";
 
-const TABS = [worldbookTab, guidanceTab, eventsTab, injectionsTab, storageTab, settingsTab];
+const TABS = [worldbookTab, memoryTab, guidanceTab, eventsTab, injectionsTab, storageTab, settingsTab];
 let activeId = TABS[0].id;
 
 // 上次自动适配写入的高度；当前内联高度与它不一致 = 用户拖过，停止自动适配

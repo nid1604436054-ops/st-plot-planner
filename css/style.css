@@ -274,6 +274,146 @@
     opacity: 0.7;
 }
 
+/* ---------- 记忆表格页 ---------- */
+
+/* 清空事故警告横幅 */
+.pp-mem-wipe {
+    border: 1px solid #b35b5b;
+    background: rgba(179, 91, 91, 0.12);
+    border-radius: 6px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.92em;
+}
+
+/* 记忆行：标签输入 + 内容格子 + 删除按钮 */
+.pp-mem-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 0.92em;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #2c2c2c);
+}
+
+/* 原表新增/被改动而重新出现的行：高亮 + 「新」角标 */
+.pp-mem-row.pp-mem-new {
+    background: rgba(127, 209, 138, 0.08);
+    border-radius: 4px;
+    padding: 4px;
+}
+
+.pp-mem-badge {
+    flex: 0 0 auto;
+    font-size: 0.72em;
+    color: #7fd18a;
+    border: 1px solid #7fd18a;
+    border-radius: 8px;
+    padding: 0 6px;
+}
+
+.pp-mem-fresh { color: #7fd18a; }
+
+.pp-mem-tags {
+    flex: 0 1 150px;
+    min-width: 100px;
+}
+
+/* 单元格以「列名:值」小格横排展示 */
+.pp-mem-cells {
+    flex: 1 1 200px;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    overflow-wrap: anywhere;
+}
+
+.pp-mem-cell i {
+    font-style: normal;
+    opacity: 0.55;
+    margin-right: 3px;
+    font-size: 0.85em;
+}
+
+/* 召回列筛选 / 标签筛选条 */
+.pp-mem-cols,
+.pp-mem-tagbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    align-items: center;
+    padding: 2px 0 6px;
+    font-size: 0.9em;
+}
+
+.pp-mem-cols label,
+.pp-mem-tagbar label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.pp-mem-chip {
+    border: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
+    border-radius: 12px;
+    padding: 2px 10px;
+}
+
+/* 已删除行折叠区 */
+.pp-mem-delwrap {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.pp-mem-delrow {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+    font-size: 0.9em;
+    text-decoration: line-through;
+    opacity: 0.75;
+}
+
+.pp-mem-delrow .pp-mem-ops {
+    display: flex;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+/* 备份列表行 */
+.pp-mem-bkrow {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #2c2c2c);
+    font-size: 0.92em;
+}
+
+.pp-mem-bkrow .pp-mem-ops {
+    display: flex;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+/* 召回预览输出 */
+.pp-mem-rc-out,
+#pp_mem_rc_out {
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow-y: auto;
+    margin: 0;
+}
+
 /* 抽屉内表单控件占满宽度 */
 .pp-drawer input[type="text"],
 .pp-drawer input[type="password"],

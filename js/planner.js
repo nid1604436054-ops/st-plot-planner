@@ -3,6 +3,7 @@
 import { chatCompletion } from "./api.js";
 import { collectRecentChat, formatChatLog, characterSummary } from "./context.js";
 import { scanLorebooks, buildLoreContext } from "./lorebook.js";
+import { buildMemoryContext } from "./memoryTable.js";
 import { settings } from "./settings.js";
 import { extractJson } from "./utils.js";
 
@@ -45,6 +46,7 @@ export async function runPlotGuidance({ userNote = '', previousPlan = '', revisi
 
     const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
     const hits = scanLorebooks(scanText);
+    const memoryText = buildMemoryContext();
 
     const userContent = [
         '## 角色设定摘要',
@@ -53,6 +55,7 @@ export async function runPlotGuidance({ userNote = '', previousPlan = '', revisi
         formatChatLog(chatList),
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
+        ...(memoryText ? ['## 记忆表格（已按标签筛选，未删除的行）', memoryText] : []),
         ...(previousPlan ? ['## 上一版规划（请按修改意见修订）', previousPlan] : []),
         ...(revisionNote ? ['## 修改意见', revisionNote] : []),
         ...(userNote ? ['## 用户补充说明', userNote] : []),
