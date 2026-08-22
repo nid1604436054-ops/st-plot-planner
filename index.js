@@ -4,12 +4,14 @@
 import { eventSource, event_types } from "/script.js";
 import { initSettingsPanel } from "./js/ui/settingsPanel.js";
 import { initDrawer, openDrawer } from "./js/ui/drawer.js";
+import { initWandMenu } from "./js/ui/wandMenu.js";
 import { replayScopedInjections, tickInjectionExpiries } from "./js/injection.js";
 import { scanAndApplyStorage } from "./js/store.js";
 
 jQuery(() => {
     initSettingsPanel();
     initDrawer();
+    initWandMenu();
 
     // 聊天切换：按 scope 重放/清理 M4 注入，并重算 M5 储存条目
     eventSource.on(event_types.CHAT_CHANGED, () => {

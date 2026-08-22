@@ -111,3 +111,32 @@ export async function testConnection() {
         temperature: 0,
     });
 }
+
+/**
+ * 拉取可用模型列表（GET /models）。兼容 {data:[{id}]} 与裸数组两种返回。
+ * @returns {Promise<string[]>} 模型 id 列表
+ */
+export async function fetchModels() {
+    const { baseUrl, apiKey } = settings.api;
+    if (!baseUrl) throw new ApiError('请先填写 API 地址');
+    const url = `${baseUrl.replace(/\/+$/, '')}/models`;
+
+    let res;
+    try {
+        res = await fetch(url, {
+            headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        });
+    } catch (err) {
+        throw new ApiError(`请求失败（检查地址是否正确、服务商是否支持浏览器跨域）：${err.message}`);
+    }
+    if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new ApiError(`API 返回 ${res.status}：${body.slice(0, 200)}`, { status: res.status, body });
+    }
+
+    const data = await res.json().catch(() => null);
+    const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+    const ids = list.map(m => m?.id ?? m?.name).filter(v => typeof v === 'string' && v);
+    if (!ids.length) throw new ApiError('模型列表为空，请手动填写模型名称');
+    return ids;
+}
