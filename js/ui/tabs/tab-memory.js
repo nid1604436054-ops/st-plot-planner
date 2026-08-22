@@ -1,7 +1,7 @@
-// 记忆表格页签（v2：原表库 / 镜像 分离）
-//   - 原表库：自动同步 + 备份，只读展示（含恢复到原表）
-//   - 镜像：随意编辑的工作版（改行内容 / 删行 / 删整类 / 加行 / 打标签），召回只用镜像
-//   - AI 自动打标签：把没标签的行分批交给独立 API 按用户给的分类标准打标
+// 记忆表格页签（v2.1：网格表格视图 + 独立「已删除内容」页）
+//   - 镜像/原表库/已删除页统一用「记忆增强表格」原版的网格样式（等比例缩小）
+//   - 镜像：表格内直接编辑行内容、打标签、删行；删除的行进「已删除内容」页，不堆在工作区
+//   - 已删除内容页：按表名分组的独立页面，可恢复到镜像或永久清除
 import {
     memoryState, syncMemory, mergeMirrorFromSource, persistMemory,
     deleteMirrorRow, deleteMirrorSheet, undeleteRow, purgeMootTombstones,
@@ -11,12 +11,12 @@ import {
 import { parseKeys } from "../../lorebook.js";
 import { escapeHtml, clamp, downloadJson } from "../../utils.js";
 
-// 展开状态跨重渲染保持
-const openSheets = new Set();      // 展开的镜像表
-const openDeleted = new Set();     // 展开的「已删除」区
+// 展开状态跨重渲染保持；镜像默认全部展开（记的是「折叠过的表」），原表库默认折叠（记的是「展开过的表」）
+const closedSheets = new Set();    // 被手动折叠的镜像表
 const openSrc = new Set();         // 展开的原表
 let showEmptySrc = false;          // 原表库是否显示空表
-let editingRow = null;             // 正在编辑内容的行 rid（重渲染后保持编辑框开着）
+let editingRow = null;             // 正在编辑内容的行 rid（重渲染后保持编辑状态）
+let memView = 'main';              // 'main' 工作区 / 'deleted' 已删除内容页
 
 function fmtTime(ts) {
     if (!ts) return '从未';
@@ -41,25 +41,32 @@ export const memoryTab = {
     id: 'memory',
     title: '记忆表格',
     render(container) {
+        memView = 'main';
         container.innerHTML = `
-        <div class="pp-section">
-            <div class="pp-btn-row">
-                <div id="pp_mem_sync" class="menu_button" title="从记忆表格插件读取最新数据，更新原表库并归档备份；镜像不动">立即同步原表</div>
-                <div id="pp_mem_merge" class="menu_button" title="把原表库的新增/修改合并进镜像；你编辑过的行不会被覆盖，删除过的行不复活">从原表更新镜像</div>
-                <div id="pp_mem_tag_btn" class="menu_button">AI 打标签</div>
-                <div id="pp_mem_bk_btn" class="menu_button">备份与恢复</div>
-                <div id="pp_mem_rc_btn" class="menu_button">召回设置</div>
+        <div id="pp_mem_main">
+            <div class="pp-section">
+                <div class="pp-btn-row">
+                    <div id="pp_mem_sync" class="menu_button" title="从记忆表格插件读取最新数据，更新原表库并归档备份；镜像不动">立即同步原表</div>
+                    <div id="pp_mem_merge" class="menu_button" title="把原表库的新增/修改合并进镜像；你编辑过的行不会被覆盖，删除过的行不复活">从原表更新镜像</div>
+                    <div id="pp_mem_tag_btn" class="menu_button">AI 打标签</div>
+                    <div id="pp_mem_bk_btn" class="menu_button">备份与恢复</div>
+                    <div id="pp_mem_rc_btn" class="menu_button">召回设置</div>
+                </div>
+                <div id="pp_mem_status" class="pp-muted"></div>
+                <div id="pp_mem_wipe"></div>
+                <div id="pp_mem_tagai" style="display:none"></div>
+                <div id="pp_mem_backups" style="display:none"></div>
+                <div id="pp_mem_recall" style="display:none"></div>
             </div>
-            <div id="pp_mem_status" class="pp-muted"></div>
-            <div id="pp_mem_wipe"></div>
-            <div id="pp_mem_tagai" style="display:none"></div>
-            <div id="pp_mem_backups" style="display:none"></div>
-            <div id="pp_mem_recall" style="display:none"></div>
+            <div class="pp-group-head">
+                <b class="pp-group-title">镜像 · 剧情召回用（随意编辑，不影响原表）</b>
+                <span id="pp_mem_delbtn" class="menu_button" title="在镜像里删掉的行都在那一页：可恢复到镜像，或永久清除">已删除内容</span>
+            </div>
+            <div id="pp_mem_list" class="pp-mem-list"></div>
+            <b class="pp-group-title">原表库（自动同步，只读）</b>
+            <div id="pp_mem_src" class="pp-mem-list"></div>
         </div>
-        <b class="pp-group-title">镜像 · 剧情召回用（随意编辑，不影响原表）</b>
-        <div id="pp_mem_list" class="pp-mem-list"></div>
-        <b class="pp-group-title">原表库（自动同步，只读）</b>
-        <div id="pp_mem_src" class="pp-mem-list"></div>`;
+        <div id="pp_mem_del" style="display:none"></div>`;
 
         container.querySelector('#pp_mem_sync').addEventListener('click', () => {
             const r = syncMemory();
@@ -88,6 +95,10 @@ export const memoryTab = {
             const el = container.querySelector('#pp_mem_recall');
             el.style.display = el.style.display === 'none' ? '' : 'none';
         });
+        container.querySelector('#pp_mem_delbtn').addEventListener('click', () => {
+            memView = 'deleted';
+            renderAll(container);
+        });
 
         // 打开页签即同步 + 合并一次（首次会建立原表库与镜像）
         const r = syncMemory();
@@ -97,6 +108,18 @@ export const memoryTab = {
 };
 
 function renderAll(container) {
+    const delBtn = container.querySelector('#pp_mem_delbtn');
+    const n = Object.keys(memoryState().tombstones).length;
+    if (delBtn) delBtn.textContent = n ? `已删除内容（${n}）` : '已删除内容';
+
+    if (memView === 'deleted') {
+        container.querySelector('#pp_mem_main').style.display = 'none';
+        container.querySelector('#pp_mem_del').style.display = '';
+        renderDeleted(container);
+        return;
+    }
+    container.querySelector('#pp_mem_main').style.display = '';
+    container.querySelector('#pp_mem_del').style.display = 'none';
     renderStatus(container);
     renderWipe(container);
     renderTagAi(container);
@@ -268,18 +291,76 @@ function renderRecall(container) {
 }
 
 // ---------------------------------------------------------------------------
-// 镜像列表
+// 网格表格：沿用「记忆增强表格」原版的表格样式（表头加粗 + 左侧行号 + 内容虚线格），等比例缩小
 // ---------------------------------------------------------------------------
+
+function gridHeadHtml(columns, extraThs = '') {
+    return `
+    <thead><tr>
+        <th class="pp-grid-origin"></th>
+        ${columns.map(c => `<th title="${escapeHtml(c)}">${escapeHtml(clamp(c || '', 12))}</th>`).join('')}
+        ${extraThs}
+    </tr></thead>`;
+}
+
+function gridCellHtml(value) {
+    return `<td class="pp-grid-cell" title="${escapeHtml(value)}">${escapeHtml(clamp(value, 80))}</td>`;
+}
 
 function badgesOf(state, row) {
     const seen = new Set(state.seen);
     const out = [];
     if (!seen.has(row.rid)) out.push('<span class="pp-mem-badge" title="原表新增或被修改后重新出现的行">新</span>');
-    if (row.edited && row.srcUpdated) out.push('<span class="pp-mem-badge pp-mem-badge-src" title="你改过这行，原表那行也有了新版本；可在编辑框里「采纳原表版本」">原表已更新</span>');
+    if (row.edited && row.srcUpdated) out.push('<span class="pp-mem-badge pp-mem-badge-src" title="你改过这行，原表那行也有了新版本；编辑时可「采纳原表版本」">原表已更新</span>');
     else if (row.edited) out.push('<span class="pp-mem-badge pp-mem-badge-edit" title="你手动编辑过这行，合并时不会被原表覆盖">已改</span>');
     if (row.srcGone) out.push('<span class="pp-mem-badge pp-mem-badge-gone" title="原表里这行已被删除，镜像里为你保留">原表已删</span>');
     return out.join('');
 }
+
+// 镜像里的一行：编辑态时内容格就地变成输入框（不整页重渲染，保住滚动位置）
+function mirrorRowHtml(state, sheet, row, idx) {
+    const editing = editingRow === row.rid;
+    const isNew = !new Set(state.seen).has(row.rid);
+    const cells = editing
+        ? sheet.columns.map((c, i) => `
+            <td class="pp-grid-editcell"><textarea class="text_pole textarea_compact" rows="2" data-mcell="${i}" placeholder="${escapeHtml(c)}">${escapeHtml(row.cells[i] ?? '')}</textarea></td>`).join('')
+        : sheet.columns.map((_, i) => gridCellHtml(row.cells[i] ?? '')).join('');
+    const ops = editing
+        ? `
+        <span class="menu_button" data-msave>保存</span>
+        <span class="menu_button" data-mcancel>取消</span>
+        ${row.srcUpdated ? '<span class="menu_button" data-maccept>采纳原表</span>' : ''}`
+        : `
+        <span class="menu_button fa-solid fa-pen" data-medit="${row.rid}" title="编辑这行内容"></span>
+        <span class="menu_button fa-solid fa-trash" data-mdel="${row.rid}" title="删除：进「已删除内容」页；原表内容不变就不再出现，原表改动后重新出现"></span>`;
+    return `
+    <tr class="${isNew ? 'pp-grid-new' : ''}${editing ? ' pp-grid-editing' : ''}" data-rid="${row.rid}" data-idx="${idx}">
+        <td class="pp-grid-idx">${idx}</td>
+        ${cells}
+        <td class="pp-grid-tagscell"><input type="text" class="text_pole pp-grid-tags" data-mtags="${row.rid}" value="${escapeHtml((state.tags[row.rid] ?? []).join(','))}" placeholder="标签" title="标签，逗号分隔" /></td>
+        <td class="pp-grid-statecell">${badgesOf(state, row)}</td>
+        <td class="pp-grid-opscell">${ops}</td>
+    </tr>`;
+}
+
+// 添加行：临时插在表体顶部的编辑行
+function newRowEditorHtml(sheet) {
+    return `
+    <tr class="pp-grid-editing" data-new="1">
+        <td class="pp-grid-idx">＋</td>
+        ${sheet.columns.map((c, i) => `<td class="pp-grid-editcell"><textarea class="text_pole textarea_compact" rows="2" data-mcell="${i}" placeholder="${escapeHtml(c)}"></textarea></td>`).join('')}
+        <td class="pp-grid-tagscell"></td>
+        <td class="pp-grid-statecell"></td>
+        <td class="pp-grid-opscell">
+            <span class="menu_button" data-msave data-mode="add">添加</span>
+            <span class="menu_button" data-mcancel>取消</span>
+        </td>
+    </tr>`;
+}
+
+// ---------------------------------------------------------------------------
+// 镜像列表
+// ---------------------------------------------------------------------------
 
 function renderSheets(container) {
     const list = container.querySelector('#pp_mem_list');
@@ -291,55 +372,33 @@ function renderSheets(container) {
     }
 
     list.innerHTML = state.mirror.sheets.map(sheet => {
-        const open = openSheets.has(sheet.uid);
+        const open = !closedSheets.has(sheet.uid);
         const recall = state.sheetRecall[sheet.uid] ?? {};
         const colOn = i => !Array.isArray(recall.columns) || recall.columns.includes(i);
-        const deleted = Object.entries(state.tombstones).filter(([, t]) => t.sheetUid === sheet.uid);
         return `
         <div class="pp-book" data-muid="${escapeHtml(sheet.uid)}">
             <div class="pp-item">
                 <div class="pp-item-main"><b>${escapeHtml(sheet.name)}</b></div>
                 <div class="pp-item-ops">
                     <span class="menu_button" data-mtoggle="${escapeHtml(sheet.uid)}">行 ${sheet.rows.length} <i class="fa-solid fa-chevron-${open ? 'down' : 'right'}"></i></span>
-                    <label><input type="checkbox" data-mrecall="${escapeHtml(sheet.uid)}" ${recall.enabled === false ? '' : 'checked'} /> 参与召回</label>
-                    <span class="menu_button fa-solid fa-trash" data-mdelsheet="${escapeHtml(sheet.uid)}" title="从镜像删除整类（原表不动；原表这批行内容不变就不会再回来）"></span>
+                    <label title="勾掉后这张表不参与剧情召回"><input type="checkbox" data-mrecall="${escapeHtml(sheet.uid)}" ${recall.enabled === false ? '' : 'checked'} /> 参与召回</label>
+                    <span class="menu_button fa-solid fa-trash" data-mdelsheet="${escapeHtml(sheet.uid)}" title="从镜像删除整类（进「已删除内容」页；原表不动，内容不变不会再回来）"></span>
                 </div>
             </div>
             <div class="pp-entries" ${open ? '' : 'hidden'}>
                 <div class="pp-mem-cols">召回列：${sheet.columns.map((c, i) => `
                     <label><input type="checkbox" data-mcol="${i}" ${colOn(i) ? 'checked' : ''} /> ${escapeHtml(clamp(c, 10))}</label>`).join('')}
                 </div>
-                ${sheet.rows.map(r => {
-                    const editing = editingRow === r.rid;
-                    return `
-                    <div class="pp-mem-rowwrap">
-                        <div class="pp-mem-row" data-rid="${r.rid}">
-                            <input type="text" class="text_pole pp-mem-tags" data-mtags="${r.rid}" value="${escapeHtml((state.tags[r.rid] ?? []).join(','))}" placeholder="标签" title="标签，逗号分隔" />
-                            <div class="pp-mem-cells" title="${escapeHtml(sheet.columns.map((c, i) => `${c}：${r.cells[i] ?? ''}`).join('\n'))}">
-                                ${sheet.columns.map((c, i) => r.cells[i] ? `<span class="pp-mem-cell"><i>${escapeHtml(clamp(c, 8))}</i>${escapeHtml(clamp(r.cells[i], 50))}</span>` : '').join('')}
-                            </div>
-                            ${badgesOf(state, r)}
-                            <span class="menu_button fa-solid fa-pen" data-medit="${r.rid}" title="编辑这行内容"></span>
-                            <span class="menu_button fa-solid fa-trash" data-mdel="${r.rid}" title="删除：原表内容不变就不再出现；原表改动后会重新出现"></span>
-                        </div>
-                        ${editing ? rowEditorHtml(sheet, r) : ''}
-                    </div>`;
-                }).join('') || '<div class="pp-muted">没有行，可点下方「添加行」</div>'}
-                <div class="pp-btn-row">
-                    <span class="menu_button" data-maddrow="${escapeHtml(sheet.uid)}">添加行</span>
+                <div class="pp-mem-gridwrap">
+                    <table class="pp-grid">
+                        ${gridHeadHtml(sheet.columns, '<th>标签</th><th>状态</th><th>操作</th>')}
+                        <tbody>
+                            ${sheet.rows.map((r, i) => mirrorRowHtml(state, sheet, r, i)).join('')
+        || `<tr><td colspan="${sheet.columns.length + 4}" class="pp-muted">没有行，点下方「添加行」</td></tr>`}
+                        </tbody>
+                    </table>
                 </div>
-                ${deleted.length ? `
-                <div class="pp-mem-delwrap">
-                    <span class="menu_button" data-mshowdel="${escapeHtml(sheet.uid)}">已删除 ${deleted.length} 条 <i class="fa-solid fa-chevron-${openDeleted.has(sheet.uid) ? 'down' : 'right'}"></i></span>
-                    ${openDeleted.has(sheet.uid) ? deleted.map(([fp, t]) => `
-                    <div class="pp-mem-delrow">
-                        <div class="pp-mem-cells pp-muted">${escapeHtml(clamp((t.cells ?? []).join(' ｜ '), 120))}</div>
-                        <span class="pp-mem-ops">
-                            <span class="menu_button" data-mundel="${fp}">恢复显示</span>
-                            <span class="menu_button" data-mpurge="${fp}" title="删掉这条删除记录">清除</span>
-                        </span>
-                    </div>`).join('') : ''}
-                </div>` : ''}
+                <div class="pp-btn-row"><span class="menu_button" data-maddrow="${escapeHtml(sheet.uid)}">添加行</span></div>
             </div>
         </div>`;
     }).join('');
@@ -347,34 +406,85 @@ function renderSheets(container) {
     bindSheetEvents(container, list);
 }
 
-// 行内容编辑框：每列一个输入区；源行被改过时可一键采纳原表版本
-function rowEditorHtml(sheet, row) {
-    const isNew = row == null;
-    return `
-    <div class="pp-mem-editrow" ${isNew ? 'data-new="1"' : ''}>
-        ${sheet.columns.map((c, i) => `
-        <label class="pp-label">${escapeHtml(c || `列${i + 1}`)}</label>
-        <textarea class="text_pole textarea_compact" rows="2" data-mcell="${i}">${escapeHtml(row?.cells[i] ?? '')}</textarea>`).join('')}
-        <div class="pp-btn-row">
-            <span class="menu_button" data-msave>${isNew ? '确认添加' : '保存'}</span>
-            <span class="menu_button" data-mcancel>取消</span>
-            ${row?.srcUpdated ? '<span class="menu_button" data-maccept>采纳原表版本</span>' : ''}
-        </div>
-    </div>`;
-}
-
-function collectEditorCells(editor) {
+function collectEditorCells(scope) {
     const cells = [];
-    editor.querySelectorAll('[data-mcell]').forEach(t => { cells[Number(t.dataset.mcell)] = t.value; });
+    scope.querySelectorAll('[data-mcell]').forEach(t => { cells[Number(t.dataset.mcell)] = t.value; });
     return cells.map(v => v ?? '');
 }
 
-function bindSheetEvents(container, list) {
-    const state = memoryState();
+// 单行就地重渲染（编辑开/关、保存后刷徽标），不整页刷新避免滚动位置丢失；返回新的行元素
+function swapRow(container, uid, rid) {
+    const s = memoryState();
+    const sheet = s.mirror.sheets.find(x => x.uid === uid);
+    const row = sheet?.rows.find(r => r.rid === rid);
+    const old = container.querySelector(`#pp_mem_list tr[data-rid="${rid}"]`);
+    if (!old || !row) return null;
+    old.insertAdjacentHTML('beforebegin', mirrorRowHtml(s, sheet, row, Number(old.dataset.idx) || 0));
+    const fresh = old.previousElementSibling;
+    old.remove();
+    bindRow(container, fresh, uid);
+    return fresh;
+}
 
+function bindRow(container, tr, uid) {
+    const rid = tr.dataset.rid;
+    tr.querySelector('[data-mtags]')?.addEventListener('change', ev => {
+        const tags = parseKeys(ev.target.value);
+        setRowTags(rid, tags);
+        ev.target.value = tags.join(',');
+        renderStatus(container);
+        renderRecall(container);
+    });
+    tr.querySelector('[data-medit]')?.addEventListener('click', () => {
+        editingRow = rid;
+        swapRow(container, uid, rid)?.querySelector('[data-mcell]')?.focus();
+    });
+    tr.querySelector('[data-mdel]')?.addEventListener('click', () => {
+        deleteMirrorRow(uid, rid);
+        if (editingRow === rid) editingRow = null;
+        renderAll(container);
+    });
+    bindRowEditor(container, tr, uid, rid);
+}
+
+function bindRowEditor(container, tr, uid, rid) {
+    const save = tr.querySelector('[data-msave]');
+    const mode = save?.dataset.mode;
+    save?.addEventListener('click', () => {
+        const cells = collectEditorCells(tr);
+        if (mode === 'add') {
+            addMirrorRow(uid, cells);
+            renderSheets(container);
+            renderStatus(container);
+            toastr.success('已添加行');
+        } else {
+            editMirrorRow(uid, rid, cells);
+            editingRow = null;
+            swapRow(container, uid, rid);
+            renderStatus(container);
+            toastr.success('已保存');
+        }
+    });
+    tr.querySelector('[data-mcancel]')?.addEventListener('click', () => {
+        if (mode === 'add') tr.remove();
+        else {
+            editingRow = null;
+            swapRow(container, uid, rid);
+        }
+    });
+    tr.querySelector('[data-maccept]')?.addEventListener('click', () => {
+        acceptSourceRow(uid, rid);
+        editingRow = null;
+        swapRow(container, uid, rid);
+        renderStatus(container);
+        toastr.info('已采纳原表版本');
+    });
+}
+
+function bindSheetEvents(container, list) {
     list.querySelectorAll('[data-mtoggle]').forEach(el => el.addEventListener('click', () => {
         const uid = el.dataset.mtoggle;
-        openSheets.has(uid) ? openSheets.delete(uid) : openSheets.add(uid);
+        closedSheets.has(uid) ? closedSheets.delete(uid) : closedSheets.add(uid);
         renderSheets(container);
     }));
     list.querySelectorAll('[data-mrecall]').forEach(el => el.addEventListener('change', () => {
@@ -396,122 +506,114 @@ function bindSheetEvents(container, list) {
         }));
     });
 
-    list.querySelectorAll('[data-mtags]').forEach(el => el.addEventListener('change', () => {
-        const tags = parseKeys(el.value);
-        setRowTags(el.dataset.mtags, tags);
-        el.value = tags.join(',');
-        el.closest('.pp-mem-row')?.classList.remove('pp-mem-new');
-        renderStatus(container);
-        renderRecall(container);
-    }));
+    list.querySelectorAll('tbody tr[data-rid]').forEach(tr => {
+        bindRow(container, tr, tr.closest('.pp-book').dataset.muid);
+    });
 
-    // 行内容编辑 / 添加行：编辑框就地展开，不整体重渲染，避免长列表滚动位置丢失
-    const toggleEditor = (rowwrap, html) => {
-        const existing = rowwrap.querySelector('.pp-mem-editrow');
-        if (existing) {
-            existing.remove();
-            editingRow = null;
-            return false;
-        }
-        rowwrap.insertAdjacentHTML('beforeend', html);
-        return true;
-    };
-    list.querySelectorAll('[data-medit]').forEach(el => el.addEventListener('click', () => {
-        const rid = el.dataset.medit;
-        const rowwrap = el.closest('.pp-mem-rowwrap');
-        const uid = el.closest('.pp-book').dataset.muid;
-        const sheet = memoryState().mirror.sheets.find(s => s.uid === uid);
-        const row = sheet?.rows.find(r => r.rid === rid);
-        if (!row) return;
-        const opened = toggleEditor(rowwrap, rowEditorHtml(sheet, row));
-        editingRow = opened ? rid : null;
-        if (opened) bindEditor(rowwrap, uid, rid);
-    }));
+    // 添加行：编辑行插在表体顶部，再点一次取消
     list.querySelectorAll('[data-maddrow]').forEach(el => el.addEventListener('click', () => {
         const uid = el.dataset.maddrow;
-        // 添加行编辑框展开在条目区顶部
-        const entries = el.closest('.pp-entries');
-        let editor = entries.querySelector('.pp-mem-editrow[data-new]');
-        if (editor) {
-            editor.remove();
-            editingRow = null;
+        const tbody = el.closest('.pp-entries')?.querySelector('tbody');
+        if (!tbody) return;
+        const existing = tbody.querySelector('tr[data-new]');
+        if (existing) {
+            existing.remove();
             return;
         }
         const sheet = memoryState().mirror.sheets.find(s => s.uid === uid);
         if (!sheet) return;
-        entries.insertAdjacentHTML('afterbegin', rowEditorHtml(sheet, null));
-        editor = entries.querySelector('.pp-mem-editrow[data-new]');
-        bindEditor(editor, uid, null);
+        tbody.insertAdjacentHTML('afterbegin', newRowEditorHtml(sheet));
+        bindRowEditor(container, tbody.querySelector('tr[data-new]'), uid, null);
     }));
 
-    function bindEditor(editor, uid, rid) {
-        editor.querySelector('[data-msave]').addEventListener('click', () => {
-            const cells = collectEditorCells(editor);
-            if (rid == null) {
-                addMirrorRow(uid, cells);
-                editingRow = null;
-                renderSheets(container);
-                renderStatus(container);
-                toastr.success('已添加行');
-            } else {
-                editMirrorRow(uid, rid, cells);
-                editingRow = null;
-                renderSheets(container);   // 刷新徽标（已改）与内容
-                toastr.success('已保存');
-            }
-        });
-        editor.querySelector('[data-mcancel]').addEventListener('click', () => {
-            editor.remove();
-            editingRow = null;
-        });
-        editor.querySelector('[data-maccept]')?.addEventListener('click', () => {
-            acceptSourceRow(uid, rid);
-            editingRow = null;
-            renderSheets(container);
-            toastr.info('已采纳原表版本');
-        });
-    }
-
-    // 整表重渲染时，editingRow 对应的编辑框是随 HTML 重新生成的，按钮要重新绑定
-    list.querySelectorAll('.pp-mem-editrow:not([data-new])').forEach(editor => {
-        const rid = editor.closest('.pp-mem-rowwrap')?.querySelector('.pp-mem-row')?.dataset.rid;
-        const uid = editor.closest('.pp-book')?.dataset.muid;
-        if (rid && uid) bindEditor(editor, uid, rid);
-    });
-
-    list.querySelectorAll('[data-mdel]').forEach(el => el.addEventListener('click', () => {
-        const rid = el.dataset.mdel;
-        const uid = el.closest('.pp-book').dataset.muid;
-        deleteMirrorRow(uid, rid);
-        renderAll(container);
-    }));
     list.querySelectorAll('[data-mdelsheet]').forEach(el => el.addEventListener('click', () => {
         const uid = el.dataset.mdelsheet;
         const s = memoryState();
         const sheet = s.mirror.sheets.find(x => x.uid === uid);
         if (!sheet) return;
         deleteMirrorSheet(uid);
-        openSheets.delete(uid);
+        closedSheets.delete(uid);
         renderAll(container);
-        toastr.info(`已从镜像删除「${sheet.name}」整类（原表不动；内容不变不会再回来）`);
+        toastr.info(`已从镜像删除「${sheet.name}」整类（进「已删除内容」页；原表不动）`);
     }));
-    list.querySelectorAll('[data-mshowdel]').forEach(el => el.addEventListener('click', () => {
-        const uid = el.dataset.mshowdel;
-        openDeleted.has(uid) ? openDeleted.delete(uid) : openDeleted.add(uid);
-        renderSheets(container);
-    }));
-    list.querySelectorAll('[data-mundel]').forEach(el => el.addEventListener('click', () => {
-        undeleteRow(el.dataset.mundel);
+}
+
+// ---------------------------------------------------------------------------
+// 已删除内容页：独立页面，按表名分组，可恢复到镜像 / 永久清除
+// ---------------------------------------------------------------------------
+
+function renderDeleted(container) {
+    const el = container.querySelector('#pp_mem_del');
+    const state = memoryState();
+
+    const groups = new Map();   // sheetUid -> { name, items: [[fp, tombstone]] }
+    for (const [fp, t] of Object.entries(state.tombstones)) {
+        const uid = t.sheetUid ?? 'unknown';
+        if (!groups.has(uid)) groups.set(uid, { name: t.sheetName ?? uid, items: [] });
+        groups.get(uid).items.push([fp, t]);
+    }
+    const total = Object.keys(state.tombstones).length;
+
+    const listHtml = [...groups.values()].map(g => {
+        g.items.sort((a, b) => (b[1].at ?? 0) - (a[1].at ?? 0));
+        const columns = g.items[0][1].columns ?? [];
+        return `
+        <div class="pp-book">
+            <div class="pp-item">
+                <div class="pp-item-main"><b>${escapeHtml(g.name)}</b></div>
+                <div class="pp-item-ops"><span class="pp-muted">${g.items.length} 行</span></div>
+            </div>
+            <div class="pp-entries">
+                <div class="pp-mem-gridwrap">
+                    <table class="pp-grid">
+                        ${gridHeadHtml(columns, '<th>操作</th>')}
+                        <tbody>
+                            ${g.items.map(([fp, t], i) => `
+                            <tr>
+                                <td class="pp-grid-idx">${i}</td>
+                                ${columns.map((_, ci) => gridCellHtml(t.cells?.[ci] ?? '')).join('')}
+                                <td class="pp-grid-opscell">
+                                    <span class="menu_button" data-mundel="${fp}" title="把这一行放回镜像工作区">恢复</span>
+                                    <span class="menu_button" data-mpurge="${fp}" title="永久删掉这条删除记录（不可恢复）">清除</span>
+                                </td>
+                            </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `
+    <div class="pp-section">
+        <div class="pp-btn-row">
+            <span id="pp_mem_del_back" class="menu_button"><i class="fa-solid fa-arrow-left"></i> 返回镜像</span>
+            <span id="pp_mem_del_purge" class="menu_button" title="清掉原表里已不存在对应行的记录">清理无效记录</span>
+        </div>
+        <b>已删除内容（${total} 条）</b>
+        <span class="pp-muted">在镜像里删掉的行都在这里，不参与召回，也不会堆在工作区。「恢复」= 放回镜像；「清除」= 永久删除记录。原表新增或修改的行不受影响，会照常出现在镜像里等你复审。</span>
+    </div>
+    ${listHtml || '<div class="pp-muted">还没有删除过任何内容</div>'}`;
+
+    el.querySelector('#pp_mem_del_back').addEventListener('click', () => {
+        memView = 'main';
         renderAll(container);
+    });
+    el.querySelector('#pp_mem_del_purge').addEventListener('click', () => {
+        const n = purgeMootTombstones();
+        toastr.info(n ? `清理了 ${n} 条无效记录` : '没有需要清理的记录');
+        renderAll(container);
+    });
+    el.querySelectorAll('[data-mundel]').forEach(btn => btn.addEventListener('click', () => {
+        undeleteRow(btn.dataset.mundel);
+        renderAll(container);
+        toastr.success('已恢复到镜像');
     }));
-    list.querySelectorAll('[data-mpurge]').forEach(el => el.addEventListener('click', () => {
-        const s = memoryState();
-        delete s.tombstones[el.dataset.mpurge];
+    el.querySelectorAll('[data-mpurge]').forEach(btn => btn.addEventListener('click', () => {
+        delete memoryState().tombstones[btn.dataset.mpurge];
         persistMemory();
         renderAll(container);
     }));
-
-    void state;
 }
 
 // ---------------------------------------------------------------------------
@@ -539,8 +641,12 @@ function renderSource(container) {
             <span class="menu_button" data-stoggle="${escapeHtml(s.uid)}"><i class="fa-solid fa-chevron-${openSrc.has(s.uid) ? 'down' : 'right'}"></i></span>
         </div>
         ${openSrc.has(s.uid) ? `
-        <div class="pp-mem-srclist pp-muted">
-            ${s.rows.length ? s.rows.map(r => `<div>${escapeHtml(clamp(r.cells.join(' ｜ '), 100))}</div>`).join('') : '（空表）'}
+        <div class="pp-mem-gridwrap">
+            <table class="pp-grid">
+                ${gridHeadHtml(s.columns)}
+                <tbody>${s.rows.map((r, i) => `
+                    <tr><td class="pp-grid-idx">${i}</td>${r.cells.map(c => gridCellHtml(c)).join('')}</tr>`).join('')}</tbody>
+            </table>
         </div>` : ''}
     </div>`).join('')}`;
 

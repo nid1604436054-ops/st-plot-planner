@@ -128,6 +128,7 @@
     border-radius: 6px;
     padding: 6px 8px;
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
     gap: 8px;
@@ -283,39 +284,19 @@
     gap: 8px;
 }
 
-/* 行容器：行 + 就地展开的内容编辑框 */
-.pp-mem-rowwrap {
+/* 分组标题行：标题 + 右侧入口按钮（已删除内容） */
+.pp-group-head {
     display: flex;
-    flex-direction: column;
-}
-
-/* 行内容编辑框：每列一个输入区 */
-.pp-mem-editrow {
-    margin: 2px 0 8px 26px;
-    padding: 8px;
-    border: 1px dashed var(--SmartThemeBorderColor, #3a3a3a);
-    border-radius: 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 /* 行状态徽标变体：新=绿 / 已改=黄 / 原表已更新=橙 / 原表已删=灰 */
 .pp-mem-badge.pp-mem-badge-edit { color: #e0c97f; }
 .pp-mem-badge.pp-mem-badge-src { color: #e0a06a; }
 .pp-mem-badge.pp-mem-badge-gone { color: #9a9a9a; }
-
-/* 原表库展开的只读行 */
-.pp-mem-srclist {
-    flex-basis: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 4px 0;
-    font-size: 0.88em;
-    overflow-y: auto;
-    max-height: 200px;
-}
 
 /* 清空事故警告横幅 */
 .pp-mem-wipe {
@@ -329,54 +310,92 @@
     font-size: 0.92em;
 }
 
-/* 记忆行：标签输入 + 内容格子 + 删除按钮 */
-.pp-mem-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 0;
-    font-size: 0.92em;
-    border-bottom: 1px solid var(--SmartThemeBorderColor, #2c2c2c);
-}
-
-/* 原表新增/被改动而重新出现的行：高亮 + 「新」角标 */
-.pp-mem-row.pp-mem-new {
-    background: rgba(127, 209, 138, 0.08);
-    border-radius: 4px;
-    padding: 4px;
-}
-
 .pp-mem-badge {
-    flex: 0 0 auto;
+    display: inline-block;
     font-size: 0.72em;
     color: #7fd18a;
     border: 1px solid #7fd18a;
     border-radius: 8px;
     padding: 0 6px;
+    margin: 1px;
 }
 
 .pp-mem-fresh { color: #7fd18a; }
 
-.pp-mem-tags {
-    flex: 0 1 150px;
-    min-width: 100px;
+/* 网格表格：沿用「记忆增强表格」原版样式（表头加粗 + 左侧行号 + 内容虚线格），等比例缩小 */
+.pp-mem-gridwrap {
+    overflow-x: auto;
+    max-width: 100%;
+    flex-basis: 100%;
 }
 
-/* 单元格以「列名:值」小格横排展示 */
-.pp-mem-cells {
-    flex: 1 1 200px;
-    min-width: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 10px;
-    overflow-wrap: anywhere;
+.pp-grid {
+    border-collapse: collapse;
+    width: max-content;
+    font-size: 12px;
+    margin: 2px 0;
 }
 
-.pp-mem-cell i {
-    font-style: normal;
-    opacity: 0.55;
-    margin-right: 3px;
-    font-size: 0.85em;
+.pp-grid th,
+.pp-grid td {
+    border: 1px solid var(--SmartThemeBodyColor, #4e4848);
+    padding: 2px 5px;
+    white-space: nowrap;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.pp-grid thead th { font-weight: bold; }
+
+.pp-grid .pp-grid-origin { min-width: 8px; }
+
+.pp-grid td.pp-grid-idx {
+    font-weight: bold;
+    color: var(--SmartThemeEmColor, #ccc);
+    min-width: 16px;
+}
+
+.pp-grid td.pp-grid-cell {
+    border-style: dashed;
+    color: var(--SmartThemeEmColor, #ccc);
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 原表新增/被改动而重新出现的行：淡绿底提示 */
+.pp-grid tr.pp-grid-new > td { background: rgba(127, 209, 138, 0.08); }
+
+/* 行内标签输入（优先级需盖过 .pp-drawer input[type=text] 的 width:100%） */
+.pp-grid td.pp-grid-tagscell input.pp-grid-tags {
+    width: 110px;
+    min-width: 90px;
+    font-size: 12px;
+    padding: 1px 4px;
+}
+
+.pp-grid .pp-grid-statecell { max-width: 96px; }
+
+/* 操作列按钮：小号，编辑态时放 保存/取消/采纳 */
+.pp-grid .pp-grid-opscell .menu_button {
+    display: inline-flex;
+    padding: 1px 7px;
+    font-size: 11px;
+    margin: 1px;
+}
+
+/* 编辑态内容格：文字框占满格子 */
+.pp-grid td.pp-grid-editcell {
+    white-space: normal;
+    min-width: 130px;
+    max-width: 260px;
+}
+
+.pp-grid td.pp-grid-editcell textarea {
+    width: 100%;
+    min-height: 36px;
+    resize: vertical;
+    font-size: 12px;
 }
 
 /* 召回列筛选 / 标签筛选条 */
@@ -402,31 +421,6 @@
     border: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
     border-radius: 12px;
     padding: 2px 10px;
-}
-
-/* 已删除行折叠区 */
-.pp-mem-delwrap {
-    margin-top: 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.pp-mem-delrow {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-    padding: 2px 0;
-    font-size: 0.9em;
-    text-decoration: line-through;
-    opacity: 0.75;
-}
-
-.pp-mem-delrow .pp-mem-ops {
-    display: flex;
-    gap: 6px;
-    white-space: nowrap;
 }
 
 /* 备份列表行 */
