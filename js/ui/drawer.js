@@ -73,7 +73,8 @@ export function initDrawer() {
     });
     document.addEventListener('pp-switch-tab', e => activateTab(e.detail?.id));
 
-    // 内容增删/展开/换页签都触发自动适配；childList 就够（勾选、输入不改变结构）
+    // 内容增删/展开/换页签（childList）以及用户拖拉灰框改的 style 高度（attributes）
+    // 都触发自动适配；抽屉自身的高度变化不在本子树内，不会自我触发
     const observer = new MutationObserver(() => {
         if (fitQueued) return;
         fitQueued = true;
@@ -82,7 +83,12 @@ export function initDrawer() {
             fitHeight();
         });
     });
-    observer.observe(contentEl(), { childList: true, subtree: true });
+    observer.observe(contentEl(), {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style'],
+    });
 
     // 窗口尺寸变化：把当前高度夹进新视口（用户拖过的也夹，但不重置）
     $(window).on('resize', () => {

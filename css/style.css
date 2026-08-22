@@ -157,13 +157,15 @@
     white-space: nowrap;
 }
 
-/* 世界书条目勾选区：书行下方展开，内部滚动 */
+/* 世界书条目勾选区：书行下方展开；右下角手柄可拉高（默认随内容长高，80vh 封顶内部滚动） */
 .pp-entries {
     margin-top: 4px;
     padding: 6px 8px;
     border: 1px dashed var(--SmartThemeBorderColor, #3a3a3a);
     border-radius: 6px;
-    max-height: 280px;
+    min-height: 120px;
+    max-height: 80vh;
+    resize: vertical;
     overflow-y: auto;
     box-sizing: border-box;
 }
