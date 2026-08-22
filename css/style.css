@@ -1,22 +1,23 @@
 /* 剧情规划器样式：尽量复用酒馆主题变量，缺省时回退深色 */
+/* 主面板：顶部下拉，从页面上缘向下展开（全宽，高度封顶，内部滚动） */
 .pp-drawer {
     position: fixed;
     top: 0;
+    left: 0;
     right: 0;
-    bottom: 0;
-    width: min(560px, 94vw);
+    height: 0;
+    overflow: hidden;
     z-index: 9999;
     display: flex;
     flex-direction: column;
     background: var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 0.98));
     color: var(--SmartThemeBodyColor, #e6e6e6);
-    border-left: 1px solid var(--SmartThemeBorderColor, #444);
-    transform: translateX(105%);
-    transition: transform 0.25s ease;
-    box-shadow: -6px 0 24px rgba(0, 0, 0, 0.5);
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+    transition: height 0.25s ease;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
 
-.pp-drawer.pp-open { transform: translateX(0); }
+.pp-drawer.pp-open { height: min(640px, 75vh); }
 
 .pp-drawer-head {
     display: flex;
@@ -56,6 +57,10 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    width: 100%;
+    max-width: 960px;
+    margin: 0 auto;
+    box-sizing: border-box;
 }
 
 .pp-section {
