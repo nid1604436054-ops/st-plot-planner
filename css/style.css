@@ -1,23 +1,47 @@
 /* 剧情规划器样式：尽量复用酒馆主题变量，缺省时回退深色 */
-/* 主面板：顶部下拉，从页面上缘向下展开（全宽，高度封顶，内部滚动） */
+/* 主面板：与顶栏/聊天列同宽（--sheldWidth）并居中，从顶栏下缘向下展开，高度封顶内部滚动 */
 .pp-drawer {
     position: fixed;
-    top: 0;
+    top: var(--topBarBlockSize, 42px);
     left: 0;
     right: 0;
+    max-width: var(--sheldWidth, 50vw);
+    margin: 0 auto;
     height: 0;
     overflow: hidden;
     z-index: 9999;
     display: flex;
     flex-direction: column;
-    background: var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 0.98));
+    box-sizing: border-box;
+    /* 实色背景：不用毛玻璃虚化。把半透明主题色叠 5 层，残余透光率按 alpha 指数衰减到肉眼不可见 */
+    background-color: var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 0.98));
+    background-image:
+        linear-gradient(var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1)), var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1))),
+        linear-gradient(var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1)), var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1))),
+        linear-gradient(var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1)), var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1))),
+        linear-gradient(var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1)), var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1))),
+        linear-gradient(var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1)), var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1)));
+    background-repeat: no-repeat;
     color: var(--SmartThemeBodyColor, #e6e6e6);
-    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
     transition: height 0.25s ease;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
 
-.pp-drawer.pp-open { height: min(640px, 75vh); }
+/* 支持相对色语法的浏览器（Chrome 119+）：直接剥掉主题色的 alpha 通道，得到精确实色 */
+@supports (background: hsl(from rebeccapurple h s l)) {
+    .pp-drawer {
+        background-image: none;
+        background-color: hsl(from var(--SmartThemeBlurTintColor, rgb(20, 22, 28)) h s l);
+    }
+}
+
+/* 边框和阴影只在展开时出现，避免收起后顶部残留一条线 */
+.pp-drawer.pp-open {
+    height: min(640px, 75vh);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-top: none;
+    border-radius: 0 0 10px 10px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+}
 
 .pp-drawer-head {
     display: flex;
@@ -58,8 +82,6 @@
     flex-direction: column;
     gap: 12px;
     width: 100%;
-    max-width: 960px;
-    margin: 0 auto;
     box-sizing: border-box;
 }
 
