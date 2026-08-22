@@ -141,7 +141,7 @@ function renderBooks(container) {
         <div class="pp-book">
             <div class="pp-item">
                 <div class="pp-item-main">
-                    <input type="text" class="pp-book-name" data-bname="${b.id}" value="${escapeHtml(b.name)}" title="点击修改书名" />
+                    <input type="text" class="text_pole textarea_compact pp-book-name" data-bname="${b.id}" value="${escapeHtml(b.name)}" title="点击修改书名" />
                 </div>
                 <div class="pp-item-ops">
                     <span class="menu_button" data-toggle="${b.id}">条目 ${enabledCount(b)}/${b.entries.length} <i class="fa-solid fa-chevron-${open ? 'down' : 'right'}"></i></span>

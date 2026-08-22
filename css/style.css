@@ -23,7 +23,6 @@
         linear-gradient(var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1)), var(--SmartThemeBlurTintColor, rgba(20, 22, 28, 1)));
     background-repeat: no-repeat;
     color: var(--SmartThemeBodyColor, #e6e6e6);
-    transition: height 0.25s ease;
 }
 
 /* 支持相对色语法的浏览器（Chrome 119+）：把主题色剥掉 alpha 通道得到精确实色。
@@ -35,9 +34,14 @@
     }
 }
 
-/* 边框和阴影只在展开时出现，避免收起后顶部残留一条线 */
+/* 边框和阴影只在展开时出现，避免收起后顶部残留一条线。
+   高度由 JS 按视口/输入框位置写入内联样式，这里的 min() 只是兜底。
+   resize: vertical 提供右下角拖拉手柄（须去掉 height 过渡，否则拖拉跟手性极差） */
 .pp-drawer.pp-open {
     height: min(640px, 75vh);
+    min-height: 240px;
+    max-height: calc(100vh - var(--topBarBlockSize, 42px));
+    resize: vertical;
     border: 1px solid var(--SmartThemeBorderColor, #444);
     border-top: none;
     border-radius: 0 0 10px 10px;
@@ -202,21 +206,10 @@
     border-radius: 6px;
 }
 
-/* 书名：无边框输入框，聚焦时才露出下划线，平时看起来就是标题 */
+/* 书名：常规输入框样式 + 加粗，让“这里可以改名”一眼可见 */
 .pp-book-name {
-    background: transparent;
-    border: none;
-    border-bottom: 1px dashed transparent;
     font-weight: bold;
-    font-size: 1em;
-    color: inherit;
-    padding: 0 0 1px;
     min-width: 120px;
-}
-
-.pp-book-name:focus {
-    border-bottom-color: var(--SmartThemeBorderColor, #666);
-    outline: none;
 }
 
 .pp-hit {
