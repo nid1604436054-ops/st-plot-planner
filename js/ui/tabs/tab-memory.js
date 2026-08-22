@@ -47,9 +47,8 @@ export const memoryTab = {
         <div id="pp_mem_main">
             <div class="pp-section">
                 <div class="pp-btn-row">
-                    <div id="pp_mem_sync" class="menu_button" title="从记忆表格插件读取最新数据，更新原表库并归档备份；镜像不动">立即同步原表</div>
-                    <div id="pp_mem_merge" class="menu_button" title="把原表库的新增/修改合并进镜像；你编辑过的行不会被覆盖，删除过的行不复活">从原表更新镜像</div>
-                    <div id="pp_mem_tag_btn" class="menu_button">AI 打标签</div>
+                    <div id="pp_mem_sync" class="menu_button" title="从记忆表格插件读取最新数据：更新原表库、归档备份，并把新增/改动合并进镜像（你编辑过的行不覆盖，删除过的不复活）">同步记忆表格</div>
+                    <div id="pp_mem_tag_btn" class="menu_button" title="用 AI 给镜像里还没标签的行自动分类，方便召回时按标签筛选">智能归类</div>
                     <div id="pp_mem_bk_btn" class="menu_button">备份与恢复</div>
                     <div id="pp_mem_rc_btn" class="menu_button">召回设置</div>
                 </div>
@@ -71,16 +70,12 @@ export const memoryTab = {
         container.querySelector('#pp_mem_sync').addEventListener('click', () => {
             const r = syncMemory();
             if (r.wiped) toastr.warning('检测到原表可能被清空：原表库和备份已保留，没有同步空数据');
-            else if (r.changed) {
-                mergeMirrorFromSource();
-                toastr.success('原表库已更新（镜像未动，需要时点「从原表更新镜像」合并）');
-            } else toastr.info('原表没有变化');
-            renderAll(container);
-        });
-        container.querySelector('#pp_mem_merge').addEventListener('click', () => {
-            const r = mergeMirrorFromSource();
-            if (r.changed) toastr.success(r.added ? `已合并：新进 ${r.added} 行（原表新增或被修改）` : '已合并（部分行的原表状态有更新）');
-            else toastr.info('镜像已是最新');
+            else {
+                const m = mergeMirrorFromSource();
+                if (m.added) toastr.success(`已同步：镜像新进 ${m.added} 行`);
+                else if (r.changed || m.changed) toastr.success('已同步（你编辑过的行未被覆盖）');
+                else toastr.info('原表没有变化，镜像已是最新');
+            }
             renderAll(container);
         });
         container.querySelector('#pp_mem_tag_btn').addEventListener('click', () => {
@@ -181,11 +176,11 @@ function renderTagAi(container) {
     const state = memoryState();
     const el = container.querySelector('#pp_mem_tagai');
     el.innerHTML = `
-    <b>AI 自动打标签</b>
-    <span class="pp-muted">把镜像里还没有标签的行分批交给「设置」页配置的 API 分类。分类标准写类别名（逗号/顿号分隔）或一段描述。</span>
+    <b>智能归类</b>
+    <span class="pp-muted">把镜像里还没有标签的行分批交给「设置」页配置的 API 自动分类打标签，之后召回时就能按标签筛选。</span>
     <textarea id="pp_mem_tagstd" class="text_pole textarea_compact" rows="2" placeholder="分类标准，例如：战斗,感情,约定,物品,地点,其他"></textarea>
     <label class="pp-label"><input type="checkbox" id="pp_mem_tagover" /> 覆盖已有标签</label>
-    <div class="pp-btn-row"><span id="pp_mem_tagrun" class="menu_button">开始打标签</span></div>`;
+    <div class="pp-btn-row"><span id="pp_mem_tagrun" class="menu_button">开始归类</span></div>`;
     el.querySelector('#pp_mem_tagstd').value = state.tagStandard ?? '';
 
     el.querySelector('#pp_mem_tagrun').addEventListener('click', async () => {
@@ -199,20 +194,20 @@ function renderTagAi(container) {
         const pending = s.mirror.sheets.reduce((n, sh) =>
             n + sh.rows.filter(r => overwrite || !(s.tags[r.rid] ?? []).length).length, 0);
         if (!pending) {
-            toastr.info('没有待打标签的行（都已有标签，或镜像为空）');
+            toastr.info('没有待归类的行（都已有标签，或镜像为空）');
             return;
         }
-        btn.textContent = '打标签中…';
+        btn.textContent = '归类中…';
         try {
             const r = await autoTagRows({
                 standard, overwrite,
-                onProgress: (done, all) => { btn.textContent = `打标签中… ${done}/${all} 行`; },
+                onProgress: (done, all) => { btn.textContent = `归类中… ${done}/${all} 行`; },
             });
-            toastr.success(`已为 ${r.tagged} / ${r.total} 行打上标签`);
+            toastr.success(`已归类 ${r.tagged} / ${r.total} 行`);
             renderAll(container);
         } catch (err) {
-            toastr.error(`打标签失败：${err.message}`);
-            btn.textContent = '开始打标签';
+            toastr.error(`归类失败：${err.message}`);
+            btn.textContent = '开始归类';
         }
     });
 }
@@ -233,8 +228,7 @@ function renderBackups(container) {
     <b>备份与恢复</b>
     <span class="pp-muted">原表库每次内容变化归档上一版（最多 20 份）。恢复 = 把该版本里缺失的行插回原表，只增不改。</span>
     ${item(`当前原表库（${fmtTime(state.source.syncedAt)} · ${rowsOf(state.source.sheets)} 行）`, state.source.sheets, 'live')}
-    ${state.backups.map(b => item(`${fmtTime(b.at)} · ${rowsOf(b.sheets)} 行`, b.sheets, String(b.at))).join('')}
-    <div class="pp-btn-row"><span id="pp_mem_purge" class="menu_button">清理无效删除记录</span></div>`;
+    ${state.backups.map(b => item(`${fmtTime(b.at)} · ${rowsOf(b.sheets)} 行`, b.sheets, String(b.at))).join('')}`;
 
     const findSheets = key => key === 'live' ? state.source.sheets
         : state.backups.find(b => String(b.at) === key)?.sheets;
@@ -253,11 +247,6 @@ function renderBackups(container) {
         const sheets = findSheets(btn.dataset.export);
         if (sheets) downloadJson(`memory-backup-${btn.dataset.export}.json`, sheets);
     }));
-    el.querySelector('#pp_mem_purge').addEventListener('click', () => {
-        const n = purgeMootTombstones();
-        toastr.info(n ? `清理了 ${n} 条无效记录` : '没有需要清理的记录');
-        renderAll(container);
-    });
 }
 
 function renderRecall(container) {
@@ -270,7 +259,7 @@ function renderRecall(container) {
     <div class="pp-mem-tagbar">
         ${tags.length ? tags.map(([t, n]) => `
         <label class="pp-mem-chip"><input type="checkbox" data-rtag="${escapeHtml(t)}" ${state.recallTags.includes(t) ? 'checked' : ''} /> ${escapeHtml(t)} (${n})</label>
-        `).join('') : '<span class="pp-muted">还没有任何标签，手动在行旁输入，或用「AI 打标签」</span>'}
+        `).join('') : '<span class="pp-muted">还没有任何标签，手动在行旁输入，或用「智能归类」</span>'}
     </div>
     <div class="pp-btn-row"><span id="pp_mem_rc_preview" class="menu_button">预览召回内容</span></div>
     <pre id="pp_mem_rc_out" class="pp-muted" style="display:none"></pre>`;
@@ -367,7 +356,7 @@ function renderSheets(container) {
     const state = memoryState();
 
     if (!state.mirror.sheets.length) {
-        list.innerHTML = '<div class="pp-muted">镜像为空。确认记忆表格插件里有带内容的表后，点「立即同步原表」+「从原表更新镜像」。空模板表不会进镜像。</div>';
+        list.innerHTML = '<div class="pp-muted">镜像为空。确认记忆表格插件里有带内容的表后，点上方「同步记忆表格」。空模板表不会进镜像。</div>';
         return;
     }
 
@@ -588,7 +577,7 @@ function renderDeleted(container) {
     <div class="pp-section">
         <div class="pp-btn-row">
             <span id="pp_mem_del_back" class="menu_button"><i class="fa-solid fa-arrow-left"></i> 返回镜像</span>
-            <span id="pp_mem_del_purge" class="menu_button" title="清掉原表里已不存在对应行的记录">清理无效记录</span>
+            <span id="pp_mem_del_purge" class="menu_button" title="删除记录里，原表已经不存在对应行的（整表没了或那行在原表里也删了）——这种记录永远不会再用到，点这里把它们永久清掉，不影响其他记录">清理无效记录</span>
         </div>
         <b>已删除内容（${total} 条）</b>
         <span class="pp-muted">在镜像里删掉的行都在这里，不参与召回，也不会堆在工作区。「恢复」= 放回镜像；「清除」= 永久删除记录。原表新增或修改的行不受影响，会照常出现在镜像里等你复审。</span>
