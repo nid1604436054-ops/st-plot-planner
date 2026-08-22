@@ -15,6 +15,7 @@ import { escapeHtml, clamp, downloadJson } from "../../utils.js";
 const closedSheets = new Set();    // 被手动折叠的镜像表
 const openSrc = new Set();         // 展开的原表
 let showEmptySrc = false;          // 原表库是否显示空表
+let libOpen = false;               // 原表库整节是否展开（默认收起，只留摘要行）
 let editingRow = null;             // 正在编辑内容的行 rid（重渲染后保持编辑状态）
 let memView = 'main';              // 'main' 工作区 / 'deleted' 已删除内容页
 
@@ -63,7 +64,6 @@ export const memoryTab = {
                 <span id="pp_mem_delbtn" class="menu_button" title="在镜像里删掉的行都在那一页：可恢复到镜像，或永久清除">已删除内容</span>
             </div>
             <div id="pp_mem_list" class="pp-mem-list"></div>
-            <b class="pp-group-title">原表库（自动同步，只读）</b>
             <div id="pp_mem_src" class="pp-mem-list"></div>
         </div>
         <div id="pp_mem_del" style="display:none"></div>`;
@@ -624,14 +624,40 @@ function renderSource(container) {
     const el = container.querySelector('#pp_mem_src');
     const state = memoryState();
     const sheets = state.source.sheets;
-    const empty = sheets.filter(s => !s.rows.length);
-    const shown = showEmptySrc ? sheets : sheets.filter(s => s.rows.length > 0);
+    const libRows = sheets.reduce((n, s) => n + s.rows.length, 0);
+    const libSheets = sheets.filter(s => s.rows.length > 0).length;
+
+    // 默认只留一条摘要行：原表库是自动同步的只读备份（防清空），不是编辑区，展开只为核对/恢复
+    const head = `
+    <div class="pp-item" id="pp_mem_libhead" title="从记忆表格插件自动同步的只读快照，用于自动备份与恢复（入口在上方「备份与恢复」）；不能在这里编辑，编辑请用上面的镜像">
+        <div class="pp-item-main"><b>原表库 · 自动备份（只读）</b></div>
+        <div class="pp-item-ops">
+            <span class="pp-muted">${libSheets} 表 ${libRows} 行 · 备份 ${state.backups.length} 份</span>
+            <span class="menu_button" id="pp_mem_libtoggle">${libOpen ? '收起' : '展开'} <i class="fa-solid fa-chevron-${libOpen ? 'down' : 'right'}"></i></span>
+        </div>
+    </div>`;
 
     if (!sheets.length) {
-        el.innerHTML = '<div class="pp-muted">原表库为空（当前聊天还没读到记忆表格数据）</div>';
+        el.innerHTML = head + '<div class="pp-muted">原表库为空（当前聊天还没读到记忆表格数据）</div>';
+        el.querySelector('#pp_mem_libtoggle').addEventListener('click', () => {
+            libOpen = !libOpen;
+            renderSource(container);
+        });
         return;
     }
+    if (!libOpen) {
+        el.innerHTML = head;
+        el.querySelector('#pp_mem_libtoggle').addEventListener('click', () => {
+            libOpen = !libOpen;
+            renderSource(container);
+        });
+        return;
+    }
+
+    const empty = sheets.filter(s => !s.rows.length);
+    const shown = showEmptySrc ? sheets : sheets.filter(s => s.rows.length > 0);
     el.innerHTML = `
+    ${head}
     ${empty.length ? `<div class="pp-btn-row"><span id="pp_mem_emptysrc" class="menu_button">${showEmptySrc ? '隐藏' : '显示'}空模板表（${empty.length} 张）</span></div>` : ''}
     ${shown.map(s => `
     <div class="pp-item">
@@ -650,6 +676,10 @@ function renderSource(container) {
         </div>` : ''}
     </div>`).join('')}`;
 
+    el.querySelector('#pp_mem_libtoggle').addEventListener('click', () => {
+        libOpen = !libOpen;
+        renderSource(container);
+    });
     el.querySelector('#pp_mem_emptysrc')?.addEventListener('click', () => {
         showEmptySrc = !showEmptySrc;
         renderSource(container);
