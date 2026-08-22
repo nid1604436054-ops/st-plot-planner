@@ -20,7 +20,7 @@ const DEFAULTS = {
         contextLayers: 30,  // 规划调用携带的最近对话层数
     },
     guidance: {
-        customPrompt: '',   // 剧情指导预设：用户固定的格式/文风要求，追加在系统提示词末尾
+        presets: [],        // 剧情指导预设：{id, name, content, enabled}，启用的按列表顺序拼进系统提示词
     },
     lorebooks: [],          // M1 世界书库
     injections: [],         // M4 隐身注入项
@@ -34,6 +34,12 @@ function ensureDefaults() {
         if (store[key] === undefined) {
             store[key] = JSON.parse(JSON.stringify(value));
         }
+    }
+    // 旧版单预设（customPrompt）迁移成列表第一条，已写的内容不丢
+    if (store.guidance && !Array.isArray(store.guidance.presets)) {
+        store.guidance.presets = store.guidance.customPrompt
+            ? [{ id: newId('gd-'), name: '我的预设', content: store.guidance.customPrompt, enabled: true }]
+            : [];
     }
     return store;
 }

@@ -449,6 +449,17 @@
     margin: 0;
 }
 
+/* 剧情指导：预设行下方的编辑区（名字 + 内容），虚线框区分于预设列表行 */
+.pp-gd-editor {
+    margin-top: 4px;
+    padding: 6px 8px;
+    border: 1px dashed var(--SmartThemeBorderColor, #3a3a3a);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
 /* 剧情指导：内置指令只读展示框（「查看内置指令」展开的内容） */
 .pp-gd-builtin {
     white-space: pre-wrap;

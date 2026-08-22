@@ -49,8 +49,10 @@ export async function runPlotGuidance({ userNote = '', previousPlan = '', revisi
     const hits = scanLorebooks(scanText);
     const memoryText = buildMemoryContext();
 
-    // 用户预设（格式/文风等固定要求）追加在内置指令后；JSON 输出格式不能被预设改掉，否则解析会失败
-    const custom = (settings.guidance?.customPrompt ?? '').trim();
+    // 用户预设（格式/文风等固定要求）追加在内置指令后，勾选启用的按列表顺序拼成带名小节；
+    // JSON 输出格式不能被预设改掉，否则解析会失败
+    const active = (settings.guidance?.presets ?? []).filter(p => p.enabled && String(p.content ?? '').trim());
+    const custom = active.map(p => `### ${p.name}\n${String(p.content).trim()}`).join('\n\n');
     const systemPrompt = custom
         ? `${GUIDANCE_SYSTEM_PROMPT}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n${custom}`
         : GUIDANCE_SYSTEM_PROMPT;
