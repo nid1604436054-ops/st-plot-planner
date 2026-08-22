@@ -449,6 +449,20 @@
     margin: 0;
 }
 
+/* 剧情指导：内置指令只读展示框（「查看内置指令」展开的内容） */
+.pp-gd-builtin {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 220px;
+    overflow-y: auto;
+    margin-top: 6px;
+    padding: 8px;
+    border: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
+    border-radius: 6px;
+    font-size: 12px;
+    opacity: 0.85;
+}
+
 /* 抽屉内表单控件占满宽度 */
 .pp-drawer input[type="text"],
 .pp-drawer input[type="password"],

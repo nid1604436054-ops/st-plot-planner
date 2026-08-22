@@ -23,7 +23,8 @@ const OUTPUT_SCHEMA = `{
   }
 }`;
 
-const GUIDANCE_SYSTEM_PROMPT = [
+// 内置指令：保证返回 JSON（程序要解析成 OOC + 规划），用户预设追加在其后，见 runPlotGuidance
+export const GUIDANCE_SYSTEM_PROMPT = [
     '你是文字角色扮演的剧情顾问，负责两件事：',
     '1) 结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）；',
     '2) 为后续剧情规划「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
@@ -47,6 +48,12 @@ export async function runPlotGuidance({ userNote = '', previousPlan = '', revisi
     const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
     const hits = scanLorebooks(scanText);
     const memoryText = buildMemoryContext();
+
+    // 用户预设（格式/文风等固定要求）追加在内置指令后；JSON 输出格式不能被预设改掉，否则解析会失败
+    const custom = (settings.guidance?.customPrompt ?? '').trim();
+    const systemPrompt = custom
+        ? `${GUIDANCE_SYSTEM_PROMPT}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n${custom}`
+        : GUIDANCE_SYSTEM_PROMPT;
 
     const userContent = [
         '## 角色设定摘要',

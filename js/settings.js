@@ -19,6 +19,9 @@ const DEFAULTS = {
         maxChars: 6000,     // 检索结果拼装的字符上限（控制规划调用的输入规模）
         contextLayers: 30,  // 规划调用携带的最近对话层数
     },
+    guidance: {
+        customPrompt: '',   // 剧情指导预设：用户固定的格式/文风要求，追加在系统提示词末尾
+    },
     lorebooks: [],          // M1 世界书库
     injections: [],         // M4 隐身注入项
     storageItems: [],       // M5 额外存储条目

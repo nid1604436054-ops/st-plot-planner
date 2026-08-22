@@ -1,11 +1,14 @@
 // 剧情指导页签：OOC 检测 + 剧情规划
 // 工作流：分析 → 编辑/按意见重写（迭代）→ 转为隐身注入（明盘）
-import { runPlotGuidance } from "../../planner.js";
+// 「规划预设」：用户固定的格式/文风要求，每次分析自动追加进系统提示词（区别于单次生效的「补充说明」）
+import { runPlotGuidance, GUIDANCE_SYSTEM_PROMPT } from "../../planner.js";
 import { addInjection } from "../../injection.js";
+import { settings, save } from "../../settings.js";
 import { escapeHtml } from "../../utils.js";
 
-// 会话内状态：切换页签后保留本次结果
+// 会话内状态：切换页签后保留本次结果；预设区折叠状态跨重渲染保持
 const state = { result: null, raw: '', planText: '', hits: 0 };
+let presetOpen = false;
 
 export const guidanceTab = {
     id: 'guidance',
@@ -20,12 +23,70 @@ export const guidanceTab = {
             </div>
             <div id="pp_gd_status" class="pp-muted"></div>
         </div>
+        <div class="pp-section" id="pp_gd_preset"></div>
         <div id="pp_gd_output"></div>`;
 
         container.querySelector('#pp_gd_run').addEventListener('click', () => analyze(container));
+        renderPreset(container);
         if (state.result) renderResult(container);
     },
 };
+
+// 规划预设区：默认折叠成一条摘要行（和记忆表格「原表库」同款交互），写入即时保存
+function renderPreset(container) {
+    const el = container.querySelector('#pp_gd_preset');
+    const value = settings.guidance?.customPrompt ?? '';
+    const status = value.trim() ? `已设置 · ${value.trim().length} 字` : '未设置';
+    const head = `
+    <div class="pp-item" id="pp_gd_preset_head" title="写一次、每次分析都自动生效的固定要求；「补充说明」则是只对本次分析生效">
+        <div class="pp-item-main"><b>规划预设（固定要求）</b></div>
+        <div class="pp-item-ops">
+            <span class="pp-muted">${status}</span>
+            <span class="menu_button" id="pp_gd_preset_toggle">${presetOpen ? '收起' : '编辑'} <i class="fa-solid fa-chevron-${presetOpen ? 'down' : 'right'}"></i></span>
+        </div>
+    </div>`;
+
+    el.innerHTML = `
+    ${head}
+    ${presetOpen ? `
+    <label class="pp-label">每次分析都会随提示词发给模型：对规划的内容格式、文风、篇幅、侧重点的固定要求。改动即时保存。输出须仍是 JSON 骨架（程序要解析），所以格式要求写在内容层面（如每个阶段的写法、语言、详细程度），别要求改成纯正文。</label>
+    <textarea id="pp_gd_preset_text" class="text_pole textarea_compact" rows="6" placeholder="例：&#10;1. 用中文写，文风克制、不堆形容词；&#10;2. 每个阶段 content 至少两句话，写清幕后安排和动因；&#10;3. beats 按「铺垫→推进→转折→收束」组织，共 4-6 个阶段。"></textarea>
+    <div class="pp-btn-row">
+        <span id="pp_gd_preset_clear" class="menu_button" title="清空预设（恢复为不追加任何固定要求）">清空预设</span>
+        <span id="pp_gd_preset_builtin" class="menu_button" title="展开查看内置的系统指令和预设拼接的位置">查看内置指令</span>
+    </div>
+    <div id="pp_gd_preset_view" class="pp-gd-builtin" style="display:none"></div>` : ''}`;
+
+    el.querySelector('#pp_gd_preset_toggle').addEventListener('click', () => {
+        presetOpen = !presetOpen;
+        renderPreset(container);
+    });
+    if (!presetOpen) return;
+
+    const textEl = el.querySelector('#pp_gd_preset_text');
+    textEl.value = value;
+    textEl.addEventListener('input', () => {
+        settings.guidance.customPrompt = textEl.value;
+        save();
+        const n = textEl.value.trim().length;
+        el.querySelector('#pp_gd_preset_head .pp-muted').textContent = n ? `已设置 · ${n} 字` : '未设置';
+    });
+    el.querySelector('#pp_gd_preset_clear').addEventListener('click', () => {
+        if (!settings.guidance.customPrompt) { toastr.info('预设本来就是空的'); return; }
+        settings.guidance.customPrompt = '';
+        save();
+        renderPreset(container);
+        toastr.success('已清空预设');
+    });
+    el.querySelector('#pp_gd_preset_builtin').addEventListener('click', () => {
+        const view = el.querySelector('#pp_gd_preset_view');
+        const show = view.style.display === 'none';
+        view.style.display = show ? '' : 'none';
+        if (show) {
+            view.textContent = `${GUIDANCE_SYSTEM_PROMPT}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n（你在上面写的预设会追加在这里，随每次分析一起发给模型）`;
+        }
+    });
+}
 
 async function analyze(container, { revise = false } = {}) {
     const status = container.querySelector('#pp_gd_status');
