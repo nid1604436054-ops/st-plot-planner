@@ -158,6 +158,12 @@
     white-space: nowrap;
 }
 
+/* 酒馆全局把勾选框设为 display:grid（块级），裸 label 里文字会被挤到下一行；
+   抽屉内改回行内网格，勾选框与文字同行（.pp-gd-selp label 等行内弹性容器不受影响） */
+.pp-drawer input[type="checkbox"] {
+    display: inline-grid;
+}
+
 /* 世界书条目勾选区：书行下方展开；右下角手柄可拉高（默认随内容长高，80vh 封顶内部滚动） */
 .pp-entries {
     margin-top: 4px;
@@ -546,6 +552,41 @@
 .pp-gd-sel {
     border: 1px solid currentColor;
     opacity: 1;
+}
+
+/* 向导步骤头：步骤名 + 右侧动作（如「查看完整提示词」）同行排开 */
+.pp-gd-stephead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* 向导材料统计行：不加边框盒子，一行读完 */
+.pp-gd-stat {
+    font-size: 0.92em;
+    opacity: 0.85;
+    overflow-wrap: anywhere;
+}
+
+/* 向导子区块标题行：标题 + 右侧小动作（如「管理标签」） */
+.pp-gd-layhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+/* 向导内更透气：勾选区加大间距，按钮组上方加发丝线收尾 */
+#pp_gd_main .pp-gd-selp {
+    gap: 8px 18px;
+}
+
+#pp_gd_main .pp-btn-row {
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
 }
 
 /* 第 1 步「本次启用的预设」与第 2 步选项横排勾选区 */

@@ -237,7 +237,6 @@ function renderMain(container) {
         main.innerHTML = `
         <div class="pp-section">
             <b>第 3 步 · 分析中……</b>
-            <div class="pp-muted">检查（OOC / 剧情重复 / 文风重复 / 进度）+ 设计剧情一次出全，走插件独立 API，不影响主对话。</div>
         </div>`;
         return;
     }
@@ -247,7 +246,6 @@ function renderMain(container) {
         main.innerHTML = `
         <div class="pp-section">
             <b>检查当前剧情中……</b>
-            <div class="pp-muted">对照进行中剧情与最近对话出执行报告（自动附带生效中的游戏玩法规则），走插件独立 API。</div>
         </div>`;
         return;
     }
@@ -319,43 +317,46 @@ function renderCollect(container, main) {
     const gpHit = new Set(storageItemsInEffect().map(i => i.id));
     main.innerHTML = `
     <div class="pp-section">
-        <b>第 1 步 · 收集确认</b>
-        <div class="pp-muted">本地检索完成（不调模型）：以下材料将随分析一起发送。</div>
-        <div class="pp-item">
-            <div class="pp-item-main">
-                <span id="pp_gd_c1_stat"></span>
-                <span class="pp-muted" id="pp_gd_c1_count">预设 ${run.presetIds.length}/${presets.length} 启用${activeStory() ? ' · 已附进行中剧情' : ''}</span>
-            </div>
-            <div class="pp-item-ops"><span class="menu_button" id="pp_gd_c1_preview">查看完整提示词</span></div>
+        <div class="pp-gd-stephead">
+            <b>第 1 步 · 收集确认</b>
+            <span class="menu_button" id="pp_gd_c1_preview">查看完整提示词</span>
         </div>
-        <label class="pp-label">记忆表格召回（只影响本次分析，不改记忆表格页的配置）</label>
-        <div class="pp-gd-memlay">
-            <div>
-                <b class="pp-gd-layname">第一层 · 表格范围${recallSheets.length ? '' : '（镜像里没有开了「参与召回」的表）'}</b>
-                <div class="pp-gd-selp" id="pp_gd_c1_sheets">
-                    ${recallSheets.map(s => `<label title="勾掉后本次分析不带这张表的记忆行"><input type="checkbox" data-msheet="${escapeHtml(s.uid)}" ${run.memSheets == null || run.memSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)}（${s.rows.length} 行）</label>`).join('')}
+        <div class="pp-gd-stat"><span id="pp_gd_c1_stat"></span><span class="pp-muted" id="pp_gd_c1_count"> · 预设 ${run.presetIds.length}/${presets.length} 启用${activeStory() ? ' · 已附进行中剧情' : ''}</span></div>
+        ${recallSheets.length ? `
+        <div>
+            <div class="pp-gd-layhead">
+                <label class="pp-label" title="只影响本次分析，不改记忆表格页的配置">记忆表格召回</label>
+                <span id="pp_gd_mem_jump" class="menu_button" title="标签词表与 AI 打标签在「记忆表格」页管理">管理标签 ›</span>
+            </div>
+            <div class="pp-gd-memlay">
+                <div>
+                    <b class="pp-gd-layname">表格范围</b>
+                    <div class="pp-gd-selp" id="pp_gd_c1_sheets">
+                        ${recallSheets.map(s => `<label title="勾掉后本次分析不带这张表的记忆行"><input type="checkbox" data-msheet="${escapeHtml(s.uid)}" ${run.memSheets == null || run.memSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)} · ${s.rows.length} 行</label>`).join('')}
+                    </div>
+                </div>
+                <div>
+                    <b class="pp-gd-layname">标签过滤</b>
+                    <label title="勾选后只带所选标签的行；不勾则所选表格全量带出"><input type="checkbox" id="pp_gd_c1_memmatch" ${run.memMatch ? 'checked' : ''}/> 按标签匹配</label>
+                    <div class="pp-gd-selp" id="pp_gd_c1_chips" ${run.memMatch ? '' : 'style="display:none"'}></div>
+                    <span class="pp-muted" id="pp_gd_c1_memtip"></span>
                 </div>
             </div>
-            <div>
-                <b class="pp-gd-layname">第二层 · 标签过滤</b>
-                <label title="勾选后只带所选标签的行；不勾则所选表格全量带出"><input type="checkbox" id="pp_gd_c1_memmatch" ${run.memMatch ? 'checked' : ''}/> 按标签匹配（不勾 = 全量）</label>
-                <div class="pp-gd-selp" id="pp_gd_c1_chips" ${run.memMatch ? '' : 'style="display:none"'}></div>
-                <span class="pp-muted" id="pp_gd_c1_memtip"></span>
-            </div>
-        </div>
-        <div class="pp-muted">标签词表与 AI 打标签在「记忆表格」页管理 <span id="pp_gd_mem_jump" class="menu_button">前往</span></div>
-        <label class="pp-label">本次启用的预设（改动不写回保存的默认值）</label>
+        </div>` : `
+        <div class="pp-gd-layhead"><label class="pp-label">记忆表格召回</label></div>
+        <div class="pp-muted">没有开启「参与召回」的记忆表，本次不附带</div>`}
+        <label class="pp-label" title="改动只对本次分析生效，不写回「规划预设」区的默认启用状态">本次启用的预设</label>
         <div class="pp-gd-selp">
             ${presets.map(p => `<label><input type="checkbox" data-c1p="${p.id}" ${run.presetIds.includes(p.id) ? 'checked' : ''}/> ${escapeHtml(p.name)}</label>`).join('')
-            || '<span class="pp-muted">（还没有预设，可在下方「规划预设」里新建）</span>'}
+            || '<span class="pp-muted">还没有预设</span>'}
         </div>
-        <label class="pp-label">游戏玩法（勾选的玩法规则随本次分析发给模型，规划须按其约束设计；默认勾选当前生效中的条目）</label>
+        <label class="pp-label" title="勾选的玩法规则随本次分析发给模型，规划须按其约束设计；默认勾选当前生效中的条目">游戏玩法</label>
         <div class="pp-gd-selp">
-            ${gpItems.map(i => `<label title="勾选后该条玩法规则作为材料发给规划模型（不影响它注入主对话）"><input type="checkbox" data-c1g="${i.id}" ${(run.gpIds ?? []).includes(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-muted">（生效中）</span>' : ''}</label>`).join('')
-            || '<span class="pp-muted">（还没有玩法条目，可在本页底部「游戏玩法」折叠区添加）</span>'}
+            ${gpItems.map(i => `<label title="勾选后该条玩法规则作为材料发给规划模型（不影响它注入主对话）"><input type="checkbox" data-c1g="${i.id}" ${(run.gpIds ?? []).includes(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
+            || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
-        <label class="pp-label">剧情构思方向（可选：已有的想法、约束、重点，随本次分析发给模型）</label>
-        <textarea id="pp_gd_note" class="text_pole textarea_compact" rows="3"></textarea>
+        <label class="pp-label">剧情构思方向</label>
+        <textarea id="pp_gd_note" class="text_pole textarea_compact" rows="3" placeholder="已有的想法、约束或重点（可选，随分析发给模型）"></textarea>
         <div class="pp-btn-row">
             <span id="pp_gd_c1_next" class="menu_button">下一步：随机事件</span>
             <span id="pp_gd_c1_skip" class="menu_button">跳过事件，直接分析</span>
@@ -371,17 +372,23 @@ function renderCollect(container, main) {
     const refreshMem = () => {
         const st = collectStats({ memoryTags: wizardMemoryTags(), memorySheets: wizardMemorySheets() });
         const sheetDesc = run.memSheets == null ? '全部表' : `${run.memSheets.length} 张表`;
+        const memSeg = !recallSheets.length ? '记忆表格 不附带'
+            : `记忆表格 ${st.memChars} 字（${sheetDesc} · ${memModeDesc()}）`;
         const gpDesc = gpItems.length ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
         main.querySelector('#pp_gd_c1_stat').textContent =
-            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · 记忆表格 ${st.memChars} 字（${sheetDesc} · ${memModeDesc()}）${gpDesc}`;
-        main.querySelector('#pp_gd_c1_chips').style.display = run.memMatch ? '' : 'none';
-        main.querySelector('#pp_gd_c1_memtip').textContent =
+            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}`;
+        const chipsEl = main.querySelector('#pp_gd_c1_chips');
+        if (chipsEl) chipsEl.style.display = run.memMatch ? '' : 'none';
+        const tipEl = main.querySelector('#pp_gd_c1_memtip');
+        if (tipEl) tipEl.textContent =
             run.memMatch && !run.memTags.length ? '未勾选任何标签，本次将不附带记忆表格' : '';
     };
 
     // 第二层标签 chips 的计数只统计第一层所选表格里的行；选表变了就地重建
+    // （无可召回的表时整个记忆区块不渲染，chipsBox 为空直接跳过）
     const chipsBox = main.querySelector('#pp_gd_c1_chips');
     const renderChips = () => {
+        if (!chipsBox) return;
         const scope = new Set(run.memSheets ?? recallSheets.map(s => s.uid));
         const counts = new Map();
         for (const sheet of state.mirror.sheets) {
@@ -406,21 +413,21 @@ function renderCollect(container, main) {
         renderChips();
         refreshMem();
     }));
-    main.querySelector('#pp_gd_mem_jump').addEventListener('click', () =>
+    main.querySelector('#pp_gd_mem_jump')?.addEventListener('click', () =>
         document.dispatchEvent(new CustomEvent('pp-switch-tab', { detail: { id: 'memory' } })));
 
     const noteEl = main.querySelector('#pp_gd_note');
     noteEl.value = run.note;
     noteEl.addEventListener('input', () => { run.note = noteEl.value; });
 
-    main.querySelector('#pp_gd_c1_memmatch').addEventListener('change', e => {
+    main.querySelector('#pp_gd_c1_memmatch')?.addEventListener('change', e => {
         run.memMatch = e.target.checked;
         refreshMem();
     });
 
     main.querySelectorAll('[data-c1p]').forEach(cb => cb.addEventListener('change', () => {
         run.presetIds = [...main.querySelectorAll('[data-c1p]:checked')].map(x => x.dataset.c1p);
-        main.querySelector('#pp_gd_c1_count').textContent = `预设 ${run.presetIds.length}/${presets.length} 启用${activeStory() ? ' · 已附进行中剧情' : ''}`;
+        main.querySelector('#pp_gd_c1_count').textContent = ` · 预设 ${run.presetIds.length}/${presets.length} 启用${activeStory() ? ' · 已附进行中剧情' : ''}`;
     }));
     main.querySelectorAll('[data-c1g]').forEach(cb => cb.addEventListener('change', () => {
         run.gpIds = [...main.querySelectorAll('[data-c1g]:checked')].map(x => x.dataset.c1g);
@@ -471,15 +478,10 @@ function renderReady(container, main) {
     main.innerHTML = `
     <div class="pp-section">
         <b>分析前确认</b>
-        <div class="pp-muted">即将调用模型开始分析（走插件独立 API，计费按你配置的接口）。请核对本次材料：</div>
-        <div class="pp-item">
-            <div class="pp-item-main">
-                <span>对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${run.presetIds.length}/${presets.length} 启用</span>
-                <span class="pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''} · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}${activeStory() ? ' · 附进行中剧情' : ''}</span>
-            </div>
-        </div>
+        <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${run.presetIds.length}/${presets.length} 启用 · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}</div>
+        <div class="pp-gd-stat pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${activeStory() ? ' · 附进行中剧情' : ''}</div>
         <div class="pp-btn-row">
-            <span id="pp_gd_ready_go" class="menu_button">确认，开始分析</span>
+            <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">确认，开始分析</span>
             <span id="pp_gd_ready_back" class="menu_button">返回</span>
         </div>
     </div>`;
@@ -494,18 +496,17 @@ function renderReady(container, main) {
 function renderEvent(container, main) {
     main.innerHTML = `
     <div class="pp-section">
-        <b>第 2 步 · 随机事件闸口</b>
-        <div class="pp-muted">可选。不想要事件就直接跳过；选定的事件/意见会作为「随机事件」材料融入本次规划，事件卡上也可把已选走向直接转为隐身注入。</div>
+        <div class="pp-gd-stephead"><b>第 2 步 · 随机事件（可选）</b></div>
         <div class="pp-gd-selp">
             <label title="把事件库规则的名称与提示给模型参考，可从中选方向也可另起"><input type="checkbox" id="pp_gd_ev_lib" ${ev.useLibrary ? 'checked' : ''}/> 参考事件库</label>
             <label title="事件生成的同时让模型顺带给一版后续走向预览（仅供参考，正式规划仍走第 3 步分析）"><input type="checkbox" id="pp_gd_ev_prev" ${ev.wantPreview ? 'checked' : ''}/> 顺带出预览剧情</label>
         </div>
         <div class="pp-btn-row">
-            <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰，直接让模型即兴生成"><i class="fa-solid fa-dice"></i> 大模型随机</span>
-            <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：先在勾选的掷骰板块（事件条目/维度随机/AI自主）里按板块权重抽一个——条目板块按权重×概率抽一条（必出），维度随机按维度权重抽方向，AI自主由模型看剧情挑维度；板块开关与权重在本页底部「事件库设置」"><i class="fa-solid fa-dice-three"></i> 掷骰（三板块）</span>
+            <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰，直接让模型即兴生成；选定的事件融入本次规划，事件卡上也可转为隐身注入"><i class="fa-solid fa-dice"></i> 大模型随机</span>
+            <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：先在勾选的掷骰板块（事件条目/维度随机/AI自主）里按板块权重抽一个——条目板块按权重×概率抽一条（必出），维度随机按维度权重抽方向，AI自主由模型看剧情挑维度；板块开关与权重在本页底部「事件库设置」"><i class="fa-solid fa-dice-three"></i> 掷骰</span>
         </div>
-        <label class="pp-label">或自己给指导意见（不掷骰，直接写事件/走向想法）</label>
-        <textarea id="pp_gd_ev_manual" class="text_pole textarea_compact" rows="2"></textarea>
+        <label class="pp-label">或自己给意见</label>
+        <textarea id="pp_gd_ev_manual" class="text_pole textarea_compact" rows="2" placeholder="不掷骰，直接写下你的事件或走向想法"></textarea>
         <div id="pp_gd_ev_out"></div>
         <div class="pp-btn-row">
             <span id="pp_gd_ev_done" class="menu_button">确认，开始分析</span>
@@ -621,7 +622,7 @@ function renderEvCard(out) {
             <div class="menu_button pp-option ${ev.choiceIdx === i ? 'pp-gd-sel' : ''}" data-evopt="${i}">
                 ${escapeHtml(o.label ?? '')}<span class="pp-muted"> —— ${escapeHtml(o.hint ?? '')}</span>
             </div>`).join('')}
-        <div class="pp-muted">${ev.choiceIdx == null ? '点一个走向选定（再点取消），都不选则只把事件当参考' : `已选：${escapeHtml(options[ev.choiceIdx]?.label ?? '')}`}</div>
+        <div class="pp-muted">${ev.choiceIdx == null ? '点选一个走向（再点取消）；都不选则只作参考' : `已选：${escapeHtml(options[ev.choiceIdx]?.label ?? '')}`}</div>
         <div class="pp-btn-row"><span id="pp_gd_ev_inject" class="menu_button" title="把事件与已选走向转为隐身注入（模型可见、聊天界面不显示），20 层后自动撤下；不影响作为材料融入本次规划">转为隐身注入</span></div>
     </div>`;
     out.querySelectorAll('[data-evopt]').forEach(el => el.addEventListener('click', () => {
@@ -711,8 +712,7 @@ function renderResult(container, main) {
 
     main.innerHTML = `
     <div class="pp-section">
-        <b>第 4 步 · 人工二检（世界书命中 ${run.hits} 条）</b>
-        <div class="pp-muted">检查项与规划如下；不合格「打回重新生成」，合格「确认采用」，不要了「不保存」回到第 1 步。</div>
+        <div class="pp-gd-stephead"><b>第 4 步 · 人工二检</b><span class="pp-muted">世界书命中 ${run.hits} 条</span></div>
         ${checkRow('OOC', ooc?.found && items.length
             ? items.map(it => `<div class="pp-hit"><b>${escapeHtml(it.aspect ?? '')} · ${escapeHtml(it.severity ?? '')}</b><div>${escapeHtml(it.evidence ?? '')}</div><div class="pp-muted">建议：${escapeHtml(it.fix ?? '')}</div></div>`).join('')
             : '<span class="pp-muted">未发现明显 OOC</span>')}
@@ -723,10 +723,10 @@ function renderResult(container, main) {
         ${checkRow('剧情进度', `<div>${escapeHtml(checks.progress?.stage || '—')}${checks.progress?.pct ? `（${escapeHtml(checks.progress.pct)}）` : ''}</div>${checks.progress?.note ? `<div class="pp-muted">${escapeHtml(checks.progress.note)}</div>` : ''}`)}
     </div>
     <div class="pp-section">
-        <b>剧情规划（可编辑，确认采用、注入的都是这份文本）</b>
+        <b title="可编辑；「确认采用」与「转为隐身注入」用的都是这份文本">剧情规划</b>
         <textarea id="pp_gd_plan" class="text_pole textarea_compact" rows="10"></textarea>
-        <label class="pp-label">修改意见（打回重新生成用）</label>
-        <textarea id="pp_gd_revise_note" class="text_pole textarea_compact" rows="2"></textarea>
+        <label class="pp-label">修改意见</label>
+        <textarea id="pp_gd_revise_note" class="text_pole textarea_compact" rows="2" placeholder="填给模型的修改要求，点「打回重新生成」生效"></textarea>
         <label class="pp-label" title="默认沿用上次；「确认采用」的剧情注入也按这里的深度与角色注入（剧情注入永不过期，完结时自动撤下）">注入参数</label>
         <div class="pp-gd-selp pp-gd-injrow">
             <label>深度 <input type="number" id="pp_gd_inj_depth" min="0" max="100" step="1" title="0 = 紧贴上下文末尾；数字越大越靠前" /></label>
