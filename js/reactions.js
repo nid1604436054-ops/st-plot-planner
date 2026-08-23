@@ -3,9 +3,8 @@
 // 卡片结构（吸收用户 NPC_Reaction 预设）：显著性分级 / 即时反应写法（写一次就够）/
 // 扩散链（按楼层分段，贴世界观）/ 底线（不可逆伤害一律禁止）/ 楼层预算（到期自动撤下）。
 import { chatCompletion } from "./api.js";
-import { collectRecentChat, formatChatLog, characterSummary } from "./context.js";
-import { scanLorebooks, buildLoreContext } from "./lorebook.js";
-import { settings } from "./settings.js";
+import { collectPlanningContext, characterSummary } from "./context.js";
+import { buildLoreContext } from "./lorebook.js";
 import { extractJson } from "./utils.js";
 
 const DEFAULT_BOUNDARY = '不得导致感情实质破裂、主要角色受异性实质侵犯、user 无法逆转的损失；危机可以重，出口必须存在。';
@@ -30,9 +29,7 @@ const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器�
  * @returns {Promise<{salience:number, immediate:string, diffusion:Array, boundaries:string, floors:number}>}
  */
 export async function generateReactionCard({ note = '' } = {}) {
-    const chatList = collectRecentChat(settings.retrieval.contextLayers);
-    const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
-    const hits = scanLorebooks(scanText);
+    const { chatList, hits } = collectPlanningContext();
     const user = [
         '## 角色设定摘要',
         characterSummary() || '（无角色卡）',

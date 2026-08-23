@@ -118,7 +118,7 @@
 **密钥安全**：密钥存于酒馆设置（浏览器 + 服务器 settings.json），仅本插件使用；
 不做任何遥测或上传。
 
-### M1 世界书导入与按需检索 ✅（条目级编辑、高级字段 ⬜）
+### M1 世界书导入与按需检索 ✅
 
 **职责**：导入世界书（酒馆 JSON / 纯文本）到插件自有库；按需检索命中条目；
 检索结果**只**用于 M2/M3 的规划调用。
@@ -128,52 +128,35 @@
 ```ts
 interface Lorebook { id: string; name: string; enabled: boolean; source: 'st-json' | 'plain-text'; entries: LoreEntry[] }
 interface LoreEntry {
-  uid: number; comment: string;          // 条目名
-  keys: string[]; secondaryKeys: string[]; regex: string[];
-  content: string; constant: boolean;    // constant = 常驻（恒命中）
-  order: number; disabled: boolean;
+  uid: number; comment: string;     // 条目名
+  keys: string[];                   // 触发词（子串匹配，大小写不敏感）
+  content: string;
+  constant: boolean;                // 常驻：不看关键词恒带出（对齐酒馆 constant）
+  disabled: boolean;
 }
 ```
 
-酒馆原生 JSON 字段映射（未列出的高级字段暂忽略）：
+酒馆原生 JSON 字段映射（次要关键词 / 正则等高级字段不采用）：
 
 | 酒馆字段 | 本插件字段 | 说明 |
 |---|---|---|
-| `key` / `keysecondary` | `keys` / `secondaryKeys` | 触发词数组 |
+| `key` | `keys` | 触发词数组 |
 | `content` | `content` | 条目正文 |
 | `comment` | `comment` | 条目名 |
 | `constant` | `constant` | 常驻 |
 | `disable` | `disabled` | 停用 |
-| `order` | `order` | 插入排序权重 |
 
-纯文本导入格式约定：
-
-```
-# 条目标题 | 关键词1,关键词2
-条目正文，可多行……
-
----
-
-# 常驻条目 | [常驻] 
-无需触发词、恒命中的正文……
-
----
-
-# 另一个条目
-（无关键词头也可，整段作为正文，之后可在条目编辑中补触发词）
-```
-
-- 空行 `---` 分隔条目；首行 `# 标题 | 关键词` 解析为头部；关键词段以 `[常驻]` 开头表示 constant。
+纯文本导入：一次粘贴的整块就是**一条**条目（书名 / 关键词在导入框单独填），
+不做切块解析；常驻在条目列表里勾选。
 
 检索算法（`scanLorebooks(scanText)`）：
 
 ```
 输入：最近 scanDepth 层消息拼成的文本（小写化）
-对每个启用书籍的每个非停用条目：
-  命中 ⟸ constant
-      ∨ 任一主关键词为文本子串（若设有次关键词，还须任一次关键词命中）
-      ∨ 任一正则 test 通过
-输出：按 order 升序（同 order 按 uid），截 maxEntries 条，
+对每个启用书籍的每个非停用且内容非空的条目：
+  命中 ⟸ constant ∨ 任一关键词为文本子串
+输出：常驻条目按 uid 升序排最前（恒带出，不占 maxEntries 名额，
+      但优先消耗 maxChars 预算），关键词命中按 uid 升序排后、截 maxEntries 条；
       拼装总字符不超过 maxChars（超出截断并加省略号）
 ```
 
@@ -421,7 +404,7 @@ st-plot-planner/
 
 1. 本地安装：文件夹放入 `public/scripts/extensions/third-party/` → 重启 → 扩展面板出现「剧情规划器」并可用。
 2. 设置：填 API 后「测试连接」返回 pong；错误密钥给出可读报错。
-3. 世界书：导入酒馆 JSON（条目数正确；无关键词的条目导入时提醒补关键词——本插件检索只认关键词，没有"永远在场"）；导入纯文本（整块作为一条条目，关键词可选）；检索测试在含关键词的聊天中命中、不含时不命中。
+3. 世界书：导入酒馆 JSON（条目数正确；原生常驻条目自动带上常驻标记，无关键词也恒带出）；既没关键词又没常驻的条目导入时提醒；导入纯文本（整块作为一条条目，关键词可选）；检索测试在含关键词的聊天中命中、不含时不命中，勾「常驻」的条目恒出现并标「（常驻）」。
 4. 剧情指导：有 ≥5 层对话的聊天中「开始分析」→ 返回 OOC+规划 JSON 并正常渲染；修改意见重写后内容变化；「转为隐身注入」后设置页「生效中的隐身注入」出现新条目。
 5. 注入生效验证：开启酒馆的提示词查看（或观察 token 数变化）确认幕后内容已进主提示词、聊天界面无显示；继续对话主 AI 行为体现幕后走向。
 6. 生命周期：切换聊天后 scope=chat 的注入被清理；层数过期的注入自动停用；设置页可提前撤下。
@@ -442,4 +425,6 @@ st-plot-planner/
 | 2026-08-23 | 「储存空间」改名「游戏玩法」并入剧情指导页最底部折叠区（抽屉五页签→四，tab-storage.js 改为可挂载的 renderStorageTools）；生效判定抽成 storageItemsInEffect（与主对话注入同一套），向导第 1 步新增游戏玩法勾选（默认勾当前生效条目，标「生效中」），勾选项作为「游戏玩法」小节随 runPlotGuidance 发送（「查看完整提示词」同步可见）；顺带修复条目导入路径缺 save 导入导致的 ReferenceError |
 | 2026-08-23 | 检查报告（runStoryReview）自动附带当前生效的游戏玩法条目（检查执行情况时对照）；游戏玩法折叠区改挂进底部折叠区容器与「事件库设置」「AI 建库」并列（原先独立挂载点跨 flex 边距不合并，间距是其他折叠区间距的两倍） |
 | 2026-08-23 | 路人反应校准去掉手填事件：引人注目的事一律由模型从最近对话认出，「补充说明」更名「指导意见」成为唯一输入框；生效中的反应卡注入自动附带进剧情规划与检查报告的提示词（activeReactionInjections + reactionSection，与主对话同一份逐层换段文本，规划/检查与正文同一口径） |
+| 2026-08-23 | 上下文收集去重：collectRecentChat + slice(scanDepth) + scanLorebooks 组合抽成 context.js 的 collectPlanningContext，planner（collectStats/buildGuidanceMessages/runStoryReview）、reactions、randomEvents 共 5 处统一口径；AI 打标批间容错（失败批次跳过继续、结束汇总失败行数，不勾覆盖时再点一次只补漏） |
+| 2026-08-23 | 世界书条目新增「常驻」（对齐酒馆原生 constant）：勾常驻不看关键词恒带出、排在命中前面、不占 maxEntries 名额但优先消耗 maxChars 预算；条目行加常驻勾选框、检索测试结果带「（常驻）」标记；酒馆 JSON 的 constant 字段导入时继承，导入提醒改为只点破「既无关键词也无常驻」的死条目 |
 | 2026-08-23 | 全量代码审查修复：事件库默认条目只种一次（seeded 标记，删空库不再复活）；反应卡扩散链楼层空档归入已开始的最近一段、早于首段用第一段（原先直落末段，首层就会注入收束文案）；「确认采用」后连第 2 步事件闸口状态一并清空（旧事件卡不再带进下一轮）；AI 打标每批落盘（中途失败已打标签不丢）；游戏玩法深度 0 不再被吞成 6（0=紧贴上下文末尾为合法值）；世界书 JSON 导入检测无关键词条目并提醒（常驻条目不再无声变死条目）；魔法棒菜单轮询设上限；文档勘误（纯文本导入早已整块一条、README 去掉不存在的"正则"检索） |

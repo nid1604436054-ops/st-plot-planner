@@ -40,7 +40,7 @@ export const worldbookTab = {
         </div>
         <div id="pp_wb_scan_wrap" class="pp-section" style="display:none">
             <b>检索测试</b>
-            <span class="pp-muted">输入一段测试剧情，看会命中哪些条目；留空则用最近 ${settings.retrieval.scanDepth} 层对话来测。命中规则：条目已启用，且任一关键词出现在这段文本里。</span>
+            <span class="pp-muted">输入一段测试剧情，看会命中哪些条目；留空则用最近 ${settings.retrieval.scanDepth} 层对话来测。命中规则：条目已启用，且（勾了常驻，或任一关键词出现在这段文本里）。常驻条目没有关键词也会出现在结果里。</span>
             <textarea id="pp_wb_scan_text" class="text_pole textarea_compact" rows="3" placeholder="例如：她推开皇宫侧门，撞见了龙骑士团的队长"></textarea>
             <div class="pp-btn-row">
                 <div id="pp_wb_scan_run" class="menu_button">测试命中</div>
@@ -58,10 +58,11 @@ export const worldbookTab = {
                 openBooks.add(book.id);
                 save();
                 toastr.success(`已导入「${book.name}」：${book.entries.length} 个条目`);
-                // 酒馆原生常驻条目通常不写关键词，而本插件检索只认关键词（无"永远在场"概念）——空关键词=永不命中，导入时点破
-                const keyless = book.entries.filter(en => !en.disabled && !(en.keys ?? []).length).length;
+                // 酒馆原生常驻条目不写关键词：现在导入时会带上常驻标记（恒带出），无需提醒；
+                // 仍要提醒的是既没关键词也没勾常驻的条目——它们永远不会被带进规划
+                const keyless = book.entries.filter(en => !en.disabled && !en.constant && !(en.keys ?? []).length).length;
                 if (keyless) {
-                    toastr.warning(`「${book.name}」有 ${keyless} 条没有关键词（多为酒馆里的常驻条目）：本插件检索只认关键词，这些条目永远不会被带进规划，请到条目旁补上关键词（如条目标题或剧情常提的词）`);
+                    toastr.warning(`「${book.name}」有 ${keyless} 条既没有关键词也不是常驻：这些条目永远不会被带进规划。请到条目旁补关键词（如条目标题或剧情常提的词），或勾选「常驻」`);
                 }
                 renderBooks(container);
             } catch (err) {
@@ -112,7 +113,7 @@ export const worldbookTab = {
             container.querySelector('#pp_wb_hits').innerHTML = hits.length
                 ? hits.map(h => `
                     <div class="pp-hit">
-                        <b>${escapeHtml(h.bookName)} / ${escapeHtml(h.comment)}</b>
+                        <b>${escapeHtml(h.bookName)} / ${escapeHtml(h.comment)}${h.constant ? '（常驻）' : ''}</b>
                         <div>${escapeHtml(clamp(h.content, 300))}</div>
                     </div>`).join('')
                 : '<div class="pp-muted">未命中任何条目</div>';
@@ -174,8 +175,9 @@ function renderBooks(container) {
                 <div class="pp-entry">
                     <div class="pp-entry-row">
                         <input type="checkbox" data-een="${b.id}:${e.uid}" ${e.disabled ? '' : 'checked'} title="启用/停用该条目" />
+                        <label class="pp-entry-const" title="常驻：不看关键词，每次检索恒带出（对齐酒馆原生的常驻条目），排在关键词命中前面"><input type="checkbox" data-econst="${b.id}:${e.uid}" ${e.constant ? 'checked' : ''} /> 常驻</label>
                         <input type="text" class="text_pole pp-entry-name" data-ename="${b.id}:${e.uid}" value="${escapeHtml(e.comment)}" placeholder="条目标题" title="条目标题，可直接修改" />
-                        <input type="text" class="text_pole pp-entry-keys" data-ekeys="${b.id}:${e.uid}" value="${escapeHtml((e.keys ?? []).join(','))}" placeholder="关键词，逗号分隔" title="检索关键词，逗号分隔；留空则不会命中" />
+                        <input type="text" class="text_pole pp-entry-keys" data-ekeys="${b.id}:${e.uid}" value="${escapeHtml((e.keys ?? []).join(','))}" placeholder="关键词，逗号分隔" title="检索关键词，逗号分隔；留空则只有勾「常驻」才会带出" />
                         <span class="menu_button fa-solid fa-pen" data-eedit="${b.id}:${e.uid}" title="编辑内容"></span>
                         <span class="menu_button fa-solid fa-trash" data-edel="${b.id}:${e.uid}" title="删除条目"></span>
                     </div>
@@ -217,6 +219,13 @@ function renderBooks(container) {
         entry.disabled = !el.checked;
         save();
         updateBookCount(list, bookId);
+    }));
+    list.querySelectorAll('[data-econst]').forEach(el => el.addEventListener('change', () => {
+        const [bookId, uid] = el.dataset.econst.split(':');
+        const entry = findEntry(bookId, uid);
+        if (!entry) return;
+        entry.constant = el.checked;
+        save();
     }));
     list.querySelectorAll('[data-ename]').forEach(el => el.addEventListener('change', () => {
         const [bookId, uid] = el.dataset.ename.split(':');

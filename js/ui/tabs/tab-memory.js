@@ -249,9 +249,9 @@ function renderTagging(container) {
                 onProgress: (a, b) => { status.textContent = `打标中…… ${a}/${b}`; },
             });
             status.textContent = r.total
-                ? `完成：${r.tagged}/${r.total} 行打上标签（下方「召回设置」与剧情指导里就能按这些标签筛选）`
+                ? `完成：${r.tagged}/${r.total} 行打上标签${r.failed ? `（${r.failed} 行所在批次失败被跳过，再点一次只补这些）` : ''}（下方「召回设置」与剧情指导里就能按这些标签筛选）`
                 : '没有需要打标的行（都有标签了？勾「覆盖已有标签」重打）';
-            toastr.success(`打标完成：${r.tagged} 行`);
+            toastr.success(`打标完成：${r.tagged} 行${r.failed ? `，${r.failed} 行失败跳过` : ''}`);
             renderAll(container);   // 刷新召回设置区的标签
         } catch (err) {
             status.textContent = '';

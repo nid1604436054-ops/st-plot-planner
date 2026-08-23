@@ -452,41 +452,48 @@ export async function autoTagByVocabulary({ vocab = [], sheetUids = [], overwrit
     const vocabText = entries.map(v => v.note ? `${v.name}：${v.note}` : v.name).join('\n');
     const BATCH = 40;
     let tagged = 0;
+    let failedRows = 0;   // 失败批次里没打上标签的行数（批间容错：跳过继续，最后汇总）
     for (let i = 0; i < rows.length; i += BATCH) {
         const batch = rows.slice(i, i + BATCH);
         const lines = batch.map(r =>
             `[${r.rid}] ` + r.cells.map((c, j) => `${r.cols[j] ?? j}:${c}`).join(' | ')).join('\n');
-        const raw = await chatCompletion({
-            temperature: 0.2,
-            maxTokens: 4000,
-            messages: [
-                { role: 'system', content: VOCAB_TAGGER_SYSTEM },
-                {
-                    role: 'user',
-                    content: [
-                        '## 标签词表（只能从中选取）',
-                        vocabText,
-                        '## 记忆条目',
-                        lines,
-                        '只输出 JSON。',
-                    ].join('\n\n'),
-                },
-            ],
-        });
-        const data = extractJson(raw);
-        const validNames = new Set(entries.map(v => v.name));
-        const validIds = new Set(batch.map(r => r.rid));
-        for (const item of data?.rows ?? []) {
-            const rid = String(item?.id ?? '');
-            const tags = [...new Set((item?.tags ?? []).map(t => String(t).trim()).filter(t => validNames.has(t)))].slice(0, 3);
-            if (!rid || !validIds.has(rid) || !tags.length) continue;
-            state.tags[rid] = tags;
-            tagged++;
+        try {
+            const raw = await chatCompletion({
+                temperature: 0.2,
+                maxTokens: 4000,
+                messages: [
+                    { role: 'system', content: VOCAB_TAGGER_SYSTEM },
+                    {
+                        role: 'user',
+                        content: [
+                            '## 标签词表（只能从中选取）',
+                            vocabText,
+                            '## 记忆条目',
+                            lines,
+                            '只输出 JSON。',
+                        ].join('\n\n'),
+                    },
+                ],
+            });
+            const data = extractJson(raw);
+            const validNames = new Set(entries.map(v => v.name));
+            const validIds = new Set(batch.map(r => r.rid));
+            for (const item of data?.rows ?? []) {
+                const rid = String(item?.id ?? '');
+                const tags = [...new Set((item?.tags ?? []).map(t => String(t).trim()).filter(t => validNames.has(t)))].slice(0, 3);
+                if (!rid || !validIds.has(rid) || !tags.length) continue;
+                state.tags[rid] = tags;
+                tagged++;
+            }
+        } catch (err) {
+            // 网络抖动/单批解析失败不中断整轮：这批跳过、后面的继续，结束后统一报告
+            failedRows += batch.length;
+            console.warn('[PlotPlanner] 打标批次失败，已跳过一批', err);
         }
         onProgress?.(Math.min(i + BATCH, rows.length), rows.length);
-        persistMemory();   // 每批落一次盘：中途某批失败时，前面批次已打的标签不丢
+        persistMemory();   // 每批落一次盘：中途失败的批次不影响前面已打的标签
     }
-    return { tagged, total: rows.length };
+    return { tagged, total: rows.length, failed: failedRows };
 }
 
 // ---------------------------------------------------------------------------

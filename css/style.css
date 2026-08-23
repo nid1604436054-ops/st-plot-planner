@@ -185,6 +185,14 @@
     min-width: 90px;
 }
 
+/* 条目行「常驻」勾选：不参与伸缩，跟在启用框后面 */
+.pp-entry-const {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    cursor: pointer;
+    opacity: 0.85;
+}
+
 .pp-entry-keys {
     flex: 1 1 200px;
     min-width: 120px;

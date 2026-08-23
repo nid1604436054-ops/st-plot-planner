@@ -1,8 +1,8 @@
 // M2 剧情指导：检查（OOC/剧情重复/文风重复/进度）+ 剧情规划（隐藏剧本）+ 检查报告
 // 与 M3 共用「上下文收集 + 世界书检索 + 独立 API」管线，全程不碰主对话连接
 import { chatCompletion, chatCompletionWithTools, searchToolReady } from "./api.js";
-import { collectRecentChat, formatChatLog, characterSummary } from "./context.js";
-import { scanLorebooks, buildLoreContext } from "./lorebook.js";
+import { collectPlanningContext, characterSummary } from "./context.js";
+import { buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
 import { activeReactionInjections } from "./injection.js";
@@ -96,8 +96,7 @@ async function guidanceCompletion(messages) {
 // memoryTags 语义与 buildGuidanceMessages 相同：null 默认召回 / [] 全量 / 数组按标签 / false 不附带
 // memorySheets：null = 全部（开了召回的表）；数组 = 只算勾选的表（空数组 = 一张都不带）
 export function collectStats({ memoryTags = null, memorySheets = null } = {}) {
-    const chatList = collectRecentChat(settings.retrieval.contextLayers);
-    const hits = scanLorebooks(formatChatLog(chatList.slice(-settings.retrieval.scanDepth)));
+    const { chatList, hits } = collectPlanningContext();
     const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets }).length;
     return { layers: chatList.length, hits: hits.length, memChars };
 }
@@ -144,11 +143,9 @@ function reactionSection(header) {
  */
 export function buildGuidanceMessages(options = {}) {
     const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets, memoryTags = null, memorySheets = null, storageItems = [] } = options;
-    const chatList = collectRecentChat(settings.retrieval.contextLayers);
+    const { chatList, hits } = collectPlanningContext();
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
-    const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
-    const hits = scanLorebooks(scanText);
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets });
 
     const summaries = (historySummaries ?? []).filter(Boolean);
@@ -199,11 +196,9 @@ export async function runPlotGuidance(options = {}) {
  * @param {Array}  [options.presets]  本次启用的预设（缺省取设置里启用的）
  */
 export async function runStoryReview({ planText = '', userNote = '', presets } = {}) {
-    const chatList = collectRecentChat(settings.retrieval.contextLayers);
+    const { chatList, hits } = collectPlanningContext();
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
-    const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
-    const hits = scanLorebooks(scanText);
     const memoryText = buildMemoryContext();
 
     const userContent = [

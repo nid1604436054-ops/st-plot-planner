@@ -4,8 +4,8 @@
 // 设计取向（吸收用户 NPC_Reaction 预设）：轻重有别（轻＝一根针，重＝一个局）、宁重不轻、
 // 危机可重但出口必须存在、密度受控（同维度连出两次暂停一轮、最近事件防重复）。
 import { chatCompletion } from "./api.js";
-import { collectRecentChat, formatChatLog, characterSummary, currentFloor } from "./context.js";
-import { scanLorebooks, buildLoreContext } from "./lorebook.js";
+import { collectRecentChat, collectPlanningContext, formatChatLog, characterSummary, currentFloor } from "./context.js";
+import { buildLoreContext } from "./lorebook.js";
 import { settings, save, newId } from "./settings.js";
 import { extractJson } from "./utils.js";
 
@@ -130,9 +130,7 @@ export function recentEventTitles(limit = 8) {
 
 // 三类生成调用共享的上下文小节（含最近事件防重复）
 function contextSections() {
-    const chatList = collectRecentChat(settings.retrieval.contextLayers);
-    const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
-    const hits = scanLorebooks(scanText);
+    const { chatList, hits } = collectPlanningContext();
     const recent = recentEventTitles();
     return [
         '## 角色设定摘要',
