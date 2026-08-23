@@ -23,6 +23,12 @@ export function formatChatLog(list) {
     return list.map(m => `${m.isUser ? '{{user}}' : m.name}: ${m.text}`).join('\n\n');
 }
 
+// 当前楼层（聊天消息数）：事件条目冷却与反应注入计层的基准
+export function currentFloor() {
+    const chat = getTavernContext().chat;
+    return Array.isArray(chat) ? chat.length : 0;
+}
+
 export function characterSummary(maxChars = 800) {
     const ctx = getTavernContext();
     const card = Array.isArray(ctx.characters) ? ctx.characters[ctx.characterId] : null;

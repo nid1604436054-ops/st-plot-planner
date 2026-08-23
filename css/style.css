@@ -627,3 +627,30 @@
     border-left: 3px solid var(--SmartThemeBorderColor, #666);
     word-break: break-word;
 }
+
+/* 随机事件页：AI 建库草稿行（勾选 + 轻重 + 文本），换行不断句 */
+.pp-lib-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin: 4px 0;
+}
+
+.pp-lib-row select {
+    width: auto;
+    flex: 0 0 auto;
+}
+
+.pp-lib-txt {
+    flex: 1 1 auto;
+    min-width: 0;
+    word-break: break-word;
+}
+
+/* 随机事件页：路人反应卡的扩散链分段 */
+.pp-rx-stage {
+    padding-left: 8px;
+    border-left: 3px solid var(--SmartThemeBorderColor, #666);
+    margin: 4px 0;
+    word-break: break-word;
+}

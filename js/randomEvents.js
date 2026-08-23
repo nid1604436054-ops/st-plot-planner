@@ -1,108 +1,188 @@
-// M3 随机事件：开放情境下的动态遭遇生成
-// 与剧情指导的差别：剧情指导面向固定场景做预编排；随机事件是「走在路上」式的意外遭遇（开发方案 §M3）
+// M3 随机事件（三层结构）：维度层（骨架/方向池）→ 条目层（事件库）→ 掷骰管线
+// 管线：条目过滤（启用/维度/触发关键词/冷却）→ 概率过筛 → 库内加权抽一；
+// 其余次数按维度加权走「自由生成」（空库自动全走自由）。
+// 设计取向（吸收用户 NPC_Reaction 预设）：轻重有别（轻＝一根针，重＝一个局）、宁重不轻、
+// 危机可重但出口必须存在、密度受控（同维度连出两次暂停一轮、最近事件防重复）。
 import { chatCompletion } from "./api.js";
-import { collectRecentChat, formatChatLog, characterSummary } from "./context.js";
+import { collectRecentChat, formatChatLog, characterSummary, currentFloor } from "./context.js";
 import { scanLorebooks, buildLoreContext } from "./lorebook.js";
-import { settings, newId } from "./settings.js";
+import { settings, save, newId } from "./settings.js";
 import { extractJson } from "./utils.js";
 
 const EVENT_SYSTEM_PROMPT = '你是文字角色扮演的随机遭遇生成器。基于当前情境与给定的事件方向，'
     + '生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
+    + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'
     + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
     + '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
     + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ] }\n'
     + 'options 给 3 个左右。';
 
+// 轻重是执行口径：轻的过轻会执行敷衍，所以默认宁重不轻；但重的必须留出口
+const SEVERITY_HINT = {
+    light: '本次事件走「轻」：一根针，点到即止，不自带走向，不喧宾夺主。',
+    heavy: '本次事件走「重」：一个局，不处理会发酵；但出口必须存在，收束权在 user。',
+};
+const BOUNDARY_HINT = '底线：不得导致感情实质破裂、主要角色受异性实质侵犯、user 无法逆转的损失；'
+    + '可接受的余波：虚惊一场、轻微受伤、舆情压力、短期经济困难、身份暴露。';
+
 export function defaultEventRules() {
     return [
-        { id: newId('ev-'), name: '偶遇旧识', enabled: true, probability: 0.3, weight: 1, cooldownLayers: 30, promptHint: '一个与主角有旧怨或旧情的次要角色意外出现，带来新的张力' },
-        { id: newId('ev-'), name: '环境突变', enabled: true, probability: 0.2, weight: 1, cooldownLayers: 20, promptHint: '天气、人流或周围环境发生显著变化，迫使剧情转向' },
-        { id: newId('ev-'), name: '意外阻碍', enabled: true, probability: 0.2, weight: 1, cooldownLayers: 20, promptHint: '一件小意外打断当前行动（丢失物品、临时状况、陌生人搭话）' },
-        { id: newId('ev-'), name: '有利线索', enabled: true, probability: 0.15, weight: 1, cooldownLayers: 40, promptHint: '主角意外获得一条与当前目标相关的有用线索或机会' },
+        { id: newId('ev-'), name: '偶遇旧识', enabled: true, probability: 0.3, weight: 1, cooldownLayers: 30, dimension: 'dim-rel', severity: 'light', keywords: '', promptHint: '一个与主角有旧怨或旧情的次要角色意外出现，带来新的张力' },
+        { id: newId('ev-'), name: '环境突变', enabled: true, probability: 0.2, weight: 1, cooldownLayers: 20, dimension: 'dim-env', severity: 'light', keywords: '', promptHint: '天气、人流或周围环境发生显著变化，迫使剧情转向' },
+        { id: newId('ev-'), name: '意外阻碍', enabled: true, probability: 0.2, weight: 1, cooldownLayers: 20, dimension: 'dim-friction', severity: 'light', keywords: '', promptHint: '一件小意外打断当前行动（丢失物品、临时状况、陌生人搭话）' },
+        { id: newId('ev-'), name: '有利线索', enabled: true, probability: 0.15, weight: 1, cooldownLayers: 40, dimension: 'dim-favor', severity: 'light', keywords: '', promptHint: '主角意外获得一条与当前目标相关的有用线索或机会' },
+        { id: newId('ev-'), name: '意外之喜', enabled: true, probability: 0.15, weight: 1, cooldownLayers: 30, dimension: 'dim-favor', severity: 'light', keywords: '', promptHint: '中奖、多送、捡到东西级别的小惊喜，被世界温柔对待一下，点到即止' },
+        { id: newId('ev-'), name: '临时邀约', enabled: true, probability: 0.15, weight: 1, cooldownLayers: 40, dimension: 'dim-chance', severity: 'heavy', keywords: '', promptHint: '招人、比赛、演出、递名片式的新机会找上门，给 user 一个可拉可不拉的新方向' },
+        { id: newId('ev-'), name: '他人求助', enabled: true, probability: 0.12, weight: 1, cooldownLayers: 40, dimension: 'dim-env', severity: 'heavy', keywords: '', promptHint: '路人向主角求助或主角撞进旁人的麻烦，事件提供方向不提供剧情' },
+        { id: newId('ev-'), name: '曝光被识别', enabled: true, probability: 0.1, weight: 1, cooldownLayers: 50, dimension: 'dim-friction', severity: 'heavy', keywords: '', promptHint: '主角的某个身份或行为被认出、开始扩散，不处理会发酵，但总有办法收场' },
     ];
 }
 
-/**
- * 掷骰：先按 probability 过筛，再在命中池内按 weight 加权随机取一。
- * 冷却（cooldownLayers）在 Phase 3 接消息钩子后启用，当前为手动掷骰。
- * @returns {EventRule|null} 未命中返回 null
- */
-export function rollEventRule(rules, rng = Math.random) {
-    const pool = (rules ?? []).filter(r => r.enabled && rng() < r.probability);
-    if (!pool.length) return null;
-    const total = pool.reduce((s, r) => s + Math.max(Number(r.weight) || 0, 0), 0);
-    if (total <= 0) return pool[0];
+export function dimNameOf(id) {
+    return (settings.eventDimensions ?? []).find(d => d.id === id)?.name ?? '未分组';
+}
+
+function keywordList(rule) {
+    return String(rule.keywords ?? '').split(/[,，、;；]/).map(s => s.trim()).filter(Boolean);
+}
+
+function ruleOnCooldown(rule, floor) {
+    const cd = Math.max(Number(rule.cooldownLayers) || 0, 0);
+    return cd > 0 && rule.lastFloor != null && floor - rule.lastFloor < cd;
+}
+
+function weightedPick(list, rng) {
+    const total = list.reduce((s, x) => s + Math.max(Number(x.weight) || 0, 0), 0);
+    if (total <= 0) return list[Math.floor(rng() * list.length)];
     let pick = rng() * total;
-    for (const r of pool) {
-        pick -= Math.max(Number(r.weight) || 0, 0);
-        if (pick <= 0) return r;
+    for (const x of list) {
+        pick -= Math.max(Number(x.weight) || 0, 0);
+        if (pick <= 0) return x;
     }
-    return pool[pool.length - 1];
+    return list[list.length - 1];
 }
 
 /**
- * 生成一次随机事件。
- * @returns {Promise<{title:string, description:string, options:Array<{label:string, hint:string}>}>}
+ * 掷骰管线（纯掷骰，无副作用；生成成功后由调用方 commitRolledEvent 落账）。
+ * @returns {{mode:'library', rule:object, dimension:object}|{mode:'free', dimension:object}|{mode:'none', reason:string}}
  */
-export async function generateRandomEvent(rule) {
-    const chatList = collectRecentChat(settings.retrieval.contextLayers);
-    const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
-    const hits = scanLorebooks(scanText);
+export function rollEventPipeline(rng = Math.random) {
+    const dims = (settings.eventDimensions ?? []).filter(d => d.enabled !== false);
+    if (!dims.length) return { mode: 'none', reason: '没有启用的维度' };
 
-    const raw = await chatCompletion({
-        messages: [
-            { role: 'system', content: EVENT_SYSTEM_PROMPT },
-            {
-                role: 'user',
-                content: [
-                    '## 角色设定摘要',
-                    characterSummary() || '（无角色卡）',
-                    '## 最近对话',
-                    formatChatLog(chatList),
-                    '## 世界书命中',
-                    buildLoreContext(hits),
-                    '## 事件方向',
-                    `${rule.name}：${rule.promptHint}`,
-                ].join('\n\n'),
-            },
-        ],
+    // 密度规则：同一维度连出两次后，这一轮暂停该维度（没有别的维度时忽略）
+    const recent = settings.events?.recent ?? [];
+    const pausedId = recent.length >= 2 && recent[0]?.dimension && recent[0].dimension === recent[1]?.dimension
+        ? recent[0].dimension : null;
+    const dimPool = pausedId ? dims.filter(d => d.id !== pausedId) : dims;
+    const openDims = dimPool.length ? dimPool : dims;
+
+    const floor = currentFloor();
+    const scanText = formatChatLog(collectRecentChat(settings.retrieval.scanDepth)).toLowerCase();
+    const eligible = (settings.eventRules ?? []).filter(r => {
+        if (r.enabled === false) return false;
+        if (!openDims.some(d => d.id === r.dimension)) return false;
+        if (ruleOnCooldown(r, floor)) return false;
+        const kws = keywordList(r);
+        return !kws.length || kws.some(k => scanText.includes(k.toLowerCase()));
     });
-    return extractJson(raw);
+
+    const ratio = Math.min(Math.max(Number(settings.events?.libraryRatio ?? 60) || 0, 0), 100) / 100;
+    if (eligible.length && rng() < ratio) {
+        const pool = eligible.filter(r => rng() < Math.max(Number(r.probability) || 0, 0));
+        if (!pool.length) return { mode: 'none', reason: '条目概率未中' };
+        const rule = weightedPick(pool, rng);
+        return { mode: 'library', rule, dimension: dims.find(d => d.id === rule.dimension) ?? null };
+    }
+    return { mode: 'free', dimension: weightedPick(openDims, rng) };
 }
 
 /**
- * 大模型自由随机：不经事件库掷骰，直接让模型即兴出一次意外遭遇（剧情向导第 2 步用）。
- * @param {object} [options]
- * @param {boolean} [options.useLibrary]   true 时把事件库规则列给模型参考（可从中选方向也可另起）
- * @param {boolean} [options.wantPreview]  true 时附带一版预览剧情走向（仅供参考，正式规划仍走分析调用）
- * @returns {Promise<{title:string, description:string, options:Array<{label:string, hint:string}>, preview?:string}>}
+ * 掷骰结果落账：条目记冷却楼层 + 最近事件列表（供防重复与密度规则）。
+ * 生成调用成功后才调用。
  */
-export async function generateFreeRandomEvent({ useLibrary = false, wantPreview = false } = {}) {
+export function commitRolledEvent({ rule = null, dimension = null, title = '', source = 'library' } = {}) {
+    if (rule) rule.lastFloor = currentFloor();
+    (settings.events ??= {}).recent ??= [];
+    settings.events.recent.unshift({
+        title: String(title || rule?.name || '').slice(0, 40),
+        dimension: dimension?.id ?? rule?.dimension ?? '',
+        source, at: Date.now(),
+    });
+    settings.events.recent = settings.events.recent.slice(0, 12);
+    save();
+}
+
+export function recentEventTitles(limit = 8) {
+    return (settings.events?.recent ?? []).slice(0, limit).map(r => r.title).filter(Boolean);
+}
+
+// 三类生成调用共享的上下文小节（含最近事件防重复）
+function contextSections() {
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
     const hits = scanLorebooks(scanText);
-
-    const schema = '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
-        + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ]'
-        + (wantPreview ? ', "preview": "若采纳该事件，后续剧情的一版预览走向（120 字内，仅供参考）"' : '')
-        + ' }';
-
-    const system = '你是文字角色扮演的随机遭遇生成器。基于当前情境即兴生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
-        + (useLibrary ? '用户提供了事件库规则，可从中选一个方向展开，也可另起更契合当前情境的事件。' : '')
-        + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
-        + schema + '\noptions 给 3 个左右。';
-
-    const sections = [
+    const recent = recentEventTitles();
+    return [
         '## 角色设定摘要',
         characterSummary() || '（无角色卡）',
         '## 最近对话',
         formatChatLog(chatList),
         '## 世界书命中',
         buildLoreContext(hits),
+        '## 最近已出过的事件（不要重复相近情节）',
+        recent.length ? recent.map(t => `- ${t}`).join('\n') : '（暂无记录）',
+        '## 底线',
+        BOUNDARY_HINT,
     ];
+}
+
+/**
+ * 按事件库条目生成一次随机事件。
+ * @returns {Promise<{title:string, description:string, options:Array<{label:string, hint:string}>}>}
+ */
+export async function generateRandomEvent(rule) {
+    const sections = [...contextSections(), '## 事件方向',
+        `维度「${dimNameOf(rule.dimension)}」｜条目「${rule.name}」：${rule.promptHint ?? ''}`,
+        SEVERITY_HINT[rule.severity] ?? SEVERITY_HINT.light].join('\n\n');
+
+    const raw = await chatCompletion({
+        messages: [
+            { role: 'system', content: EVENT_SYSTEM_PROMPT },
+            { role: 'user', content: sections },
+        ],
+    });
+    return extractJson(raw);
+}
+
+/**
+ * 大模型自由随机：不经事件库掷骰，让模型即兴出一次意外遭遇（剧情向导第 2 步 / 掷骰管线的自由分支）。
+ * @param {object} [options]
+ * @param {object} [options.dimension]      维度对象 {name, prompt}：按维度气质即兴
+ * @param {boolean} [options.useLibrary]    true 时把事件库条目列给模型参考（可从中选方向也可另起）
+ * @param {boolean} [options.wantPreview]   true 时附带一版预览剧情走向（仅供参考，正式规划仍走分析调用）
+ */
+export async function generateFreeRandomEvent({ dimension = null, useLibrary = false, wantPreview = false } = {}) {
+    const schema = '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
+        + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ]'
+        + (wantPreview ? ', "preview": "若采纳该事件，后续剧情的一版预览走向（120 字内，仅供参考）"' : '')
+        + ' }';
+
+    const system = '你是文字角色扮演的随机遭遇生成器。基于当前情境即兴生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
+        + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'
+        + '轻重自定、宁重不轻（过轻会执行敷衍），但危机必须留出口。'
+        + (dimension ? '用户指定了维度，按该维度的气质展开。' : '')
+        + (useLibrary ? '用户提供了事件库条目，可从中选一个方向展开，也可另起更契合当前情境的事件。' : '')
+        + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
+        + schema + '\noptions 给 3 个左右。';
+
+    const sections = contextSections();
+    if (dimension) {
+        sections.push('## 事件方向（维度自由生成）', `维度「${dimension.name}」：${dimension.prompt ?? ''}\n按这个维度的气质即兴出一次事件。`);
+    }
     if (useLibrary) {
-        const rules = (settings.eventRules ?? []).filter(r => r.enabled);
-        sections.push('## 事件库规则（参考方向）', rules.length
+        const rules = (settings.eventRules ?? []).filter(r => r.enabled !== false);
+        sections.push('## 事件库条目（参考方向）', rules.length
             ? rules.map(r => `- ${r.name}：${r.promptHint ?? ''}`).join('\n')
             : '（事件库为空，请即兴生成）');
     }
@@ -114,4 +194,40 @@ export async function generateFreeRandomEvent({ useLibrary = false, wantPreview 
         ],
     });
     return extractJson(raw);
+}
+
+/**
+ * AI 建库：按维度批量设计事件条目（名称/提示/轻重），供界面勾选后导入事件库。
+ * @returns {Promise<Array<{name:string, promptHint:string, severity:'light'|'heavy'}>>}
+ */
+export async function generateEventEntries({ dimension, count = 5, note = '' } = {}) {
+    const n = Math.min(Math.max(Number(count) || 5, 1), 10);
+    const system = '你是文字角色扮演随机事件库的设计师，为给定「维度」批量设计事件条目。'
+        + '要求：贴维度气质；轻重搭配、宁重不轻（重＝一个局，不处理会发酵；轻＝一根针，不自带走向）；'
+        + 'name 是 2-6 字的事件名；promptHint 一句话写清触发情境与张力方向（30-60 字）；不与已有条目重复或近似。'
+        + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
+        + '{ "entries": [ { "name": "…", "promptHint": "…", "severity": "light|heavy" } ] }';
+    const existing = (settings.eventRules ?? []).map(r => r.name).join('、') || '（空）';
+    const user = [
+        `## 维度\n${dimension.name}：${dimension.prompt ?? ''}`,
+        `## 生成数量\n${n} 条`,
+        note.trim() ? `## 补充说明\n${note.trim()}` : '',
+        `## 已有条目（避免重复或近似）\n${existing}`,
+    ].filter(Boolean).join('\n\n');
+
+    const raw = await chatCompletion({
+        messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+        ],
+    });
+    const data = extractJson(raw);
+    const list = Array.isArray(data?.entries) ? data.entries : (Array.isArray(data) ? data : []);
+    return list
+        .filter(e => e && String(e?.name ?? '').trim())
+        .map(e => ({
+            name: String(e.name).trim().slice(0, 20),
+            promptHint: String(e.promptHint ?? '').trim().slice(0, 120),
+            severity: e.severity === 'heavy' ? 'heavy' : 'light',
+        }));
 }

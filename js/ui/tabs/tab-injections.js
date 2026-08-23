@@ -26,6 +26,19 @@ export const injectionsTab = {
                     </select>
                 </div>
             </div>
+            <div class="pp-grid2">
+                <div>
+                    <label class="pp-label">有效期</label>
+                    <select id="pp_in_expire" class="text_pole textarea_compact">
+                        <option value="never">永久</option>
+                        <option value="layers">N 层后自动撤下</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="pp-label">层数（有效期选层数时生效）</label>
+                    <input id="pp_in_layers" class="text_pole textarea_compact" type="number" min="1" value="20" />
+                </div>
+            </div>
             <div class="pp-btn-row">
                 <div id="pp_in_add" class="menu_button">保存并注入</div>
             </div>
@@ -52,6 +65,7 @@ export const injectionsTab = {
                 toastr.warning('注入内容为空');
                 return;
             }
+            const expireType = container.querySelector('#pp_in_expire').value;
             addInjection({
                 id: newId('inj-'),
                 label: container.querySelector('#pp_in_label').value.trim() || `手动注入 ${new Date().toLocaleTimeString()}`,
@@ -63,7 +77,9 @@ export const injectionsTab = {
                 enabled: true,
                 source: 'manual',
                 createdAt: Date.now(),
-                expires: { type: 'never' },
+                expires: expireType === 'layers'
+                    ? { type: 'layers', layers: Math.max(1, Number(container.querySelector('#pp_in_layers').value) || 20) }
+                    : { type: 'never' },
             });
             toastr.success('已注入（明盘）');
             renderList(container);
@@ -109,6 +125,12 @@ export const injectionsTab = {
     },
 };
 
+function sourceName(item) {
+    if (item.source === 'reaction') return `路人反应（显著性 ${item.reaction?.salience ?? '?'}/5，逐层衰减）`;
+    const names = { manual: '手动', event: '随机事件', planner: '剧情规划', story: '剧情绑定' };
+    return names[item.source] ?? item.source ?? '手动';
+}
+
 function renderList(container) {
     const list = container.querySelector('#pp_in_list');
     if (!settings.injections.length) {
@@ -123,7 +145,7 @@ function renderList(container) {
                     ${escapeHtml(i.label)}
                 </span>
                 <span class="pp-muted">
-                    深度 ${i.depth ?? 4} · ${i.scope === 'global' ? '全局' : '本聊天'} · 来源 ${i.source ?? 'manual'}
+                    深度 ${i.depth ?? 4} · ${i.scope === 'global' ? '全局' : '本聊天'} · 来源 ${sourceName(i)}
                     ${i.expires?.type === 'layers' ? ` · ${i.age ?? 0}/${i.expires.layers} 层` : ''}
                     ${i.mode === 'sealed' ? ` · ${fingerprint(i.content)}` : ''}
                 </span>

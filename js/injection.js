@@ -3,6 +3,7 @@
 import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from "/script.js";
 import { getTavernContext } from "./context.js";
 import { settings, save } from "./settings.js";
+import { composeReactionText } from "./reactions.js";
 
 const POSITION_IN_PROMPT = extension_prompt_types?.IN_PROMPT ?? 0;
 const ROLE_SYSTEM = extension_prompt_roles?.SYSTEM ?? 0;
@@ -65,17 +66,29 @@ export function replayScopedInjections() {
     }
 }
 
-// 每收到一条消息，推进「按层数过期」的计数（开发方案 §M4 生命周期）
+// 每收到一条消息，推进「按层数过期」的计数（开发方案 §M4 生命周期）；
+// 带反应卡的注入（source=reaction）同时按新楼层重写正文（扩散链逐层换段、临近到期提示收束）。
+// 绑定其他聊天的 scope=chat 注入不跟着别的聊天计数。
 export function tickInjectionExpiries() {
+    const chatId = getTavernContext().chatId;
     let changed = false;
     for (const item of settings.injections) {
-        if (item.enabled && item.expires?.type === 'layers') {
-            item.age = (item.age ?? 0) + 1;
-            if (item.age >= item.expires.layers) {
-                item.enabled = false;
-                revokeInjection(item.id);
-                changed = true;
+        if (!item.enabled) continue;
+        if (item.scope === 'chat' && item.chatId !== undefined && item.chatId !== chatId) continue;
+        if (item.expires?.type !== 'layers') continue;
+        item.age = (item.age ?? 0) + 1;
+        if (item.age >= item.expires.layers) {
+            item.enabled = false;
+            revokeInjection(item.id);
+            if (item.source === 'reaction') {
+                toastr.info(`路人反应注入「${item.label}」已到期自动撤下`);
             }
+            changed = true;
+        } else if (item.reaction && !item.reaction.edited) {
+            // 用户没手改过正文才自动换段；手改过的只按层数过期
+            item.content = composeReactionText(item.reaction, item.age);
+            applyInjection(item);
+            changed = true;
         }
     }
     if (changed) save();
