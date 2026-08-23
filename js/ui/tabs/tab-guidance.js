@@ -90,7 +90,6 @@ function renderStoryBar(container) {
         <div class="pp-item">
             <div class="pp-item-main">
                 <span class="pp-item-title">当前没有进行中的剧情</span>
-                <span class="pp-muted">走一遍分步规划，确认采用后存在这里（跟聊天文件走，刷新不丢）</span>
             </div>
             <div class="pp-item-ops"><span id="pp_gd_start" class="menu_button"><i class="fa-solid fa-plus"></i> 开始规划</span></div>
         </div>
@@ -132,7 +131,7 @@ function historyHtml(s) {
     const archived = s.history.filter(h => h.id !== s.activeId).length;
     const head = `
     <div class="pp-item" id="pp_gd_hist_head" title="每次确认采用的规划自动归档，仅保留最近 20 条">
-        <div class="pp-item-main"><b>历史剧情</b> <span class="pp-muted">${archived ? `另有 ${archived} 条归档` : '暂无归档'}</span></div>
+        <div class="pp-item-main"><b>历史剧情</b>${archived ? ` <span class="pp-muted">另有 ${archived} 条归档</span>` : ''}</div>
         <div class="pp-item-ops">
             ${s.history.length ? `<span class="menu_button" id="pp_gd_hist_toggle">${showHistory ? '收起' : '展开'} <i class="fa-solid fa-chevron-${showHistory ? 'down' : 'right'}"></i></span>` : ''}
             ${archived ? `<span class="menu_button" id="pp_gd_hist_clear" title="清空归档（进行中那条保留）">清空</span>` : ''}
@@ -267,10 +266,7 @@ function renderMain(container) {
         return;
     }
 
-    main.innerHTML = `
-    <div class="pp-section">
-        <div class="pp-muted">分步规划：① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签） + 游戏玩法勾选 + 预设勾选 + 剧情构思）→ ② 随机事件闸口（可跳过）→ ③ 模型分析（检查 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）。确认采用的规划存为「进行中剧情」并自动注入，可随时「检查当前剧情」出执行报告。</div>
-    </div>`;
+    main.innerHTML = '';
 }
 
 function startCollect(container) {

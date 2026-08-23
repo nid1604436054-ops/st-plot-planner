@@ -27,8 +27,7 @@ export function renderEventsTools(container) {
     container.innerHTML = `
     <div class="pp-section">
         <b>路人反应校准</b>
-        <div class="pp-muted">模型处理路人反应常走两个极端：每层都全场哗哗地重复，或一笔带过后世界装失忆。这里让模型从最近对话里认出刚发生的引人注目的事，出一张反应卡：即时反应怎么写、余波怎么随楼层扩散、底线在哪、几层收束。确认后作为隐身注入生效，正文按楼层自动换段，到期自动撤下；生效期间，上面分步向导的规划与检查报告会自动带上同一份口径。</div>
-        <label class="pp-label">指导意见（可选：期望烈度、扩散方向、要避开什么；引人注目的事由模型从最近对话里认出）</label>
+        <label class="pp-label">指导意见</label>
         <textarea id="pp_rx_note" class="text_pole textarea_compact" rows="2" placeholder="例：别闹大，控制在背后议论和转发的程度"></textarea>
         <div class="pp-btn-row"><span id="pp_rx_gen" class="menu_button">生成反应卡</span></div>
         <div id="pp_rx_card"></div>
@@ -77,19 +76,15 @@ function renderSettings(container) {
             ${branchRow('free', '维度随机', '掷骰随机抽一个维度，让模型按它的气质即兴')}
             ${branchRow('ai', 'AI 自主', '掷骰把维度清单交给模型，由它挑最贴合当前剧情的一个')}
         </div>
-        <div class="pp-muted">每次掷骰先在勾选的板块里按旁边填的权重抽一个，再走该板块；没勾选或没货（如条目全在冷却）的板块自动退出本轮。</div>
         ${fold('entries', `事件条目（${settings.eventRules.length} 条）`, `
-            <div class="pp-muted">轻重口径：轻＝一根针，不自带走向；重＝一个局，不处理会发酵。冷却按掷中时的楼层起算；触发关键词留空 = 不限，填了则最近对话里要出现才算候选。</div>
             <div id="pp_ev_rules"></div>
             <div class="pp-btn-row"><span id="pp_ev_rule_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建条目</span></div>`)}
         ${fold('dims', `事件维度（${(settings.eventDimensions ?? []).length} 个）`, `
-            <div class="pp-muted">维度是题材分类：维度随机与 AI 自主都从它出方向，库内条目按它分组，改描述就是改即兴事件的口味。删除维度不会删条目（条目会变成「未分组」，可再挂回别的维度）。</div>
             <div id="pp_ev_dims"></div>
             <div class="pp-btn-row"><span id="pp_ev_dim_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建维度</span></div>`)}
     </details>
     <details class="pp-fold pp-fold-root" data-fold="ailib" ${folds.ailib ? 'open' : ''}>
         <summary><i class="fa-solid fa-robot"></i> AI 建库（出条目草稿，勾选后导入事件库）</summary>
-        <div class="pp-muted">选一个维度，让模型按维度气质批量出条目草稿，勾选后并入事件库（概率/权重/冷却用默认值，导入后可再调）。只是填库工具，不参与掷骰。</div>
         <div class="pp-grid2">
             <div>
                 <label class="pp-label">维度</label>

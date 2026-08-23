@@ -406,7 +406,7 @@ function renderSheets(container) {
     const state = memoryState();
 
     if (!state.mirror.sheets.length) {
-        list.innerHTML = '<div class="pp-muted">镜像为空。确认记忆表格插件里有带内容的表后，点上方「同步记忆表格」。空模板表不会进镜像。</div>';
+        list.innerHTML = '';
         return;
     }
 
@@ -677,7 +677,7 @@ function renderSource(container) {
     </div>`;
 
     if (!sheets.length) {
-        el.innerHTML = head + '<div class="pp-muted">原表库为空（当前聊天还没读到记忆表格数据）</div>';
+        el.innerHTML = head;
         el.querySelector('#pp_mem_libtoggle').addEventListener('click', () => {
             libOpen = !libOpen;
             renderSource(container);

@@ -18,7 +18,6 @@ export function renderStorageTools(container) {
     if (stFold) fold.open = true;
     fold.innerHTML = `
         <summary><i class="fa-solid fa-gamepad"></i> 游戏玩法（条目库 · 按触发注入主对话）</summary>
-        <div class="pp-muted">游戏规则、地图、跑团数值等一次性内容的条目库：常驻条目恒注入，带触发词的条目在最近对话提到时自动注入主对话（模型可见、聊天界面不显示），不必专门写成世界书。生效中的条目在分步向导第 1 步默认勾选，随规划分析一起发给模型，规划也会按这些规则设计。</div>
         <div class="pp-grid2">
             <div>
                 <label class="pp-label">名称</label>

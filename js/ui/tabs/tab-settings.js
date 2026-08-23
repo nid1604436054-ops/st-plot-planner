@@ -48,7 +48,6 @@ export const settingsTab = {
         container.innerHTML = `
         <div class="pp-section">
             <b>大模型连接</b>
-            <span class="pp-muted">独立于酒馆主对话 API，只用于本插件的规划请求。OpenAI 兼容接口，需服务商允许浏览器跨域（CORS）。</span>
             <label class="pp-label">API 地址（含 /v1）</label>
             <input id="pp_set_base" class="text_pole textarea_compact" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" />
             <label class="pp-label">API 密钥</label>
@@ -67,7 +66,6 @@ export const settingsTab = {
         </div>
         <div class="pp-section">
             <b>联网搜索（Tavily）</b>
-            <span class="pp-muted">独立于大模型通道的搜索 API：密钥只发往 Tavily，不经过规划通道。配置后，剧情指导的「分析」与「检查当前剧情」会把 web_search 工具交给模型——涉及现实世界的时效信息或拿不准的真实细节时，模型自己决定检索并把结果用于规划。端点不支持工具调用时会自动退回普通请求，不影响原功能。</span>
             <label class="pp-label">搜索 API 密钥（tvly- 开头，tavily.com 注册）</label>
             <input id="pp_set_skey" class="text_pole textarea_compact" type="password" placeholder="tvly-..." autocomplete="off" />
             <div class="pp-grid2">
@@ -89,7 +87,6 @@ export const settingsTab = {
         </div>
         <div class="pp-section">
             <b>高级设置（保持默认即可）</b>
-            <span class="pp-muted">数值项填 0 = 不限制（全量 / 不截断），温度除外（温度 0 本身是有效值）。</span>
             <div class="pp-grid2">
                 <div>
                     <label class="pp-label" title="越低输出越稳定，越高越发散">温度</label>
@@ -124,7 +121,6 @@ export const settingsTab = {
         <div class="pp-section">
             <details class="pp-fold" id="pp_set_injfold">
                 <summary><i class="fa-solid fa-eye-slash"></i> 生效中的隐身注入（查看 / 提前撤下）</summary>
-                <span class="pp-muted">剧情规划、随机事件、路人反应确认后都以隐身注入生效：模型能看到，聊天界面不显示。带层数的到期自动撤下；剧情注入随「结束剧情」撤下。这里统一查看与提前处理。</span>
                 <div id="pp_set_injlist"></div>
             </details>
         </div>`;
