@@ -40,7 +40,10 @@ function pickContent(message, { finishReason = '', completionTokens = null } = {
     const raw = JSON.stringify(message) ?? '';
     const evidence = `finish_reason=${finishReason || '（无）'}${completionTokens != null ? `，completion_tokens=${completionTokens}` : ''}，消息原文（前 150 字）：${raw.slice(0, 150)}`;
     if (finishReason === 'length') {
-        throw new ApiError(`模型返回了空内容（${evidence}）。输出长度上限用完且一字未落到正文：推理模型的思考也计入「单次上限 tokens」，继续调大或换非推理模型`);
+        const offNote = settings.api.thinkingOff
+            ? '。「关闭思考」已勾上仍如此：这个端点/中转多半没真正执行关闭参数（参数收下了、思考照做，或把思考扣下不回传但照样计费）'
+            : '';
+        throw new ApiError(`模型返回了空内容（${evidence}）。输出长度上限用完且正文一字未落：推理模型的思考计入「单次上限 tokens」、计费口径的「输出 tokens」通常也包含思考——若上面消息原文里连思考字段都没有，就是端点把已生成的内容扣下不回传了；继续调大上限或换非推理模型${offNote}`);
     }
     if (finishReason === 'content_filter' || finishReason === 'sensitive') {
         throw new ApiError(`模型返回了空内容（${evidence}）。被服务商内容安全过滤拦下（finish_reason 已标明），换模型/服务商或精简对话后重试`);
@@ -52,13 +55,14 @@ function pickContent(message, { finishReason = '', completionTokens = null } = {
  * 发起一次对话补全。
  * @param {object} options
  * @param {Array<{role:string,content:string}>} options.messages
- * @param {number} [options.temperature]  缺省用设置里的值
+ * @param {number} [options.temperature] 缺省用设置里的值
  * @param {number} [options.maxTokens]    缺省用设置里的值
  * @param {AbortSignal} [options.signal]
  * @param {(fullText:string)=>void} [options.onDelta]  提供时走 SSE 流式，逐步回调累计文本
+ * @param {(usage:object)=>void} [options.onUsage]     非流式时回传服务商实报的 usage（对账用，非估算）
  * @returns {Promise<string>} 模型输出的文本
  */
-export async function chatCompletion({ messages, temperature, maxTokens, signal, onDelta } = {}) {
+export async function chatCompletion({ messages, temperature, maxTokens, signal, onDelta, onUsage } = {}) {
     requireConfig();
     const { baseUrl, apiKey, model } = settings.api;
     const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
@@ -103,6 +107,7 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
         const data = await res.json();
         const choice = data?.choices?.[0];
         if (!choice?.message) throw new ApiError('API 返回结构异常（缺少 choices[0].message）');
+        if (typeof onUsage === 'function' && data?.usage) onUsage(data.usage);
         return pickContent(choice.message, { finishReason: choice.finish_reason, completionTokens: data?.usage?.completion_tokens });
     }
 

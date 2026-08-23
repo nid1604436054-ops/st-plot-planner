@@ -80,25 +80,35 @@ function withPresets(base, custom) {
     return custom ? `${base}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n${custom}` : base;
 }
 
+// 真实账单提示（数字取服务商 usage 实报，非估算）：分析与检查调用结束就亮出来，
+// 方便和「查看完整提示词」的材料字数对账——中文实际约 1.4~1.6 字/token，比预览粗估省
+function billToast(usage, searchLogs = []) {
+    const parts = [];
+    if (usage?.requests > 1) parts.push(`联网搜索往返 ${usage.requests} 次请求（每次重发全部材料，输入按次数累加）`);
+    if (usage?.promptTokens) parts.push(`输入 ${usage.promptTokens.toLocaleString()} · 输出 ${usage.completionTokens.toLocaleString()} tokens（服务商实报）`);
+    if (searchLogs.length) parts.push(`模型自主联网检索了：${searchLogs.join('；')}`);
+    if (parts.length) toastr.info(parts.join('；'));
+}
+
 // 剧情分析 / 检查报告的统一出口：搜索工具配置齐且开启时，把 web_search 交给模型自主调用
 // （并提示它什么情况该搜）；端点不支持 tools 参数时由 chatCompletionWithTools 自动降级为普通请求
 async function guidanceCompletion(messages) {
-    if (!(settings.search?.toolMode && searchToolReady())) return chatCompletion({ messages });
+    if (!(settings.search?.toolMode && searchToolReady())) {
+        const usage = { requests: 1, promptTokens: 0, completionTokens: 0 };
+        const text = await chatCompletion({
+            messages,
+            onUsage: u => { usage.promptTokens = u.prompt_tokens ?? 0; usage.completionTokens = u.completion_tokens ?? 0; },
+        });
+        billToast(usage);
+        return text;
+    }
     const SEARCH_HINT = '\n\n## 联网搜索\n你可以调用 web_search 工具检索现实世界的真实信息：'
         + '涉及现实事实、时效性内容（近期事件、数据、新闻）或你不确定的现实细节时，先搜索再下结论；纯虚构设定不要搜索。'
         + '搜索结果仅供参考，最终仍只输出上面规定的 JSON，不要输出 JSON 以外的任何文字。';
     const { content, searchLogs, usage } = await chatCompletionWithTools({
         messages: messages.map(m => (m.role === 'system' ? { ...m, content: m.content + SEARCH_HINT } : m)),
     });
-    // 多轮往返时把真实账单亮出来（取服务商 usage，非估算）：每轮都重发全部材料，
-    // 输入按次数累加——不然后台看到的总输入比预览大好几倍，没法对账
-    const bill = [];
-    if (usage?.requests > 1) {
-        bill.push(`联网搜索往返共 ${usage.requests} 次请求（每次重发全部材料）`
-            + (usage.promptTokens ? `，累计输入约 ${usage.promptTokens.toLocaleString()} · 输出约 ${usage.completionTokens.toLocaleString()} tokens` : ''));
-    }
-    if (searchLogs.length) bill.push(`模型自主联网检索了：${searchLogs.join('；')}`);
-    if (bill.length) toastr.info(bill.join('；'));
+    billToast(usage, searchLogs);
     return content;
 }
 
@@ -159,7 +169,7 @@ export function buildGuidanceMessages(options = {}) {
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets });
 
     const summaries = (historySummaries ?? []).filter(Boolean);
-    const userContent = [
+    const parts = [
         '## 角色设定摘要',
         characterSummary() || '（无角色卡）',
         '## 最近对话记录',
@@ -174,13 +184,25 @@ export function buildGuidanceMessages(options = {}) {
         ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),
         ...(previousPlan ? ['## 上一版规划（请按修改意见修订）', previousPlan] : []),
         ...(revisionNote ? ['## 修改意见', revisionNote] : []),
-        ...(userNote ? ['## 用户剧情构思与补充说明', userNote] : ''),
-    ].join('\n\n');
+        ...(userNote ? ['## 用户剧情构思与补充说明', userNote] : []),
+    ];
+    const userContent = parts.join('\n\n');
+
+    // 逐小节精确字数（「查看完整提示词」预览展示用）：数组按「标题、正文」交替排布。
+    // 统计的是字符数不是 token 估算——世界书一节偏小，说明大部分词条没被关键词带出
+    const sections = [];
+    for (let i = 0; i < parts.length; i += 2) {
+        sections.push({
+            title: parts[i].replace(/^## /, '').replace(/（.*$/, ''),
+            chars: parts[i].length + (parts[i + 1]?.length ?? 0),
+        });
+    }
 
     return {
         system: withPresets(GUIDANCE_SYSTEM_PROMPT, assemblePresets(presets)),
         user: userContent,
         hits: hits.length,
+        sections,
     };
 }
 

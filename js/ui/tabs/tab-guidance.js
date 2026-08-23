@@ -444,7 +444,7 @@ function renderCollect(container, main) {
         if (view.style.display !== 'none') { view.style.display = 'none'; return; }
         try {
             const s = storyState();
-            const { system, user } = buildGuidanceMessages({
+            const { system, user, sections = [] } = buildGuidanceMessages({
                 userNote: run.note,
                 eventText: run.eventText,
                 activePlan: activeStory()?.planText ?? '',
@@ -456,7 +456,10 @@ function renderCollect(container, main) {
             });
             const sysTok = estimateTokens(system);
             const usrTok = estimateTokens(user);
-            view.innerHTML = `<div class="pp-muted" style="margin-bottom:6px" title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考">合计约 ${(sysTok + usrTok).toLocaleString()} tokens（系统提示词 ${sysTok.toLocaleString()} · 用户消息 ${usrTok.toLocaleString()}），粗估值；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：模型多轮检索时每轮重发全部材料，实际输入按请求次数累加' : ''}</div>`
+            const totalChars = sections.reduce((n, s) => n + s.chars, 0);
+            const secLine = sections.map(s => `${s.title} ${s.chars.toLocaleString()} 字`).join(' · ');
+            view.innerHTML = `<div class="pp-muted" style="margin-bottom:6px" title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考">材料共 ${totalChars.toLocaleString()} 字，粗估约 ${(sysTok + usrTok).toLocaleString()} tokens（实际分词通常更省：中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：模型多轮检索时每轮重发全部材料，实际输入按请求次数累加' : ''}</div>`
+                + `<div class="pp-muted" style="margin-bottom:6px" title="逐小节的精确字符数（非估算）。世界书一节只含关键词命中或勾了「常驻」的条目，不是全部词条——想让重要词条每次都带上，到「世界书」页勾「常驻」">材料构成：${escapeHtml(secLine)}</div>`
                 + escapeHtml(`【系统提示词】\n${system}\n\n【用户消息】\n${user}`);
             view.style.display = '';
         } catch (err) {
