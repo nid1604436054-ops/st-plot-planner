@@ -474,6 +474,87 @@
     opacity: 0.85;
 }
 
+/* ---------- 剧情指导：分步向导 + 进行中剧情 ---------- */
+
+/* 进行中/历史剧情的全文展示框（含挂载的最近检查报告） */
+.pp-gd-planview {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 280px;
+    overflow-y: auto;
+    margin-top: 4px;
+    padding: 8px 10px;
+    border: 1px dashed var(--SmartThemeBorderColor, #3a3a3a);
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+/* 第 4 步检查项行：左侧竖线 + 标题 + 内容 */
+.pp-gd-check {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 8px;
+    border-left: 3px solid var(--SmartThemeBorderColor, #666);
+    font-size: 0.92em;
+}
+
+.pp-gd-check > b {
+    font-size: 0.9em;
+    opacity: 0.85;
+}
+
+/* 检查报告卡：固定字段逐行排布 */
+.pp-gd-report {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
+    border-radius: 6px;
+    font-size: 0.92em;
+}
+
+.pp-gd-rrow {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.pp-gd-rk {
+    font-weight: bold;
+    opacity: 0.85;
+    font-size: 0.9em;
+}
+
+.pp-gd-rv { overflow-wrap: anywhere; }
+
+/* 随机事件闸口：事件卡（竖排布局的 pp-item 变体）+ 选中的走向高亮 */
+.pp-gd-evcard {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.pp-gd-sel {
+    border: 1px solid currentColor;
+    opacity: 1;
+}
+
+/* 第 1 步「本次启用的预设」与第 2 步选项横排勾选区 */
+.pp-gd-selp {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    padding: 2px 0;
+}
+
+.pp-gd-selp label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
 /* 抽屉内表单控件占满宽度 */
 .pp-drawer input[type="text"],
 .pp-drawer input[type="password"],

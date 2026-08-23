@@ -1,4 +1,4 @@
-// M2 剧情指导：OOC 检测 + 剧情规划（隐藏剧本）
+// M2 剧情指导：检查（OOC/剧情重复/文风重复/进度）+ 剧情规划（隐藏剧本）+ 检查报告
 // 与 M3 共用「上下文收集 + 世界书检索 + 独立 API」管线，全程不碰主对话连接
 import { chatCompletion } from "./api.js";
 import { collectRecentChat, formatChatLog, characterSummary } from "./context.js";
@@ -8,11 +8,16 @@ import { settings } from "./settings.js";
 import { extractJson } from "./utils.js";
 
 const OUTPUT_SCHEMA = `{
-  "ooc": {
-    "found": true,
-    "items": [
-      { "aspect": "性格|事实|关系|世界观|口吻", "evidence": "对话中的具体依据", "severity": "轻微|中等|严重", "fix": "修正建议" }
-    ]
+  "checks": {
+    "ooc": {
+      "found": false,
+      "items": [
+        { "aspect": "性格|事实|关系|世界观|口吻", "evidence": "对话中的具体依据", "severity": "轻微|中等|严重", "fix": "修正建议" }
+      ]
+    },
+    "plotRepeat": { "found": false, "note": "与进行中/历史剧情重复雷同之处；没有则空字符串" },
+    "styleRepeat": { "level": "无|轻微|明显", "note": "文风或桥段重复的表现" },
+    "progress": { "stage": "进行中剧情推进到哪个阶段（无进行中剧情写「无」）", "pct": "约x%或「无」", "note": "判断依据" }
   },
   "plan": {
     "summary": "一句话概括接下来的走向",
@@ -23,25 +28,72 @@ const OUTPUT_SCHEMA = `{
   }
 }`;
 
-// 内置指令：保证返回 JSON（程序要解析成 OOC + 规划），用户预设追加在其后，见 runPlotGuidance
+// 内置指令：保证返回 JSON（程序要解析成检查项 + 规划），用户预设追加在其后，见 assemblePresets
 export const GUIDANCE_SYSTEM_PROMPT = [
     '你是文字角色扮演的剧情顾问，负责两件事：',
-    '1) 结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）；',
-    '2) 为后续剧情规划「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
-    '要求：OOC 判断必须引用对话依据；规划要具体、可执行、尊重既有设定；面向当前场景做预编排。',
+    '1) 检查：结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）、是否与已有剧情重复、文风是否重复、正在执行的剧情推进到什么程度；',
+    '2) 规划：为后续剧情设计「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
+    '要求：判断必须引用对话依据；给出「进行中剧情」时对照它检查进度与重复；给了「随机事件」就将其自然融入规划；规划要具体、可执行、尊重既有设定；面向当前场景做预编排。',
     '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
     OUTPUT_SCHEMA,
 ].join('\n');
 
+const REVIEW_SCHEMA = `{
+  "completion": "约x%（当前处于规划中的哪个阶段）",
+  "progress": { "moved": true, "note": "近几轮是否有效推进剧情，依据是什么" },
+  "styleRepeat": { "level": "无|轻微|明显", "note": "文风或桥段重复的表现" },
+  "ooc": {
+    "found": false,
+    "items": [
+      { "aspect": "性格|事实|关系|世界观|口吻", "evidence": "对话中的具体依据", "severity": "轻微|中等|严重", "fix": "修正建议" }
+    ]
+  },
+  "otherIssues": ["其他问题；没有则空数组"],
+  "advice": "把上述所有问题点明，并给出接下来可直接执行的剧情指导"
+}`;
+
+export const REVIEW_SYSTEM_PROMPT = [
+    '你是文字角色扮演的剧情监理。用户会给你一份「正在执行的剧情规划」和最近的对话记录，',
+    '你对照规划检查执行情况：完成度、近几轮是否有效推进、文风是否重复、是否 OOC、有无其他问题，',
+    '最后把所有问题点明并给出可直接执行的剧情指导。',
+    '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
+    REVIEW_SCHEMA,
+].join('\n');
+
+// 用户预设（格式/文风等固定要求）拼装：显式传入列表时按传入的来（向导的本次勾选），
+// 缺省取设置里启用的；按列表顺序拼成带名小节。JSON 输出格式不能被预设改掉，否则解析会失败
+function assemblePresets(presets) {
+    const src = Array.isArray(presets) ? presets : (settings.guidance?.presets ?? []).filter(p => p.enabled);
+    return src
+        .filter(p => String(p.content ?? '').trim())
+        .map(p => `### ${p.name}\n${String(p.content).trim()}`)
+        .join('\n\n');
+}
+
+function withPresets(base, custom) {
+    return custom ? `${base}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n${custom}` : base;
+}
+
+// 本地检索统计（向导第 1 步展示用；纯本地，不调模型）
+export function collectStats() {
+    const chatList = collectRecentChat(settings.retrieval.contextLayers);
+    const hits = scanLorebooks(formatChatLog(chatList.slice(-settings.retrieval.scanDepth)));
+    return { layers: chatList.length, hits: hits.length, memChars: buildMemoryContext().length };
+}
+
 /**
- * 运行一次剧情指导分析。
+ * 组装剧情指导分析要发的 system/user 两条消息（runPlotGuidance 与「查看完整提示词」预览共用）。
  * @param {object} [options]
- * @param {string} [options.userNote]       用户补充说明（本次规划的关注点/约束）
- * @param {string} [options.previousPlan]   迭代时：上一版规划（当前编辑框内容）
- * @param {string} [options.revisionNote]   迭代时：修改意见
- * @returns {Promise<{result: object, raw: string, hits: number}>}
+ * @param {string} [options.userNote]            用户剧情构思/补充说明
+ * @param {string} [options.previousPlan]        打回重写时：上一版规划
+ * @param {string} [options.revisionNote]        打回重写时：修改意见
+ * @param {string} [options.eventText]           随机事件闸口选定的事件/走向文本
+ * @param {string} [options.activePlan]          进行中剧情全文（查重与进度对照）
+ * @param {string[]} [options.historySummaries]  历史剧情摘要（查重用）
+ * @param {Array}  [options.presets]             本次启用的预设数组（缺省取设置里启用的）
  */
-export async function runPlotGuidance({ userNote = '', previousPlan = '', revisionNote = '' } = {}) {
+export function buildGuidanceMessages(options = {}) {
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets } = options;
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
@@ -49,14 +101,7 @@ export async function runPlotGuidance({ userNote = '', previousPlan = '', revisi
     const hits = scanLorebooks(scanText);
     const memoryText = buildMemoryContext();
 
-    // 用户预设（格式/文风等固定要求）追加在内置指令后，勾选启用的按列表顺序拼成带名小节；
-    // JSON 输出格式不能被预设改掉，否则解析会失败
-    const active = (settings.guidance?.presets ?? []).filter(p => p.enabled && String(p.content ?? '').trim());
-    const custom = active.map(p => `### ${p.name}\n${String(p.content).trim()}`).join('\n\n');
-    const systemPrompt = custom
-        ? `${GUIDANCE_SYSTEM_PROMPT}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n${custom}`
-        : GUIDANCE_SYSTEM_PROMPT;
-
+    const summaries = (historySummaries ?? []).filter(Boolean);
     const userContent = [
         '## 角色设定摘要',
         characterSummary() || '（无角色卡）',
@@ -65,14 +110,67 @@ export async function runPlotGuidance({ userNote = '', previousPlan = '', revisi
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
         ...(memoryText ? ['## 记忆表格（已按标签筛选，未删除的行）', memoryText] : []),
+        ...(activePlan ? ['## 进行中剧情（正在执行的规划，检查进度与重复时对照它）', activePlan] : []),
+        ...(summaries.length ? ['## 历史剧情摘要（只用于查重）', summaries.map((s, i) => `${i + 1}. ${s}`).join('\n')] : []),
+        ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),
         ...(previousPlan ? ['## 上一版规划（请按修改意见修订）', previousPlan] : []),
         ...(revisionNote ? ['## 修改意见', revisionNote] : []),
+        ...(userNote ? ['## 用户剧情构思与补充说明', userNote] : ''),
+    ].join('\n\n');
+
+    return {
+        system: withPresets(GUIDANCE_SYSTEM_PROMPT, assemblePresets(presets)),
+        user: userContent,
+        hits: hits.length,
+    };
+}
+
+/**
+ * 运行一次剧情规划分析（检查 + 设计）。参数见 buildGuidanceMessages。
+ * @returns {Promise<{result: object, raw: string, hits: number}>}
+ */
+export async function runPlotGuidance(options = {}) {
+    const { system, user, hits } = buildGuidanceMessages(options);
+    const raw = await chatCompletion({
+        messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+        ],
+    });
+    return { result: extractJson(raw), raw, hits };
+}
+
+/**
+ * 检查报告：对照进行中剧情与最近对话，输出完成度/推进/文风/OOC/其他问题/建议。
+ * @param {object} [options]
+ * @param {string} options.planText   进行中剧情全文
+ * @param {string} [options.userNote] 补充说明
+ * @param {Array}  [options.presets]  本次启用的预设（缺省取设置里启用的）
+ */
+export async function runStoryReview({ planText = '', userNote = '', presets } = {}) {
+    const chatList = collectRecentChat(settings.retrieval.contextLayers);
+    if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
+
+    const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
+    const hits = scanLorebooks(scanText);
+    const memoryText = buildMemoryContext();
+
+    const userContent = [
+        '## 角色设定摘要',
+        characterSummary() || '（无角色卡）',
+        '## 正在执行的剧情规划（检查对象）',
+        String(planText || '（空）'),
+        '## 最近对话记录',
+        formatChatLog(chatList),
+        '## 检索命中的世界书条目',
+        buildLoreContext(hits),
+        ...(memoryText ? ['## 记忆表格（已按标签筛选，未删除的行）', memoryText] : []),
         ...(userNote ? ['## 用户补充说明', userNote] : []),
     ].join('\n\n');
 
     const raw = await chatCompletion({
         messages: [
-            { role: 'system', content: GUIDANCE_SYSTEM_PROMPT },
+            { role: 'system', content: withPresets(REVIEW_SYSTEM_PROMPT, assemblePresets(presets)) },
             { role: 'user', content: userContent },
         ],
     });

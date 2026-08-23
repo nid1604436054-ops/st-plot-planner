@@ -69,3 +69,49 @@ export async function generateRandomEvent(rule) {
     });
     return extractJson(raw);
 }
+
+/**
+ * 大模型自由随机：不经事件库掷骰，直接让模型即兴出一次意外遭遇（剧情向导第 2 步用）。
+ * @param {object} [options]
+ * @param {boolean} [options.useLibrary]   true 时把事件库规则列给模型参考（可从中选方向也可另起）
+ * @param {boolean} [options.wantPreview]  true 时附带一版预览剧情走向（仅供参考，正式规划仍走分析调用）
+ * @returns {Promise<{title:string, description:string, options:Array<{label:string, hint:string}>, preview?:string}>}
+ */
+export async function generateFreeRandomEvent({ useLibrary = false, wantPreview = false } = {}) {
+    const chatList = collectRecentChat(settings.retrieval.contextLayers);
+    const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
+    const hits = scanLorebooks(scanText);
+
+    const schema = '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
+        + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ]'
+        + (wantPreview ? ', "preview": "若采纳该事件，后续剧情的一版预览走向（120 字内，仅供参考）"' : '')
+        + ' }';
+
+    const system = '你是文字角色扮演的随机遭遇生成器。基于当前情境即兴生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
+        + (useLibrary ? '用户提供了事件库规则，可从中选一个方向展开，也可另起更契合当前情境的事件。' : '')
+        + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
+        + schema + '\noptions 给 3 个左右。';
+
+    const sections = [
+        '## 角色设定摘要',
+        characterSummary() || '（无角色卡）',
+        '## 最近对话',
+        formatChatLog(chatList),
+        '## 世界书命中',
+        buildLoreContext(hits),
+    ];
+    if (useLibrary) {
+        const rules = (settings.eventRules ?? []).filter(r => r.enabled);
+        sections.push('## 事件库规则（参考方向）', rules.length
+            ? rules.map(r => `- ${r.name}：${r.promptHint ?? ''}`).join('\n')
+            : '（事件库为空，请即兴生成）');
+    }
+
+    const raw = await chatCompletion({
+        messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: sections.join('\n\n') },
+        ],
+    });
+    return extractJson(raw);
+}
