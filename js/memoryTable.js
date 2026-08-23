@@ -129,7 +129,7 @@ export function memoryState() {
         matchTags: [],                          // 标签匹配词表（剧情指导向导）：[{name, note}]
         matchSheets: [],                        // 打标区域：表 uid；空 = 全部镜像表
         seen: [],                               // 已看过的行 rid，用于「新」标
-        tagStandard: '',                        // AI 打标签的分类标准（上次使用）
+        tagStandard: '',                        // 旧「智能归类」的分类标准（功能已下线，数据保留）
         wipeAlert: null,
     });
     if (state.version !== 2) migrateV1(state);
@@ -421,67 +421,8 @@ export function allTags(state) {
 }
 
 // ---------------------------------------------------------------------------
-// AI 自动打标签：把镜像里没标签的行分批丢给独立 API 分类
-// ---------------------------------------------------------------------------
-
-const TAGGER_SYSTEM = [
-    '你是角色扮演记忆条目的自动分类器。逐条阅读给出的记忆条目，为每条打 1~3 个标签。',
-    '标签优先从「分类标准」里列出的类别名中选取（可多选）；标准未覆盖到的内容，自拟 2~6 字的简短标签。',
-    '只输出一个 JSON 对象，格式：{"rows":[{"id":"条目id","tags":["标签"]}]}，不要输出任何其他文字。',
-].join('\n');
-
-export async function autoTagRows({ standard = '', overwrite = false, onProgress = null } = {}) {
-    const state = memoryState();
-    const rows = [];
-    for (const sheet of state.mirror.sheets) {
-        for (const r of sheet.rows) {
-            if (!overwrite && (state.tags[r.rid] ?? []).length) continue;
-            rows.push({ rid: r.rid, cols: sheet.columns, cells: r.cells });
-        }
-    }
-    if (!rows.length) return { tagged: 0, total: 0 };
-
-    const BATCH = 40;
-    let tagged = 0;
-    for (let i = 0; i < rows.length; i += BATCH) {
-        const batch = rows.slice(i, i + BATCH);
-        const lines = batch.map(r =>
-            `[${r.rid}] ` + r.cells.map((c, j) => `${r.cols[j] ?? j}:${c}`).join(' | ')).join('\n');
-        const raw = await chatCompletion({
-            temperature: 0.2,
-            maxTokens: 4000,
-            messages: [
-                { role: 'system', content: TAGGER_SYSTEM },
-                {
-                    role: 'user',
-                    content: [
-                        '## 分类标准',
-                        standard.trim() || '（未给出，请按内容自拟简短类别，如：战斗、感情、约定、物品、地点）',
-                        '## 记忆条目',
-                        lines,
-                        '只输出 JSON。',
-                    ].join('\n\n'),
-                },
-            ],
-        });
-        const data = extractJson(raw);
-        const validIds = new Set(batch.map(r => r.rid));
-        for (const item of data?.rows ?? []) {
-            const rid = String(item?.id ?? '');
-            const tags = [...new Set((item?.tags ?? []).map(t => String(t).trim()).filter(Boolean))].slice(0, 3);
-            if (!rid || !validIds.has(rid) || !tags.length) continue;
-            state.tags[rid] = tags;
-            tagged++;
-        }
-        onProgress?.(Math.min(i + BATCH, rows.length), rows.length);
-    }
-    persistMemory();
-    return { tagged, total: rows.length };
-}
-
-// ---------------------------------------------------------------------------
-// 标签匹配（剧情指导向导）：闭集词表 + 打标区域，给镜像行打标签。
-// 与 autoTagRows 的区别：标签只能从词表里选（不自拟），且可限定只处理某些表
+// AI 打标签（记忆表格页「打标签」区）：闭集词表 + 打标区域，给镜像行打标签。
+// 标签只能从词表里选（不自拟），可限定只处理某些表
 // ---------------------------------------------------------------------------
 
 const VOCAB_TAGGER_SYSTEM = [
@@ -494,7 +435,7 @@ export async function autoTagByVocabulary({ vocab = [], sheetUids = [], overwrit
     const entries = vocab
         .map(v => ({ name: String(v?.name ?? '').trim(), note: String(v?.note ?? '').trim() }))
         .filter(v => v.name);
-    if (!entries.length) throw new Error('标签词表为空，请先在「匹配设置」里添加标签');
+    if (!entries.length) throw new Error('标签词表为空，请先在「记忆表格」页的「打标签」区添加标签');
 
     const state = memoryState();
     const uids = new Set(sheetUids.filter(Boolean));
@@ -560,13 +501,15 @@ function pickColumns(values, indices) {
     return indices ? indices.map(i => values[i]).filter(v => v !== undefined) : values;
 }
 
-export function buildMemoryContext({ tagFilter = null, maxChars } = {}) {
+export function buildMemoryContext({ tagFilter = null, sheetUids = null, maxChars } = {}) {
     const state = memoryState();
     const want = (tagFilter ?? state.recallTags).filter(Boolean);
+    const only = Array.isArray(sheetUids) ? new Set(sheetUids) : null;   // null = 全部；空数组 = 一张表都不带
     const blocks = [];
     for (const sheet of state.mirror.sheets) {
         const recall = state.sheetRecall[sheet.uid] ?? {};
         if (recall.enabled === false) continue;
+        if (only && !only.has(sheet.uid)) continue;
         const colIdx = Array.isArray(recall.columns) ? recall.columns : null;
         const rows = sheet.rows
             .filter(r => want.length === 0 || (state.tags[r.rid] ?? []).some(t => want.includes(t)))

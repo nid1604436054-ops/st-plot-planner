@@ -6,7 +6,7 @@ import {
     memoryState, syncMemory, mergeMirrorFromSource, persistMemory,
     deleteMirrorRow, deleteMirrorSheet, undeleteRow, purgeMootTombstones,
     setRowTags, markSeen, newRowCount, allTags, buildMemoryContext,
-    restoreFromBackup, editMirrorRow, acceptSourceRow, addMirrorRow, autoTagRows,
+    restoreFromBackup, editMirrorRow, acceptSourceRow, addMirrorRow, autoTagByVocabulary,
 } from "../../memoryTable.js";
 import { parseKeys } from "../../lorebook.js";
 import { escapeHtml, clamp, downloadJson } from "../../utils.js";
@@ -48,7 +48,7 @@ export const memoryTab = {
             <div class="pp-section">
                 <div class="pp-btn-row">
                     <div id="pp_mem_sync" class="menu_button" title="从记忆表格插件读取最新数据：更新原表库、归档备份，并把新增/改动合并进镜像（你编辑过的行不覆盖，删除过的不复活）">同步记忆表格</div>
-                    <div id="pp_mem_tag_btn" class="menu_button" title="用 AI 给镜像里还没标签的行自动分类，方便召回时按标签筛选">智能归类</div>
+                    <div id="pp_mem_tag_btn" class="menu_button" title="配置标签词表与打标区域，用 AI 给镜像的行批量打标签；召回和剧情指导的「按标签匹配」用的就是这些标签">打标签</div>
                     <div id="pp_mem_bk_btn" class="menu_button">备份与恢复</div>
                     <div id="pp_mem_rc_btn" class="menu_button">召回设置</div>
                 </div>
@@ -117,7 +117,7 @@ function renderAll(container) {
     container.querySelector('#pp_mem_del').style.display = 'none';
     renderStatus(container);
     renderWipe(container);
-    renderTagAi(container);
+    renderTagging(container);
     renderBackups(container);
     renderRecall(container);
     renderSheets(container);
@@ -172,42 +172,92 @@ function renderWipe(container) {
     });
 }
 
-function renderTagAi(container) {
+// 打标签区（点顶部「打标签」展开）：词表决定模型能打哪些标签（封闭集合，不许自拟），
+// 区域决定给哪些表打。词表与区域存聊天（memoryState），随聊天走
+function renderTagging(container) {
     const state = memoryState();
     const el = container.querySelector('#pp_mem_tagai');
-    el.innerHTML = `
-    <b>智能归类</b>
-    <span class="pp-muted">把镜像里还没有标签的行分批交给「设置」页配置的 API 自动分类打标签，之后召回时就能按标签筛选。</span>
-    <textarea id="pp_mem_tagstd" class="text_pole textarea_compact" rows="2" placeholder="分类标准，例如：战斗,感情,约定,物品,地点,其他"></textarea>
-    <label class="pp-label"><input type="checkbox" id="pp_mem_tagover" /> 覆盖已有标签</label>
-    <div class="pp-btn-row"><span id="pp_mem_tagrun" class="menu_button">开始归类</span></div>`;
-    el.querySelector('#pp_mem_tagstd').value = state.tagStandard ?? '';
+    const sheets = state.mirror.sheets;
 
-    el.querySelector('#pp_mem_tagrun').addEventListener('click', async () => {
-        const btn = el.querySelector('#pp_mem_tagrun');
-        const std = el.querySelector('#pp_mem_tagstd');
-        const standard = std.value.trim();
-        state.tagStandard = standard;
+    el.innerHTML = `
+    <b>打标签</b>
+    <span class="pp-muted">把镜像里还没标签的行分批交给「设置」页配置的 API，按下方的词表自动打标签（模型只能从词表里选，不能自拟）；之后「召回设置」和剧情指导第 1 步的「按标签匹配」用的就是这些标签。</span>
+    <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签">标签词表（一行一个，注释可选）</label>
+    <div id="pp_mem_vocab"></div>
+    <div class="pp-btn-row">
+        <span id="pp_mem_vocab_add" class="menu_button"><i class="fa-solid fa-plus"></i> 加一个标签</span>
+    </div>
+    <label class="pp-label" title="勾选参与打标的表格；不勾 = 全部镜像表">打标区域（${sheets.length ? '不勾 = 全部表格' : '镜像里没有表格'}）</label>
+    <div class="pp-gd-selp">
+        ${sheets.map(s => `<label><input type="checkbox" data-msheet="${escapeHtml(s.uid)}" ${!state.matchSheets.length || state.matchSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)}</label>`).join('')}
+    </div>
+    <div class="pp-btn-row">
+        <label><input type="checkbox" id="pp_mem_tag_over" /> 覆盖已有标签</label>
+        <span id="pp_mem_tag_run" class="menu_button" title="把区域内（默认没标签）的行分批交给模型，按词表打标签"><i class="fa-solid fa-wand-magic-sparkles"></i> 按词表打标签</span>
+    </div>
+    <div id="pp_mem_tag_status" class="pp-muted"></div>`;
+
+    const vocabBox = el.querySelector('#pp_mem_vocab');
+    const renderVocab = () => {
+        vocabBox.innerHTML = state.matchTags.map((v, i) => `
+        <div class="pp-tag-vocab">
+            <input type="text" class="text_pole textarea_compact" data-vname="${i}" placeholder="标签名（如：背叛）" value="${escapeHtml(v.name ?? '')}" />
+            <input type="text" class="text_pole textarea_compact" data-vnote="${i}" placeholder="注释（可选：什么内容算这个标签）" value="${escapeHtml(v.note ?? '')}" />
+            <span class="menu_button fa-solid fa-trash" data-vdel="${i}" title="删除该标签"></span>
+        </div>`).join('') || '<span class="pp-muted">（词表为空，先加几个标签再打标）</span>';
+        vocabBox.querySelectorAll('[data-vname]').forEach(inp => inp.addEventListener('input', () => {
+            state.matchTags[Number(inp.dataset.vname)].name = inp.value;
+            persistMemory();
+        }));
+        vocabBox.querySelectorAll('[data-vnote]').forEach(inp => inp.addEventListener('input', () => {
+            state.matchTags[Number(inp.dataset.vnote)].note = inp.value;
+            persistMemory();
+        }));
+        vocabBox.querySelectorAll('[data-vdel]').forEach(btn => btn.addEventListener('click', () => {
+            state.matchTags.splice(Number(btn.dataset.vdel), 1);
+            persistMemory();
+            renderVocab();
+        }));
+    };
+    renderVocab();
+
+    el.querySelector('#pp_mem_vocab_add').addEventListener('click', () => {
+        state.matchTags.push({ name: '', note: '' });
         persistMemory();
-        const s = memoryState();
-        const overwrite = el.querySelector('#pp_mem_tagover').checked;
-        const pending = s.mirror.sheets.reduce((n, sh) =>
-            n + sh.rows.filter(r => overwrite || !(s.tags[r.rid] ?? []).length).length, 0);
-        if (!pending) {
-            toastr.info('没有待归类的行（都已有标签，或镜像为空）');
+        renderVocab();
+        vocabBox.querySelector('.pp-tag-vocab:last-child [data-vname]')?.focus();
+    });
+    el.querySelectorAll('[data-msheet]').forEach(cb => cb.addEventListener('change', () => {
+        state.matchSheets = [...el.querySelectorAll('[data-msheet]:checked')].map(x => x.dataset.msheet);
+        persistMemory();
+    }));
+
+    el.querySelector('#pp_mem_tag_run').addEventListener('click', async function () {
+        const status = el.querySelector('#pp_mem_tag_status');
+        const vocab = state.matchTags.filter(v => String(v.name ?? '').trim());
+        if (!vocab.length) {
+            toastr.warning('词表为空，先添加标签');
             return;
         }
-        btn.textContent = '归类中…';
+        this.classList.add('disabled');
+        status.textContent = '打标中……';
         try {
-            const r = await autoTagRows({
-                standard, overwrite,
-                onProgress: (done, all) => { btn.textContent = `归类中… ${done}/${all} 行`; },
+            const r = await autoTagByVocabulary({
+                vocab,
+                sheetUids: state.matchSheets,
+                overwrite: el.querySelector('#pp_mem_tag_over').checked,
+                onProgress: (a, b) => { status.textContent = `打标中…… ${a}/${b}`; },
             });
-            toastr.success(`已归类 ${r.tagged} / ${r.total} 行`);
-            renderAll(container);
+            status.textContent = r.total
+                ? `完成：${r.tagged}/${r.total} 行打上标签（下方「召回设置」与剧情指导里就能按这些标签筛选）`
+                : '没有需要打标的行（都有标签了？勾「覆盖已有标签」重打）';
+            toastr.success(`打标完成：${r.tagged} 行`);
+            renderAll(container);   // 刷新召回设置区的标签
         } catch (err) {
-            toastr.error(`归类失败：${err.message}`);
-            btn.textContent = '开始归类';
+            status.textContent = '';
+            toastr.error(String(err.message ?? err));
+        } finally {
+            this.classList.remove('disabled');
         }
     });
 }
@@ -259,7 +309,7 @@ function renderRecall(container) {
     <div class="pp-mem-tagbar">
         ${tags.length ? tags.map(([t, n]) => `
         <label class="pp-mem-chip"><input type="checkbox" data-rtag="${escapeHtml(t)}" ${state.recallTags.includes(t) ? 'checked' : ''} /> ${escapeHtml(t)} (${n})</label>
-        `).join('') : '<span class="pp-muted">还没有任何标签，手动在行旁输入，或用「智能归类」</span>'}
+        `).join('') : '<span class="pp-muted">还没有任何标签，手动在行旁输入，或点上方「打标签」按词表批量打</span>'}
     </div>
     <div class="pp-btn-row"><span id="pp_mem_rc_preview" class="menu_button">预览召回内容</span></div>
     <pre id="pp_mem_rc_out" class="pp-muted" style="display:none"></pre>`;

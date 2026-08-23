@@ -562,21 +562,43 @@
     flex: 0 0 auto;
 }
 
-/* 匹配设置：词表行（标签名 + 注释 + 删除），两个输入框均分宽度 */
-.pp-gd-vocab {
+/* 记忆表格「打标签」区：词表行（标签名 + 注释 + 删除），两个输入框均分宽度，行距放宽 */
+.pp-tag-vocab {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
+    margin: 2px 0;
 }
 
-.pp-gd-vocab input[type="text"] {
+.pp-tag-vocab input[type="text"] {
     width: auto;
     flex: 1 1 40%;
     min-width: 0;
 }
 
-.pp-gd-vocab .menu_button {
+.pp-tag-vocab .menu_button {
     flex: 0 0 auto;
+}
+
+/* 剧情指导第 1 步：记忆召回两层选择（表格范围 → 标签过滤），纵向排开互不挤压 */
+.pp-gd-memlay {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 6px 0;
+}
+
+.pp-gd-memlay > div {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 10px;
+    border-left: 3px solid var(--SmartThemeBorderColor, #666);
+}
+
+.pp-gd-layname {
+    font-size: 0.92em;
+    opacity: 0.9;
 }
 
 /* 抽屉内表单控件占满宽度 */

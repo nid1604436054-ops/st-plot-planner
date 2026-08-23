@@ -9,6 +9,7 @@ export function getTavernContext() {
 export function collectRecentChat(layers) {
     const chat = Array.isArray(getTavernContext().chat) ? getTavernContext().chat : [];
     return chat
+        .filter(m => m?.is_system !== true)   // 「对 AI 隐藏」的楼层不带入（深度 0 = 不限也一样跳过）
         .slice(-layers)
         .map(m => ({
             name: String(m?.name ?? (m?.is_user ? '用户' : '角色')),

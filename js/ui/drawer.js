@@ -1,7 +1,9 @@
-// 主面板：顶部下拉抽屉 + 六个功能页签（五个模块 + 设置）
-// 高度自适应内容：面板跟着内容长高，封顶在聊天输入框上沿，超出部分内部滚动；
-// 右下角手柄可手动拉——条目很多时可拉下去盖住输入框一次看更多。
+// 主面板：顶部下拉抽屉 + 七个功能页签（六个模块 + 设置）
+// 高度只在「打开抽屉 / 切换页签」时按内容适配一次，封顶在聊天输入框上沿；
+// 页签内的勾选、输入、展开收起不再改变面板高度，内容超出在面板内部滚动。
+// 右下角手柄可手动拉——条目很多时可拉下去盖住输入框一次看更多；
 // 用户手动拉过后（本次打开期间）不再自动适配，关掉重开恢复自适应。
+// 点到酒馆顶栏/魔法棒菜单的原生按钮时自动收起本抽屉。
 // 页签间跳转用全局事件 pp-switch-tab，避免页签模块反向依赖本文件
 import { worldbookTab } from "./tabs/tab-worldbook.js";
 import { memoryTab } from "./tabs/tab-memory.js";
@@ -16,7 +18,6 @@ let activeId = TABS[0].id;
 
 // 上次自动适配写入的高度；当前内联高度与它不一致 = 用户拖过，停止自动适配
 let lastApplied = 0;
-let fitQueued = false;
 
 function drawerEl() {
     return document.getElementById('pp_drawer');
@@ -74,21 +75,13 @@ export function initDrawer() {
     });
     document.addEventListener('pp-switch-tab', e => activateTab(e.detail?.id));
 
-    // 内容增删/展开/换页签（childList）以及用户拖拉灰框改的 style 高度（attributes）
-    // 都触发自动适配；抽屉自身的高度变化不在本子树内，不会自我触发
-    const observer = new MutationObserver(() => {
-        if (fitQueued) return;
-        fitQueued = true;
-        requestAnimationFrame(() => {
-            fitQueued = false;
-            fitHeight();
-        });
-    });
-    observer.observe(contentEl(), {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['style'],
+    // 点到酒馆顶栏 / 魔法棒菜单里的原生按钮时自动收起本抽屉，避免和原生面板叠在一起；
+    // 魔法棒菜单里「剧情规划器」入口本身除外（那是打开入口）
+    $(document).on('click', (e) => {
+        const el = drawerEl();
+        if (!el?.classList.contains('pp-open')) return;
+        if (e.target.closest?.('#pp_drawer, #pp_wand_open')) return;
+        if (e.target.closest?.('#top-bar, #extensionsMenu')) closeDrawer();
     });
 
     // 窗口尺寸变化：把当前高度夹进新视口（用户拖过的也夹，但不重置）

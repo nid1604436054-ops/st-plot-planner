@@ -78,10 +78,11 @@ function withPresets(base, custom) {
 
 // 本地检索统计（向导第 1 步展示用；纯本地，不调模型）
 // memoryTags 语义与 buildGuidanceMessages 相同：null 默认召回 / [] 全量 / 数组按标签 / false 不附带
-export function collectStats({ memoryTags = null } = {}) {
+// memorySheets：null = 全部（开了召回的表）；数组 = 只算勾选的表（空数组 = 一张都不带）
+export function collectStats({ memoryTags = null, memorySheets = null } = {}) {
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     const hits = scanLorebooks(formatChatLog(chatList.slice(-settings.retrieval.scanDepth)));
-    const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags }).length;
+    const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets }).length;
     return { layers: chatList.length, hits: hits.length, memChars };
 }
 
@@ -105,15 +106,17 @@ function memorySectionHeader(memoryTags) {
  * @param {Array}  [options.presets]             本次启用的预设数组（缺省取设置里启用的）
  * @param {*}      [options.memoryTags]          记忆表格召回方式：null/缺省=按记忆表格页召回标签，
  *                                               []=全量, ['a','b']=按标签, false=本次不附带
+ * @param {*}      [options.memorySheets]        记忆表格表范围：null/缺省=全部（开了召回的表），
+ *                                               数组=只带勾选的表（空数组=一张都不带）
  */
 export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets, memoryTags = null } = options;
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets, memoryTags = null, memorySheets = null } = options;
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
     const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
     const hits = scanLorebooks(scanText);
-    const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags });
+    const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets });
 
     const summaries = (historySummaries ?? []).filter(Boolean);
     const userContent = [

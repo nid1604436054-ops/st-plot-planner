@@ -1,5 +1,5 @@
 // 剧情指导页签：分步规划向导
-// ① 收集确认（本地检索材料 + 预设临时勾选 + 剧情构思 + 记忆表格标签匹配）→ ② 随机事件闸口（可跳过）
+// ① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签）+ 预设临时勾选 + 剧情构思）→ ② 随机事件闸口（可跳过）
 // → ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
 // 确认采用的规划存为「进行中剧情」（story.js，跟聊天文件走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
 // 跳过随机事件的路径会先停在「分析前确认」页，点确认才真正调模型。
@@ -9,7 +9,7 @@ import { generateRandomEvent, generateFreeRandomEvent, rollEventRule } from "../
 import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
 import { storyState, activeStory, confirmPlot, endActive, attachReport, deleteStory, clearHistory } from "../../story.js";
-import { memoryState, allTags, autoTagByVocabulary, persistMemory } from "../../memoryTable.js";
+import { memoryState } from "../../memoryTable.js";
 import { getTavernContext } from "../../context.js";
 import { escapeHtml } from "../../utils.js";
 
@@ -21,7 +21,8 @@ const run = {
     event: null,         // { mode:'llm'|'lib'|'manual', title, choice } 入库用
     eventText: '',       // 拼给模型的事件材料
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
-    memMatch: false,     // 第 1 步：是否按标签匹配召回记忆表格
+    memSheets: null,     // 第 1 步第一层：勾选的表 uid；null = 全部（开了召回的表），[] = 一张不带
+    memMatch: false,     // 第 1 步第二层：是否按标签匹配召回记忆表格
     memTags: [],         // 按标签匹配时勾选的标签名
     readyFrom: 'event',  // 分析前确认页的「返回」回到哪一步
 };
@@ -30,8 +31,6 @@ const ev = { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: 
 // 进行中剧情全文 / 历史列表是否展开；历史里展开查看的条目 id（均只存内存）
 let showActive = false, showHistory = false, viewHistId = null;
 let report = null;      // 最近一次检查报告（内存缓存，正式存档在 story 条目上）
-// 「匹配设置」折叠区是否展开（词表/打标区域编辑，随记忆状态存聊天）
-let matchOpen = false;
 
 // 预设区折叠/编辑中状态（与向导无关，跨重渲染保持）
 let presetOpen = false;
@@ -57,10 +56,10 @@ export function resetGuidance() {
     step = '';
     Object.assign(run, {
         note: '', presetIds: [], event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
-        memMatch: false, memTags: [], readyFrom: 'event',
+        memSheets: null, memMatch: false, memTags: [], readyFrom: 'event',
     });
     Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false });
-    showActive = false; showHistory = false; viewHistId = null; report = null; matchOpen = false;
+    showActive = false; showHistory = false; viewHistId = null; report = null;
     const container = document.getElementById('pp_tab_content');
     if (container?.querySelector('#pp_gd_storybar')) guidanceTab.render(container);
 }
@@ -258,7 +257,7 @@ function renderMain(container) {
 
     main.innerHTML = `
     <div class="pp-section">
-        <div class="pp-muted">分步规划：① 收集确认（本地检索材料 + 预设勾选 + 记忆标签匹配 + 剧情构思）→ ② 随机事件闸口（可跳过）→ ③ 模型分析（检查 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）。确认采用的规划存为「进行中剧情」并自动注入，可随时「检查当前剧情」出执行报告。</div>
+        <div class="pp-muted">分步规划：① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签） + 预设勾选 + 剧情构思）→ ② 随机事件闸口（可跳过）→ ③ 模型分析（检查 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）。确认采用的规划存为「进行中剧情」并自动注入，可随时「检查当前剧情」出执行报告。</div>
     </div>`;
 }
 
@@ -278,6 +277,12 @@ function wizardMemoryTags() {
     return run.memTags.length ? run.memTags : false;
 }
 
+// 本次运行的记忆表格表范围 → planner 的 memorySheets：
+// null = 全部（开了召回的表）；数组 = 勾选的表（可为空 = 一张不带）
+function wizardMemorySheets() {
+    return run.memSheets;
+}
+
 // 跳过类按钮先停在「分析前确认」页，不直接花一次模型调用
 function goReady(container, from) {
     run.readyFrom = from;
@@ -285,10 +290,13 @@ function goReady(container, from) {
     renderMain(container);
 }
 
-// ① 收集确认：本地检索已完成，展示材料清单；预设勾选只对本次生效；构思可后补
+// ① 收集确认：本地检索已完成，展示材料清单；记忆召回分两层（表范围 → 标签过滤）；
+// 词表与打标配置在记忆表格页，这里只做选择；预设勾选只对本次生效；构思可后补
 function renderCollect(container, main) {
     const presets = settings.guidance?.presets ?? [];
-    const tags = allTags(memoryState());
+    const state = memoryState();
+    // 第一层只列开了「参与召回」的表（与记忆表格页的召回开关取交集）
+    const recallSheets = state.mirror.sheets.filter(s => (state.sheetRecall[s.uid] ?? {}).enabled !== false);
     main.innerHTML = `
     <div class="pp-section">
         <b>第 1 步 · 收集确认</b>
@@ -301,16 +309,21 @@ function renderCollect(container, main) {
             <div class="pp-item-ops"><span class="menu_button" id="pp_gd_c1_preview">查看完整提示词</span></div>
         </div>
         <label class="pp-label">记忆表格召回（只影响本次分析，不改记忆表格页的配置）</label>
-        <div class="pp-gd-selp">
-            <label title="勾选后只带所选标签的行；不勾则启用召回的表格全量带出"><input type="checkbox" id="pp_gd_c1_memmatch" ${run.memMatch ? 'checked' : ''}/> 按标签匹配</label>
+        <div class="pp-gd-memlay">
+            <div>
+                <b class="pp-gd-layname">第一层 · 表格范围${recallSheets.length ? '' : '（镜像里没有开了「参与召回」的表）'}</b>
+                <div class="pp-gd-selp" id="pp_gd_c1_sheets">
+                    ${recallSheets.map(s => `<label title="勾掉后本次分析不带这张表的记忆行"><input type="checkbox" data-msheet="${escapeHtml(s.uid)}" ${run.memSheets == null || run.memSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)}（${s.rows.length} 行）</label>`).join('')}
+                </div>
+            </div>
+            <div>
+                <b class="pp-gd-layname">第二层 · 标签过滤</b>
+                <label title="勾选后只带所选标签的行；不勾则所选表格全量带出"><input type="checkbox" id="pp_gd_c1_memmatch" ${run.memMatch ? 'checked' : ''}/> 按标签匹配（不勾 = 全量）</label>
+                <div class="pp-gd-selp" id="pp_gd_c1_chips" ${run.memMatch ? '' : 'style="display:none"'}></div>
+                <span class="pp-muted" id="pp_gd_c1_memtip"></span>
+            </div>
         </div>
-        <div class="pp-gd-selp" id="pp_gd_c1_chips" ${run.memMatch ? '' : 'style="display:none"'}>
-            ${tags.length
-                ? tags.map(([t, n]) => `<label class="pp-mem-chip" title="带这个标签的记忆行"><input type="checkbox" data-mtag="${escapeHtml(t)}" ${run.memTags.includes(t) ? 'checked' : ''}/> ${escapeHtml(t)} (${n})</label>`).join('')
-                : '<span class="pp-muted">还没有任何行标签：先在下方「匹配设置」里用词表打标签，或在记忆表格页手动打</span>'}
-            <span class="pp-muted" id="pp_gd_c1_memtip"></span>
-        </div>
-        <div id="pp_gd_match"></div>
+        <div class="pp-muted">标签词表与 AI 打标签在「记忆表格」页管理 <span id="pp_gd_mem_jump" class="menu_button">前往</span></div>
         <label class="pp-label">本次启用的预设（改动不写回保存的默认值）</label>
         <div class="pp-gd-selp">
             ${presets.map(p => `<label><input type="checkbox" data-c1p="${p.id}" ${run.presetIds.includes(p.id) ? 'checked' : ''}/> ${escapeHtml(p.name)}</label>`).join('')
@@ -326,18 +339,49 @@ function renderCollect(container, main) {
     </div>
     <div id="pp_gd_promptview" class="pp-gd-builtin" style="display:none"></div>`;
 
-    const refreshMem = () => {
-        const st = collectStats({ memoryTags: wizardMemoryTags() });
-        const mode = run.memMatch
+    const memModeDesc = () => Array.isArray(run.memSheets) && !run.memSheets.length ? '不附带（未选表格）'
+        : run.memMatch
             ? (run.memTags.length ? `按标签 ${run.memTags.length} 类` : '不附带（未勾标签）')
             : '全量';
+    const refreshMem = () => {
+        const st = collectStats({ memoryTags: wizardMemoryTags(), memorySheets: wizardMemorySheets() });
+        const sheetDesc = run.memSheets == null ? '全部表' : `${run.memSheets.length} 张表`;
         main.querySelector('#pp_gd_c1_stat').textContent =
-            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · 记忆表格 ${st.memChars} 字（${mode}）`;
+            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · 记忆表格 ${st.memChars} 字（${sheetDesc} · ${memModeDesc()}）`;
         main.querySelector('#pp_gd_c1_chips').style.display = run.memMatch ? '' : 'none';
         main.querySelector('#pp_gd_c1_memtip').textContent =
-            run.memMatch && !run.memTags.length && tags.length ? '未勾选任何标签，本次将不附带记忆表格' : '';
+            run.memMatch && !run.memTags.length ? '未勾选任何标签，本次将不附带记忆表格' : '';
     };
+
+    // 第二层标签 chips 的计数只统计第一层所选表格里的行；选表变了就地重建
+    const chipsBox = main.querySelector('#pp_gd_c1_chips');
+    const renderChips = () => {
+        const scope = new Set(run.memSheets ?? recallSheets.map(s => s.uid));
+        const counts = new Map();
+        for (const sheet of state.mirror.sheets) {
+            if (!scope.has(sheet.uid)) continue;
+            for (const r of sheet.rows)
+                for (const t of state.tags[r.rid] ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
+        }
+        const tags = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+        chipsBox.innerHTML = tags.length
+            ? tags.map(([t, n]) => `<label class="pp-mem-chip" title="带这个标签的记忆行"><input type="checkbox" data-mtag="${escapeHtml(t)}" ${run.memTags.includes(t) ? 'checked' : ''}/> ${escapeHtml(t)} (${n})</label>`).join('')
+            : '<span class="pp-muted">所选表格里还没有带标签的行：到「记忆表格」页打标签</span>';
+        chipsBox.querySelectorAll('[data-mtag]').forEach(cb => cb.addEventListener('change', () => {
+            run.memTags = [...chipsBox.querySelectorAll('[data-mtag]:checked')].map(x => x.dataset.mtag);
+            refreshMem();
+        }));
+    };
+    renderChips();
     refreshMem();
+
+    main.querySelectorAll('#pp_gd_c1_sheets [data-msheet]').forEach(cb => cb.addEventListener('change', () => {
+        run.memSheets = [...main.querySelectorAll('#pp_gd_c1_sheets [data-msheet]:checked')].map(x => x.dataset.msheet);
+        renderChips();
+        refreshMem();
+    }));
+    main.querySelector('#pp_gd_mem_jump').addEventListener('click', () =>
+        document.dispatchEvent(new CustomEvent('pp-switch-tab', { detail: { id: 'memory' } })));
 
     const noteEl = main.querySelector('#pp_gd_note');
     noteEl.value = run.note;
@@ -347,11 +391,6 @@ function renderCollect(container, main) {
         run.memMatch = e.target.checked;
         refreshMem();
     });
-    main.querySelectorAll('[data-mtag]').forEach(cb => cb.addEventListener('change', () => {
-        run.memTags = [...main.querySelectorAll('[data-mtag]:checked')].map(x => x.dataset.mtag);
-        refreshMem();
-    }));
-    renderMatch(container, main);
 
     main.querySelectorAll('[data-c1p]').forEach(cb => cb.addEventListener('change', () => {
         run.presetIds = [...main.querySelectorAll('[data-c1p]:checked')].map(x => x.dataset.c1p);
@@ -370,6 +409,7 @@ function renderCollect(container, main) {
                 historySummaries: s.history.filter(h => h.id !== s.activeId).map(h => h.summary),
                 presets: runPresets(),
                 memoryTags: wizardMemoryTags(),
+                memorySheets: wizardMemorySheets(),
             });
             view.textContent = `【系统提示词】\n${system}\n\n【用户消息】\n${user}`;
             view.style.display = '';
@@ -387,112 +427,15 @@ function renderCollect(container, main) {
     main.querySelector('#pp_gd_c1_cancel').addEventListener('click', () => { step = ''; renderMain(container); });
 }
 
-// 匹配设置（第 1 步内折叠区）：标签词表 + 打标区域 + 用词表批量打标。
-// 词表与区域存聊天（memoryState），第 1 步勾选的匹配标签只存本次运行
-function renderMatch(container, main) {
-    const box = main.querySelector('#pp_gd_match');
-    const state = memoryState();
-    const sheets = state.mirror.sheets;
-
-    const head = `
-    <div class="pp-item" id="pp_gd_match_head" title="打标签用：词表决定模型能打哪些标签，区域决定给哪些表打">
-        <div class="pp-item-main"><b>匹配设置</b> <span class="pp-muted">标签词表 / 打标区域</span></div>
-        <div class="pp-item-ops"><span class="menu_button" id="pp_gd_match_toggle">${matchOpen ? '收起' : '展开'} <i class="fa-solid fa-chevron-${matchOpen ? 'down' : 'right'}"></i></span></div>
-    </div>`;
-    box.innerHTML = head + (matchOpen ? `
-    <div class="pp-gd-editor">
-        <label class="pp-label" title="勾选参与打标的表格；不勾 = 全部镜像表">打标区域（${sheets.length ? '不勾 = 全部表格' : '镜像里没有表格'}）</label>
-        <div class="pp-gd-selp">
-            ${sheets.map(s => `<label><input type="checkbox" data-msheet="${escapeHtml(s.uid)}" ${!state.matchSheets.length || state.matchSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)}</label>`).join('')}
-        </div>
-        <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签">标签词表（只能从这些名字里选，可加注释）</label>
-        <div id="pp_gd_vocab"></div>
-        <div class="pp-btn-row">
-            <span id="pp_gd_vocab_add" class="menu_button"><i class="fa-solid fa-plus"></i> 加一个标签</span>
-            <label><input type="checkbox" id="pp_gd_tag_over" /> 覆盖已有标签</label>
-            <span id="pp_gd_tag_run" class="menu_button" title="把区域内（默认没标签）的行分批交给模型，按词表打标签"><i class="fa-solid fa-wand-magic-sparkles"></i> 用词表打标签</span>
-        </div>
-        <div id="pp_gd_tag_status" class="pp-muted"></div>
-    </div>` : '');
-
-    box.querySelector('#pp_gd_match_toggle').addEventListener('click', () => {
-        matchOpen = !matchOpen;
-        renderMatch(container, main);
-    });
-    if (!matchOpen) return;
-
-    const vocabBox = box.querySelector('#pp_gd_vocab');
-    const renderVocab = () => {
-        vocabBox.innerHTML = state.matchTags.map((v, i) => `
-        <div class="pp-gd-vocab">
-            <input type="text" class="text_pole textarea_compact" data-vname="${i}" placeholder="标签名（如：背叛）" value="${escapeHtml(v.name ?? '')}" />
-            <input type="text" class="text_pole textarea_compact" data-vnote="${i}" placeholder="注释（可选：什么内容算这个标签）" value="${escapeHtml(v.note ?? '')}" />
-            <span class="menu_button fa-solid fa-trash" data-vdel="${i}" title="删除该标签"></span>
-        </div>`).join('') || '<span class="pp-muted">（词表为空，先加几个标签再打标）</span>';
-        vocabBox.querySelectorAll('[data-vname]').forEach(inp => inp.addEventListener('input', () => {
-            state.matchTags[Number(inp.dataset.vname)].name = inp.value;
-            persistMemory();
-        }));
-        vocabBox.querySelectorAll('[data-vnote]').forEach(inp => inp.addEventListener('input', () => {
-            state.matchTags[Number(inp.dataset.vnote)].note = inp.value;
-            persistMemory();
-        }));
-        vocabBox.querySelectorAll('[data-vdel]').forEach(btn => btn.addEventListener('click', () => {
-            state.matchTags.splice(Number(btn.dataset.vdel), 1);
-            persistMemory();
-            renderVocab();
-        }));
-    };
-    renderVocab();
-
-    box.querySelector('#pp_gd_vocab_add').addEventListener('click', () => {
-        state.matchTags.push({ name: '', note: '' });
-        persistMemory();
-        renderVocab();
-        vocabBox.querySelector('.pp-gd-vocab:last-child [data-vname]')?.focus();
-    });
-    box.querySelectorAll('[data-msheet]').forEach(cb => cb.addEventListener('change', () => {
-        state.matchSheets = [...box.querySelectorAll('[data-msheet]:checked')].map(x => x.dataset.msheet);
-        persistMemory();
-    }));
-
-    box.querySelector('#pp_gd_tag_run').addEventListener('click', async function () {
-        const status = box.querySelector('#pp_gd_tag_status');
-        const vocab = state.matchTags.filter(v => String(v.name ?? '').trim());
-        if (!vocab.length) {
-            toastr.warning('词表为空，先添加标签');
-            return;
-        }
-        this.classList.add('disabled');
-        status.textContent = '打标中……';
-        try {
-            const r = await autoTagByVocabulary({
-                vocab,
-                sheetUids: state.matchSheets,
-                overwrite: box.querySelector('#pp_gd_tag_over').checked,
-                onProgress: (a, b) => { status.textContent = `打标中…… ${a}/${b}`; },
-            });
-            status.textContent = r.total
-                ? `完成：${r.tagged}/${r.total} 行打上标签（词表标签会出现在上方勾选区）`
-                : '没有需要打标的行（都有标签了？勾「覆盖已有标签」重打）';
-            toastr.success(`打标完成：${r.tagged} 行`);
-            renderMain(container);   // 刷新标签勾选区与字数统计
-        } catch (err) {
-            status.textContent = '';
-            toastr.error(String(err.message ?? err));
-        } finally {
-            this.classList.remove('disabled');
-        }
-    });
-}
-
 // 分析前确认：材料清单一目了然，点确认才真正调模型
 function renderReady(container, main) {
     const presets = settings.guidance?.presets ?? [];
-    const stat = collectStats({ memoryTags: wizardMemoryTags() });
-    const memDesc = run.memMatch
-        ? (run.memTags.length ? `按标签（${run.memTags.join('、')}）` : '不附带（未勾标签）')
-        : '全量召回';
+    const stat = collectStats({ memoryTags: wizardMemoryTags(), memorySheets: wizardMemorySheets() });
+    const sheetDesc = run.memSheets == null ? '全部表' : `${run.memSheets.length} 张表`;
+    const memDesc = Array.isArray(run.memSheets) && !run.memSheets.length ? '不附带（未选表格）'
+        : run.memMatch
+            ? (run.memTags.length ? `按标签（${run.memTags.join('、')}）` : '不附带（未勾标签）')
+            : '全量召回';
     main.innerHTML = `
     <div class="pp-section">
         <b>分析前确认</b>
@@ -500,7 +443,7 @@ function renderReady(container, main) {
         <div class="pp-item">
             <div class="pp-item-main">
                 <span>对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${run.presetIds.length}/${presets.length} 启用</span>
-                <span class="pp-muted">记忆表格：${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''} · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}${activeStory() ? ' · 附进行中剧情' : ''}</span>
+                <span class="pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''} · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}${activeStory() ? ' · 附进行中剧情' : ''}</span>
             </div>
         </div>
         <div class="pp-btn-row">
@@ -655,6 +598,7 @@ async function startAnalyze(container, { revise = false } = {}) {
             historySummaries: historySummaries(),
             presets: runPresets(),
             memoryTags: wizardMemoryTags(),
+            memorySheets: wizardMemorySheets(),
         });
         run.result = data.result;
         run.raw = data.raw;
@@ -781,7 +725,7 @@ function renderResult(container, main) {
         step = '';
         Object.assign(run, {
             note: '', presetIds: [], event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
-            memMatch: false, memTags: [], readyFrom: 'event',
+            memSheets: null, memMatch: false, memTags: [], readyFrom: 'event',
         });
         report = null;
         renderStoryBar(container);
