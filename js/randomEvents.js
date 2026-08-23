@@ -87,8 +87,10 @@ export function rollEventPipeline(rng = Math.random) {
         return !kws.length || kws.some(k => scanText.includes(k.toLowerCase()));
     });
 
+    // 板块开关：事件条目被整体关闭时不再走库，全部按维度即兴
+    const useLibrary = settings.events?.sections?.entries !== false;
     const ratio = Math.min(Math.max(Number(settings.events?.libraryRatio ?? 60) || 0, 0), 100) / 100;
-    if (eligible.length && rng() < ratio) {
+    if (useLibrary && eligible.length && rng() < ratio) {
         const pool = eligible.filter(r => rng() < Math.max(Number(r.probability) || 0, 0));
         if (!pool.length) return { mode: 'none', reason: '条目概率未中' };
         const rule = weightedPick(pool, rng);

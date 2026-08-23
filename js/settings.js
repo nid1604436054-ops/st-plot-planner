@@ -38,6 +38,7 @@ const DEFAULTS = {
     events: {
         libraryRatio: 60,   // 掷骰走事件库条目的百分比，其余次数按维度加权走自由生成
         recent: [],         // 最近掷出的事件（防重复与密度规则用）：{title, dimension, source, at}
+        sections: { dims: true, entries: true, ai: true },  // 随机事件页板块开关；entries=false 时掷骰全走即兴
     },
     lorebooks: [],          // M1 世界书库
     injections: [],         // M4 隐身注入项
@@ -73,6 +74,7 @@ function ensureDefaults() {
         store.eventDimensions = JSON.parse(JSON.stringify(DEFAULTS.eventDimensions));
     }
     store.events ??= { libraryRatio: 60, recent: [] };
+    store.events.sections ??= { dims: true, entries: true, ai: true };
     if (Array.isArray(store.eventRules)) {
         const legacyDim = { '偶遇旧识': 'dim-rel', '环境突变': 'dim-env', '意外阻碍': 'dim-friction', '有利线索': 'dim-favor' };
         for (const r of store.eventRules) {

@@ -1,5 +1,5 @@
-// 随机事件页签：三层事件库（维度层 / 条目层 / 掷骰管线）+ AI 建库 + 路人反应校准
-// 掷骰：条目过滤（启用/维度/触发关键词/冷却）→ 概率 → 库内加权；其余比例按维度加权走自由生成
+// 随机事件页签：常用动作置顶（掷骰 / 路人反应校准），事件库配置折叠进底部「事件库设置」
+// 板块开关（settings.events.sections）控制 维度/条目/AI建库 是否出现；关闭「条目」后掷骰全走维度即兴
 // 路人反应卡：引人注目的事 → 显著性/即时反应/扩散链/底线/楼层预算 → 转自动过期注入（逐层换段）
 import { settings, save, newId } from "../../settings.js";
 import {
@@ -9,14 +9,17 @@ import {
 import { generateReactionCard, composeReactionText } from "../../reactions.js";
 import { addInjection } from "../../injection.js";
 import { currentFloor } from "../../context.js";
-import { memoryState, addMirrorRow } from "../../memoryTable.js";
 import { escapeHtml, clamp } from "../../utils.js";
 
 const state = { event: null, sourceLabel: '', busy: false };   // 掷骰产出的事件卡
 let editingDim = null, editingRule = null;                     // 展开编辑中的维度 / 条目 id
 const lib = { dimId: '', count: 5, note: '', preview: [], busy: false };  // AI 建库草稿
 const rx = { what: '', note: '', card: null, busy: false, touched: false }; // 路人反应卡
-let rxMem = { open: false, uid: '', vals: [] };                // 余波写记忆表格的小表单
+const folds = { settings: false, dims: false, entries: false, ai: false }; // 折叠区展开状态（跨重渲染保留）
+
+function sections() {
+    return settings.events?.sections ?? { dims: true, entries: true, ai: true };
+}
 
 export const eventsTab = {
     id: 'events',
@@ -30,45 +33,13 @@ export const eventsTab = {
         container.innerHTML = `
         <div class="pp-section">
             <b>掷骰生成事件</b>
-            <div class="pp-muted">管线：条目过滤（启用 / 维度 / 触发关键词 / 冷却）→ 概率过筛 → 库内加权抽一；其余次数按维度加权走自由生成。同一维度连出两次后暂停一轮，最近出过的事件不再重复。</div>
-            <label class="pp-label">事件库占比（%）：掷骰走事件库条目的比例，其余走维度自由生成</label>
-            <input id="pp_ev_ratio" class="text_pole textarea_compact" type="number" min="0" max="100" step="5" />
+            <div class="pp-muted">掷一次随机遭遇：可能从事件库里抽一个，也可能按维度即兴。刚连出过的维度会歇一轮，最近出过的事件不重复；选一个走向可转为隐身注入。</div>
             <div class="pp-btn-row">
                 <div id="pp_ev_roll" class="menu_button"><i class="fa-solid fa-dice"></i> 掷骰生成事件</div>
             </div>
             <div id="pp_ev_status" class="pp-muted"></div>
         </div>
         <div id="pp_ev_output"></div>
-        <div class="pp-section">
-            <div class="pp-btn-row"><b>事件维度</b><span class="pp-muted" style="margin-left:auto">${(settings.eventDimensions ?? []).length} 个</span></div>
-            <div class="pp-muted">维度是骨架：库内条目按维度分组，自由生成按维度加权抽方向。删除维度不会删条目（条目会变成「未分组」，可再挂回别的维度）。</div>
-            <div id="pp_ev_dims"></div>
-            <div class="pp-btn-row"><span id="pp_ev_dim_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建维度</span></div>
-        </div>
-        <div class="pp-section">
-            <div class="pp-btn-row"><b>事件条目</b><span class="pp-muted" style="margin-left:auto">${settings.eventRules.length} 条</span></div>
-            <div class="pp-muted">轻重口径：轻＝一根针，不自带走向；重＝一个局，不处理会发酵。冷却按掷中时的楼层起算；触发关键词留空 = 不限，填了则最近对话里要出现才算候选。</div>
-            <div id="pp_ev_rules"></div>
-            <div class="pp-btn-row"><span id="pp_ev_rule_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建条目</span></div>
-        </div>
-        <div class="pp-section">
-            <b>AI 建库</b>
-            <div class="pp-muted">选一个维度，让模型按维度气质批量出条目草稿，勾选后并入事件库（概率/权重/冷却用默认值，导入后可再调）。</div>
-            <div class="pp-grid2">
-                <div>
-                    <label class="pp-label">维度</label>
-                    <select id="pp_ev_libdim" class="text_pole textarea_compact"></select>
-                </div>
-                <div>
-                    <label class="pp-label">数量（1-10）</label>
-                    <input id="pp_ev_libcount" class="text_pole textarea_compact" type="number" min="1" max="10" />
-                </div>
-            </div>
-            <label class="pp-label">补充说明（可选：想要的题材、烈度、要避开什么）</label>
-            <textarea id="pp_ev_libnote" class="text_pole textarea_compact" rows="2" placeholder="例：偏日常向，不要涉及警察；重事件占一半"></textarea>
-            <div class="pp-btn-row"><span id="pp_ev_libgen" class="menu_button">生成条目草稿</span></div>
-            <div id="pp_ev_libprev"></div>
-        </div>
         <div class="pp-section">
             <b>路人反应校准</b>
             <div class="pp-muted">模型处理路人反应常走两个极端：每层都全场哗哗地重复，或一笔带过后世界装失忆。这里把「刚发生的引人注目的事」交给模型出一张反应卡：即时反应怎么写、余波怎么随楼层扩散、底线在哪、几层收束。确认后作为隐身注入生效，正文按楼层自动换段，到期自动撤下。</div>
@@ -78,54 +49,10 @@ export const eventsTab = {
             <textarea id="pp_rx_note" class="text_pole textarea_compact" rows="2"></textarea>
             <div class="pp-btn-row"><span id="pp_rx_gen" class="menu_button">生成反应卡</span></div>
             <div id="pp_rx_card"></div>
-        </div>`;
+        </div>
+        <div id="pp_ev_settings_wrap"></div>`;
 
-        const ratio = container.querySelector('#pp_ev_ratio');
-        ratio.value = settings.events?.libraryRatio ?? 60;
-        ratio.addEventListener('change', () => {
-            (settings.events ??= {}).libraryRatio = Math.min(Math.max(Number(ratio.value) || 60, 0), 100);
-            save();
-        });
         container.querySelector('#pp_ev_roll').addEventListener('click', () => roll(container));
-
-        renderDims(container);
-        renderRules(container);
-        // 新建按钮只绑一次（列表渲染函数会被反复调用，不能把按钮绑定放里面）
-        container.querySelector('#pp_ev_dim_add').addEventListener('click', () => {
-            const d = { id: newId('dim-'), name: `维度 ${(settings.eventDimensions ?? []).length + 1}`, weight: 1, enabled: true, prompt: '' };
-            settings.eventDimensions.push(d);
-            editingDim = d.id;
-            save();
-            renderDims(container);
-            renderRules(container);
-            const libDim = container.querySelector('#pp_ev_libdim');
-            libDim.innerHTML = (settings.eventDimensions ?? []).map(x => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.name)}</option>`).join('');
-            libDim.value = d.id;
-            lib.dimId = d.id;
-        });
-        container.querySelector('#pp_ev_rule_add').addEventListener('click', () => {
-            settings.eventRules.push({
-                id: newId('ev-'), name: `事件 ${settings.eventRules.length + 1}`, enabled: true,
-                probability: 0.2, weight: 1, cooldownLayers: 20,
-                dimension: settings.eventDimensions[0]?.id ?? '', severity: 'light', keywords: '', promptHint: '',
-            });
-            editingRule = settings.eventRules[settings.eventRules.length - 1].id;
-            save();
-            renderRules(container);
-        });
-
-        const libDim = container.querySelector('#pp_ev_libdim');
-        libDim.innerHTML = (settings.eventDimensions ?? []).map(d => `<option value="${escapeHtml(d.id)}">${escapeHtml(d.name)}</option>`).join('') || '<option value="">（先建维度）</option>';
-        libDim.value = lib.dimId;
-        libDim.addEventListener('change', () => { lib.dimId = libDim.value; });
-        const libCount = container.querySelector('#pp_ev_libcount');
-        libCount.value = lib.count;
-        libCount.addEventListener('change', () => { lib.count = Math.min(Math.max(Number(libCount.value) || 5, 1), 10); });
-        const libNote = container.querySelector('#pp_ev_libnote');
-        libNote.value = lib.note;
-        libNote.addEventListener('input', () => { lib.note = libNote.value; });
-        container.querySelector('#pp_ev_libgen').addEventListener('click', () => buildLibrary(container));
-        renderLibPreview(container);
 
         const what = container.querySelector('#pp_rx_what');
         what.value = rx.what;
@@ -136,6 +63,7 @@ export const eventsTab = {
         container.querySelector('#pp_rx_gen').addEventListener('click', () => buildReaction(container));
         if (rx.card) renderReactionCard(container);
 
+        renderSettings(container);
         if (state.event) renderEvent(container);
     },
 };
@@ -170,7 +98,7 @@ async function roll(container) {
         }
         renderEvent(container);
         status.textContent = `来自${state.sourceLabel}`;
-        renderRules(container);   // 冷却中的条目状态变了，刷新列表
+        renderRules(container);   // 冷却中的条目状态变了，刷新列表（板块关闭时内部自动跳过）
     } catch (err) {
         status.textContent = '';
         toastr.error(String(err.message ?? err));
@@ -213,11 +141,138 @@ function renderEvent(container) {
 }
 
 // ---------------------------------------------------------------------------
+// 底部折叠设置区：板块开关 + 维度 / 条目 / AI 建库
+// ---------------------------------------------------------------------------
+
+function renderSettings(container) {
+    const wrap = container.querySelector('#pp_ev_settings_wrap');
+    if (!wrap) return;
+    const sec = sections();
+    const fold = (key, title, inner) => `
+        <details class="pp-fold" data-fold="${key}" ${folds[key] ? 'open' : ''}>
+            <summary>${title}</summary>
+            ${inner}
+        </details>`;
+
+    wrap.innerHTML = `
+    <details class="pp-fold pp-fold-root" data-fold="settings" ${folds.settings ? 'open' : ''}>
+        <summary><i class="fa-solid fa-gear"></i> 事件库设置（维度 / 条目 / AI 建库）</summary>
+        <div class="pp-fold-toggles">
+            <label><input type="checkbox" data-sec="dims" ${sec.dims ? 'checked' : ''}/> 事件维度</label>
+            <label><input type="checkbox" data-sec="entries" ${sec.entries ? 'checked' : ''}/> 事件条目</label>
+            <label><input type="checkbox" data-sec="ai" ${sec.ai ? 'checked' : ''}/> AI 建库</label>
+        </div>
+        <div class="pp-muted">不勾的板块从这里消失；关闭「事件条目」后掷骰不再走事件库，全部按维度即兴。</div>
+        ${sec.dims ? fold('dims', `事件维度（${(settings.eventDimensions ?? []).length} 个）`, `
+            <div class="pp-muted">维度是题材分类：即兴事件按它抽方向，库内条目按它分组，改描述就是改即兴事件的口味。删除维度不会删条目（条目会变成「未分组」，可再挂回别的维度）。</div>
+            <div id="pp_ev_dims"></div>
+            <div class="pp-btn-row"><span id="pp_ev_dim_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建维度</span></div>`) : ''}
+        ${sec.entries ? fold('entries', `事件条目（${settings.eventRules.length} 条）`, `
+            <label class="pp-label">事件库占比（%）：掷骰走事件库条目的比例，其余走维度自由生成</label>
+            <input id="pp_ev_ratio" class="text_pole textarea_compact" type="number" min="0" max="100" step="5" />
+            <div class="pp-muted">轻重口径：轻＝一根针，不自带走向；重＝一个局，不处理会发酵。冷却按掷中时的楼层起算；触发关键词留空 = 不限，填了则最近对话里要出现才算候选。</div>
+            <div id="pp_ev_rules"></div>
+            <div class="pp-btn-row"><span id="pp_ev_rule_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建条目</span></div>`) : ''}
+        ${sec.ai ? fold('ai', 'AI 建库', `
+            <div class="pp-muted">选一个维度，让模型按维度气质批量出条目草稿，勾选后并入事件库（概率/权重/冷却用默认值，导入后可再调）。</div>
+            <div class="pp-grid2">
+                <div>
+                    <label class="pp-label">维度</label>
+                    <select id="pp_ev_libdim" class="text_pole textarea_compact"></select>
+                </div>
+                <div>
+                    <label class="pp-label">数量（1-10）</label>
+                    <input id="pp_ev_libcount" class="text_pole textarea_compact" type="number" min="1" max="10" />
+                </div>
+            </div>
+            <label class="pp-label">补充说明（可选：想要的题材、烈度、要避开什么）</label>
+            <textarea id="pp_ev_libnote" class="text_pole textarea_compact" rows="2" placeholder="例：偏日常向，不要涉及警察；重事件占一半"></textarea>
+            <div class="pp-btn-row"><span id="pp_ev_libgen" class="menu_button">生成条目草稿</span></div>
+            <div id="pp_ev_libprev"></div>`) : ''}
+    </details>`;
+
+    // 折叠状态记忆（toggle 事件不冒泡，逐个绑定）
+    wrap.querySelectorAll('details[data-fold]').forEach(el =>
+        el.addEventListener('toggle', () => { folds[el.dataset.fold] = el.open; }));
+
+    // 板块开关：写入设置并重建本区块
+    wrap.querySelectorAll('[data-sec]').forEach(cb => cb.addEventListener('change', () => {
+        (settings.events ??= {}).sections ??= { dims: true, entries: true, ai: true };
+        settings.events.sections[cb.dataset.sec] = cb.checked;
+        save();
+        renderSettings(container);
+    }));
+
+    const ratio = wrap.querySelector('#pp_ev_ratio');
+    if (ratio) {
+        ratio.value = settings.events?.libraryRatio ?? 60;
+        ratio.addEventListener('change', () => {
+            (settings.events ??= {}).libraryRatio = Math.min(Math.max(Number(ratio.value) || 60, 0), 100);
+            save();
+        });
+    }
+
+    // 新建按钮只在这里绑（renderDims/renderRules 会被反复调用，不能把按钮绑定放里面）
+    wrap.querySelector('#pp_ev_dim_add')?.addEventListener('click', () => {
+        const d = { id: newId('dim-'), name: `维度 ${(settings.eventDimensions ?? []).length + 1}`, weight: 1, enabled: true, prompt: '' };
+        settings.eventDimensions.push(d);
+        editingDim = d.id;
+        save();
+        renderDims(container);
+        renderRules(container);
+        const sel = container.querySelector('#pp_ev_libdim');
+        if (sel) {
+            fillLibDimSelect(sel);
+            lib.dimId = d.id;
+            sel.value = d.id;
+        }
+    });
+    wrap.querySelector('#pp_ev_rule_add')?.addEventListener('click', () => {
+        settings.eventRules.push({
+            id: newId('ev-'), name: `事件 ${settings.eventRules.length + 1}`, enabled: true,
+            probability: 0.2, weight: 1, cooldownLayers: 20,
+            dimension: settings.eventDimensions[0]?.id ?? '', severity: 'light', keywords: '', promptHint: '',
+        });
+        editingRule = settings.eventRules[settings.eventRules.length - 1].id;
+        save();
+        renderRules(container);
+    });
+
+    const libSel = wrap.querySelector('#pp_ev_libdim');
+    if (libSel) {
+        fillLibDimSelect(libSel);
+        libSel.addEventListener('change', () => { lib.dimId = libSel.value; });
+    }
+    const libCount = wrap.querySelector('#pp_ev_libcount');
+    if (libCount) {
+        libCount.value = lib.count;
+        libCount.addEventListener('change', () => { lib.count = Math.min(Math.max(Number(libCount.value) || 5, 1), 10); });
+    }
+    const libNote = wrap.querySelector('#pp_ev_libnote');
+    if (libNote) {
+        libNote.value = lib.note;
+        libNote.addEventListener('input', () => { lib.note = libNote.value; });
+    }
+    wrap.querySelector('#pp_ev_libgen')?.addEventListener('click', () => buildLibrary(container));
+
+    renderDims(container);
+    renderRules(container);
+    renderLibPreview(container);
+}
+
+function fillLibDimSelect(sel) {
+    sel.innerHTML = (settings.eventDimensions ?? []).map(d => `<option value="${escapeHtml(d.id)}">${escapeHtml(d.name)}</option>`).join('')
+        || '<option value="">（先建维度）</option>';
+    if (lib.dimId && (settings.eventDimensions ?? []).some(d => d.id === lib.dimId)) sel.value = lib.dimId;
+}
+
+// ---------------------------------------------------------------------------
 // 维度层
 // ---------------------------------------------------------------------------
 
 function renderDims(container) {
     const list = container.querySelector('#pp_ev_dims');
+    if (!list) return;
     const dims = settings.eventDimensions ?? [];
     list.innerHTML = dims.map(d => `
         <div class="pp-item">
@@ -293,6 +348,7 @@ function ruleChips(r, floor) {
 
 function renderRules(container) {
     const list = container.querySelector('#pp_ev_rules');
+    if (!list) return;
     const rules = settings.eventRules;
     const floor = currentFloor();
     const dimOptions = ['<option value="">（未分组，不参与掷骰）</option>']
@@ -436,6 +492,7 @@ async function buildLibrary(container) {
 
 function renderLibPreview(container) {
     const box = container.querySelector('#pp_ev_libprev');
+    if (!box) return;
     if (!lib.preview.length) {
         box.innerHTML = '';
         return;
@@ -528,10 +585,8 @@ function renderReactionCard(container) {
             <textarea id="pp_rx_text" class="text_pole textarea_compact" rows="10">${escapeHtml(composeReactionText(card, 0))}</textarea>
             <div class="pp-btn-row">
                 <span id="pp_rx_ok" class="menu_button">确认，转为隐身注入</span>
-                <span id="pp_rx_mem" class="menu_button" title="把这条余波的长期后果写进记忆表格的一行（过期撤下后记忆仍在）">余波写入记忆表格</span>
             </div>
-        </div>
-        <div id="pp_rx_memform" style="display:none"></div>`;
+        </div>`;
 
     const textEl = box.querySelector('#pp_rx_text');
     const floorsEl = box.querySelector('#pp_rx_floors');
@@ -567,60 +622,5 @@ function renderReactionCard(container) {
         });
         toastr.success(`已注入，${card.floors} 层后自动撤下（正文逐层推进扩散段）`);
         document.dispatchEvent(new CustomEvent('pp-switch-tab', { detail: { id: 'injections' } }));
-    });
-
-    box.querySelector('#pp_rx_mem').addEventListener('click', () => {
-        rxMem.open = !rxMem.open;
-        renderRxMemForm(container);
-    });
-    renderRxMemForm(container);
-}
-
-function renderRxMemForm(container) {
-    const form = container.querySelector('#pp_rx_memform');
-    if (!form) return;
-    if (!rxMem.open) {
-        form.style.display = 'none';
-        return;
-    }
-    form.style.display = '';
-    const sheets = memoryState().mirror.sheets;
-    if (!sheets.length) {
-        form.innerHTML = '<div class="pp-muted">镜像里还没有表：先去「记忆表格」页同步或建表</div>';
-        return;
-    }
-    if (!sheets.some(s => s.uid === rxMem.uid)) {
-        rxMem.uid = sheets[0].uid;
-        rxMem.vals = [];
-    }
-    const sheet = sheets.find(s => s.uid === rxMem.uid);
-    const prefill = i => rxMem.vals[i] ?? (i === 0 ? `路人余波：${(rx.what || '').slice(0, 30)}` : '');
-    form.innerHTML = `
-        <div class="pp-gd-editor">
-            <label class="pp-label">写入哪张镜像表</label>
-            <select id="pp_rx_memsheet" class="text_pole">${sheets.map(s => `<option value="${escapeHtml(s.uid)}" ${s.uid === rxMem.uid ? 'selected' : ''}>${escapeHtml(s.name)}（${s.rows.length} 行）</option>`).join('')}</select>
-            ${sheet.columns.map((c, i) => `
-            <label class="pp-label">${escapeHtml(c || `第 ${i + 1} 列`)}</label>
-            <input type="text" class="text_pole" data-rxcol="${i}" value="${escapeHtml(prefill(i))}" />`).join('')}
-            <div class="pp-btn-row"><span id="pp_rx_memsave" class="menu_button">写入一行</span></div>
-        </div>`;
-    form.querySelector('#pp_rx_memsheet').addEventListener('change', e => {
-        rxMem.uid = e.target.value;
-        rxMem.vals = [];
-        renderRxMemForm(container);
-    });
-    form.querySelectorAll('[data-rxcol]').forEach(inp => inp.addEventListener('input', () => {
-        rxMem.vals[Number(inp.dataset.rxcol)] = inp.value;
-    }));
-    form.querySelector('#pp_rx_memsave').addEventListener('click', () => {
-        const cols = sheet.columns.map((_, i) => rxMem.vals[i] ?? '');
-        if (!cols.some(v => v.trim())) {
-            toastr.warning('至少填一列内容');
-            return;
-        }
-        addMirrorRow(rxMem.uid, cols);
-        toastr.success(`已写入「${sheet.name}」一行`);
-        rxMem.open = false;
-        renderRxMemForm(container);
     });
 }

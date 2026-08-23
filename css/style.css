@@ -654,3 +654,36 @@
     margin: 4px 0;
     word-break: break-word;
 }
+
+/* 随机事件页：底部折叠设置区（事件库设置）与板块开关行 */
+.pp-fold {
+    border: 1px solid var(--SmartThemeBorderColor, #666);
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin: 8px 0;
+}
+
+.pp-fold > summary {
+    cursor: pointer;
+    font-weight: bold;
+    user-select: none;
+}
+
+.pp-fold[open] > summary {
+    margin-bottom: 8px;
+}
+
+.pp-fold-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin: 6px 0;
+}
+
+.pp-fold-toggles label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
