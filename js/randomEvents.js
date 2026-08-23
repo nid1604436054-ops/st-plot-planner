@@ -12,6 +12,7 @@ import { extractJson } from "./utils.js";
 const EVENT_SYSTEM_PROMPT = '你是文字角色扮演的随机遭遇生成器。基于当前情境与给定的事件方向，'
     + '生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
     + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'
+    + '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。'
     + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
     + '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
     + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ] }\n'
@@ -182,6 +183,7 @@ export async function generateFreeRandomEvent({ dimension = null, useLibrary = f
         + '轻重自定、宁重不轻（过轻会执行敷衍），但危机必须留出口。'
         + (dimension ? '用户指定了维度，按该维度的气质展开。' : '')
         + (useLibrary ? '用户提供了事件库条目，可从中选一个方向展开，也可另起更契合当前情境的事件。' : '')
+        + '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。'
         + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
         + schema + '\noptions 给 3 个左右。';
 
@@ -217,6 +219,7 @@ export async function generateAiChoiceRandomEvent({ dimensions = [] } = {}) {
         + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'
         + '用户给出了维度清单：由你判断哪个维度最贴合当前剧情氛围，从中挑一个（只能挑清单里的），按它的气质展开。'
         + '轻重自定、宁重不轻（过轻会执行敷衍），但危机必须留出口。'
+        + '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。'
         + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
         + '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
         + '"dimension": "你选用的维度名（必须与清单里的一致）", '
@@ -245,6 +248,7 @@ export async function generateEventEntries({ dimension, count = 5, note = '' } =
     const system = '你是文字角色扮演随机事件库的设计师，为给定「维度」批量设计事件条目。'
         + '要求：贴维度气质；轻重搭配、宁重不轻（重＝一个局，不处理会发酵；轻＝一根针，不自带走向）；'
         + 'name 是 2-6 字的事件名；promptHint 一句话写清触发情境与张力方向（30-60 字）；不与已有条目重复或近似。'
+        + '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。'
         + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
         + '{ "entries": [ { "name": "…", "promptHint": "…", "severity": "light|heavy" } ] }';
     const existing = (settings.eventRules ?? []).map(r => r.name).join('、') || '（空）';
