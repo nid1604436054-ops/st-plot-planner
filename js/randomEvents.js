@@ -1,5 +1,5 @@
 // M3 随机事件（三层结构）：维度层（骨架/方向池）→ 条目层（事件库）→ 掷骰管线
-// 管线：条目过滤（启用/维度/触发关键词/冷却）→ 概率过筛 → 库内加权抽一；
+// 管线：条目过滤（启用/维度/触发关键词/冷却）→ 库内「权重×概率」加权抽一（必出一条）；
 // 其余次数按维度加权走「自由生成」（空库自动全走自由）。
 // 设计取向（吸收用户 NPC_Reaction 预设）：轻重有别（轻＝一根针，重＝一个局）、宁重不轻、
 // 危机可重但出口必须存在、密度受控（同维度连出两次暂停一轮、最近事件防重复）。
@@ -51,12 +51,12 @@ function ruleOnCooldown(rule, floor) {
     return cd > 0 && rule.lastFloor != null && floor - rule.lastFloor < cd;
 }
 
-function weightedPick(list, rng) {
-    const total = list.reduce((s, x) => s + Math.max(Number(x.weight) || 0, 0), 0);
+function weightedPick(list, rng, weightOf = x => Math.max(Number(x.weight) || 0, 0)) {
+    const total = list.reduce((s, x) => s + weightOf(x), 0);
     if (total <= 0) return list[Math.floor(rng() * list.length)];
     let pick = rng() * total;
     for (const x of list) {
-        pick -= Math.max(Number(x.weight) || 0, 0);
+        pick -= weightOf(x);
         if (pick <= 0) return x;
     }
     return list[list.length - 1];
@@ -91,9 +91,9 @@ export function rollEventPipeline(rng = Math.random) {
     const useLibrary = settings.events?.sections?.entries !== false;
     const ratio = Math.min(Math.max(Number(settings.events?.libraryRatio ?? 60) || 0, 0), 100) / 100;
     if (useLibrary && eligible.length && rng() < ratio) {
-        const pool = eligible.filter(r => rng() < Math.max(Number(r.probability) || 0, 0));
-        if (!pool.length) return { mode: 'none', reason: '条目概率未中' };
-        const rule = weightedPick(pool, rng);
+        // 触发概率并入权重参与抽取：概率只改变相对命中率，掷骰必出一条（全 0 时退化为等权抽一）
+        const rule = weightedPick(eligible, rng,
+            r => Math.max(Number(r.weight) || 0, 0) * Math.max(Number(r.probability) || 0, 0));
         return { mode: 'library', rule, dimension: dims.find(d => d.id === rule.dimension) ?? null };
     }
     return { mode: 'free', dimension: weightedPick(openDims, rng) };

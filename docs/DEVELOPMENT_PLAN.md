@@ -231,14 +231,14 @@ UI：世界书页签 = 导入按钮 ×2 + 书籍列表（启用/删除）+「检
 ```ts
 interface EventRule {
   id: string; name: string; enabled: boolean;
-  probability: number;      // 触发概率 0-1
-  weight: number;           // 命中后的加权权重
+  probability: number;      // 触发概率 0-1（与权重相乘参与抽取）
+  weight: number;           // 加权权重（与概率相乘）
   cooldownLayers: number;   // 冷却：间隔多少层消息才可能再次触发
   promptHint: string;       // 事件方向提示，喂给生成提示词
 }
 ```
 
-掷骰算法：`probability` 过筛 → 命中池内按 `weight` 加权随机取一。
+掷骰算法：合格条目按 `weight × probability` 加权随机取一，必出一条（不会因概率未中而空手）。
 冷却：记录 `lastTriggerLayer`，当前消息层数差小于 `cooldownLayers` 则不入池
 （自动判定挂 `MESSAGE_RECEIVED` 钩子，Phase 3 实现；当前为手动掷骰）。
 
@@ -419,3 +419,4 @@ st-plot-planner/
 | 2026-08-22 | 初版：确认五模块方案与关键决策；完成 Phase 0 骨架与 Phase 1-5 的基础实现 |
 | 2026-08-22 | 修复 1.15.0 加载失败（[object Event]）：ST 内部导入由相对层级改为绝对路径；符号位置以 1.15.0 实测为准（setExtensionPrompt/枚举/事件由 script.js 再导出，extension_settings 在 extensions.js，getContext 走全局 SillyTavern）；兼容基线定为 1.15.0 |
 | 2026-08-23 | 移除「隐身注入」独立页签：注入产生并入剧情指导 / 随机事件 / 路人反应各入口，管理收进设置页底部折叠区；密封模式移除（隐藏信息并入剧情规划隐藏剧本），历史密封条目保留在设置中、列表只显示指纹 |
+| 2026-08-23 | 掷骰不再空手：走库时删除「触发概率独立过筛、可能全灭」环节，概率并入权重相乘抽取，必定抽出一条 |

@@ -470,7 +470,7 @@ function renderEvent(container, main) {
         </div>
         <div class="pp-btn-row">
             <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰，直接让模型即兴生成"><i class="fa-solid fa-dice"></i> 大模型随机</span>
-            <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：条目过滤（启用/维度/触发关键词/冷却）→ 概率 → 库内加权抽一；其余比例按维度加权走自由生成（占比在「随机事件」页配置）"><i class="fa-solid fa-dice-three"></i> 掷骰（库/自由）</span>
+            <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：条目过滤（启用/维度/触发关键词/冷却）→ 按权重×概率抽一条（必出）；其余比例按维度加权走自由生成（占比在「随机事件」页配置）"><i class="fa-solid fa-dice-three"></i> 掷骰（库/自由）</span>
         </div>
         <label class="pp-label">或自己给指导意见（不掷骰，直接写事件/走向想法）</label>
         <textarea id="pp_gd_ev_manual" class="text_pole textarea_compact" rows="2"></textarea>

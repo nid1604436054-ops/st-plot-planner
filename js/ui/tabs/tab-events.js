@@ -77,7 +77,7 @@ async function roll(container) {
     const status = container.querySelector('#pp_ev_status');
     const r = rollEventPipeline();
     if (r.mode === 'none') {
-        status.textContent = `本次未掷出事件（${r.reason}），可再掷一次`;
+        status.textContent = `本次未掷出事件（${r.reason}）`;
         state.event = null;
         container.querySelector('#pp_ev_output').innerHTML = '';
         return;
@@ -387,13 +387,13 @@ function renderRules(container) {
                     </select>
                 </div>
                 <div>
-                    <label class="pp-label">触发概率（0-1）</label>
+                    <label class="pp-label">触发概率（0-1，越大越容易掷中）</label>
                     <input type="number" class="text_pole" min="0" max="1" step="0.05" data-rprob="${r.id}" value="${r.probability ?? 0.2}" />
                 </div>
             </div>
             <div class="pp-grid2">
                 <div>
-                    <label class="pp-label">权重（候选池内抽中占比）</label>
+                    <label class="pp-label">权重（与概率相乘决定抽中占比）</label>
                     <input type="number" class="text_pole" min="0" step="0.5" data-rweight="${r.id}" value="${r.weight ?? 1}" />
                 </div>
                 <div>
