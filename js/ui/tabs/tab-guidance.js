@@ -1,14 +1,16 @@
-// 剧情指导页签：分步规划向导
+// 剧情指导页签：分步规划向导 + 随机事件工具区（原独立页签并入，挂在页面底部）
 // ① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签）+ 预设临时勾选 + 剧情构思）→ ② 随机事件闸口（可跳过）
 // → ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
 // 确认采用的规划存为「进行中剧情」（story.js，跟聊天文件走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
 // 跳过随机事件的路径会先停在「分析前确认」页，点确认才真正调模型。
 // 另有「检查当前剧情」：对照进行中剧情出执行报告（完成度/推进/文风/OOC/其他/建议）
+// 向导第 2 步与底部工具区的掷骰共用同一条管线与「参考事件库 / 顺带出预览剧情」勾选（eventsPrefs）
 import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, GUIDANCE_SYSTEM_PROMPT } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
 import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
 import { storyState, activeStory, confirmPlot, endActive, attachReport, deleteStory, clearHistory } from "../../story.js";
+import { renderEventsTools, eventsPrefs, resetEventsTools } from "./tab-events.js";
 import { memoryState } from "../../memoryTable.js";
 import { getTavernContext } from "../../context.js";
 import { escapeHtml } from "../../utils.js";
@@ -26,8 +28,8 @@ const run = {
     memTags: [],         // 按标签匹配时勾选的标签名
     readyFrom: 'event',  // 分析前确认页的「返回」回到哪一步
 };
-// ② 随机事件闸口的界面状态
-const ev = { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false };
+// ② 随机事件闸口的界面状态（「参考事件库 / 顺带出预览剧情」勾选在 eventsPrefs，与底部工具区共用）
+const ev = { mode: null, event: null, choiceIdx: null, opinion: '', busy: false };
 // 进行中剧情全文 / 历史列表是否展开；历史里展开查看的条目 id（均只存内存）
 let showActive = false, showHistory = false, viewHistId = null;
 let report = null;      // 最近一次检查报告（内存缓存，正式存档在 story 条目上）
@@ -43,10 +45,12 @@ export const guidanceTab = {
         container.innerHTML = `
         <div class="pp-section" id="pp_gd_storybar"></div>
         <div id="pp_gd_main"></div>
-        <div class="pp-section" id="pp_gd_preset"></div>`;
+        <div class="pp-section" id="pp_gd_preset"></div>
+        <div id="pp_gd_events"></div>`;
         renderStoryBar(container);
         renderMain(container);
         renderPreset(container);
+        renderEventsTools(container.querySelector('#pp_gd_events'));
     },
 };
 
@@ -58,7 +62,8 @@ export function resetGuidance() {
         note: '', presetIds: [], event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
         memSheets: null, memMatch: false, memTags: [], readyFrom: 'event',
     });
-    Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false });
+    Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', busy: false });
+    resetEventsTools();   // 底部随机事件工具区的事件卡 / 反应卡也是当前聊天的内容
     showActive = false; showHistory = false; viewHistId = null; report = null;
     const container = document.getElementById('pp_tab_content');
     if (container?.querySelector('#pp_gd_storybar')) guidanceTab.render(container);
@@ -465,8 +470,8 @@ function renderEvent(container, main) {
         <b>第 2 步 · 随机事件闸口</b>
         <div class="pp-muted">可选。不想要事件就直接跳过；选定的事件/意见会作为「随机事件」材料融入本次规划。</div>
         <div class="pp-gd-selp">
-            <label title="把事件库规则的名称与提示给模型参考，可从中选方向也可另起"><input type="checkbox" id="pp_gd_ev_lib" ${ev.useLibrary ? 'checked' : ''}/> 参考事件库</label>
-            <label title="事件生成的同时让模型顺带给一版后续走向预览（仅供参考，正式规划仍走第 3 步分析）"><input type="checkbox" id="pp_gd_ev_prev" ${ev.wantPreview ? 'checked' : ''}/> 顺带出预览剧情</label>
+            <label title="把事件库规则的名称与提示给模型参考，可从中选方向也可另起"><input type="checkbox" id="pp_gd_ev_lib" ${eventsPrefs.useLibrary ? 'checked' : ''}/> 参考事件库</label>
+            <label title="事件生成的同时让模型顺带给一版后续走向预览（仅供参考，正式规划仍走第 3 步分析）"><input type="checkbox" id="pp_gd_ev_prev" ${eventsPrefs.wantPreview ? 'checked' : ''}/> 顺带出预览剧情</label>
         </div>
         <div class="pp-btn-row">
             <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰，直接让模型即兴生成"><i class="fa-solid fa-dice"></i> 大模型随机</span>
@@ -486,32 +491,38 @@ function renderEvent(container, main) {
     const manual = main.querySelector('#pp_gd_ev_manual');
     manual.value = ev.opinion;
     manual.addEventListener('input', () => { ev.opinion = manual.value; });
-    main.querySelector('#pp_gd_ev_lib').addEventListener('change', e => { ev.useLibrary = e.target.checked; });
-    main.querySelector('#pp_gd_ev_prev').addEventListener('change', e => { ev.wantPreview = e.target.checked; });
+    main.querySelector('#pp_gd_ev_lib').addEventListener('change', e => { eventsPrefs.useLibrary = e.target.checked; });
+    main.querySelector('#pp_gd_ev_prev').addEventListener('change', e => { eventsPrefs.wantPreview = e.target.checked; });
 
     const out = main.querySelector('#pp_gd_ev_out');
     const status = main.querySelector('#pp_gd_status');
     if (ev.event) renderEvCard(out);
 
     main.querySelector('#pp_gd_ev_llm').addEventListener('click', async () => {
+        if (ev.busy) return;
+        ev.busy = true;
         status.textContent = '大模型随机生成中……';
         try {
             ev.mode = 'llm';
-            ev.event = await generateFreeRandomEvent({ useLibrary: ev.useLibrary, wantPreview: ev.wantPreview });
+            ev.event = await generateFreeRandomEvent({ useLibrary: eventsPrefs.useLibrary, wantPreview: eventsPrefs.wantPreview });
             ev.choiceIdx = null;
             renderEvCard(out);
             status.textContent = '已生成（点选项选定走向，也可都不选只当参考）';
         } catch (err) {
             status.textContent = '';
             toastr.error(String(err.message ?? err));
+        } finally {
+            ev.busy = false;
         }
     });
     main.querySelector('#pp_gd_ev_roll').addEventListener('click', async () => {
+        if (ev.busy) return;
         const r = rollEventPipeline();
         if (r.mode === 'none') {
             status.textContent = `本次未掷出事件（${r.reason}），可再掷或改用「大模型随机」`;
             return;
         }
+        ev.busy = true;
         status.textContent = r.mode === 'library'
             ? `掷中「${r.rule.name}」，生成中……`
             : r.mode === 'ai'
@@ -531,7 +542,7 @@ function renderEvent(container, main) {
                 status.textContent = `来自AI 自主${dim ? `·维度「${dim.name}」` : ''}`;
             } else {
                 ev.mode = 'free';
-                ev.event = await generateFreeRandomEvent({ dimension: r.dimension, useLibrary: ev.useLibrary, wantPreview: ev.wantPreview });
+                ev.event = await generateFreeRandomEvent({ dimension: r.dimension, useLibrary: eventsPrefs.useLibrary, wantPreview: eventsPrefs.wantPreview });
                 commitRolledEvent({ dimension: r.dimension, title: ev.event.title, source: 'free' });
                 status.textContent = `来自维度「${r.dimension.name}」自由生成`;
             }
@@ -540,6 +551,8 @@ function renderEvent(container, main) {
         } catch (err) {
             status.textContent = '';
             toastr.error(String(err.message ?? err));
+        } finally {
+            ev.busy = false;
         }
     });
     main.querySelector('#pp_gd_ev_done').addEventListener('click', () => {
