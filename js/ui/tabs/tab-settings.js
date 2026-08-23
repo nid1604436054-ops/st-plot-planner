@@ -1,8 +1,9 @@
-// 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数
+// 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数 + 生效中注入的管理
 // 配置直接放在主面板里，魔法棒 → 剧情规划器 → 设置，无需再去扩展面板
 import { settings, save } from "../../settings.js";
 import { testConnection, fetchModels, searchWeb } from "../../api.js";
-import { escapeHtml } from "../../utils.js";
+import { updateInjection, removeInjection } from "../../injection.js";
+import { escapeHtml, clamp, fingerprint } from "../../utils.js";
 
 // 拉取过的模型列表缓存：页签每次激活都会重渲染，缓存避免切换后下拉列表丢失
 let modelIds = [];
@@ -119,6 +120,13 @@ export const settingsTab = {
             <hr class="pp-hr" />
             <label class="pp-label" title="「剧情指导 / 随机事件」调用大模型时，附带最近几层对话当上下文（只影响本插件的规划请求，不影响主对话）；0 = 不限（有多少层带多少层）">规划时附带最近几层对话（0 = 不限）</label>
             <input id="pp_set_ctx" class="text_pole textarea_compact" type="number" min="0" max="200" />
+        </div>
+        <div class="pp-section">
+            <details class="pp-fold" id="pp_set_injfold">
+                <summary><i class="fa-solid fa-eye-slash"></i> 生效中的隐身注入（查看 / 提前撤下）</summary>
+                <span class="pp-muted">剧情规划、随机事件、路人反应确认后都以隐身注入生效：模型能看到，聊天界面不显示。带层数的到期自动撤下；剧情注入随「结束剧情」撤下。这里统一查看与提前处理。</span>
+                <div id="pp_set_injlist"></div>
+            </details>
         </div>`;
 
         const bind = (id, get, set) => {
@@ -226,5 +234,55 @@ export const settingsTab = {
                 this.classList.remove('disabled');
             }
         });
+
+        renderInjList(container);
     },
 };
+
+// ---------------------------------------------------------------------------
+// 生效中的隐身注入：各功能确认后创建，这里只做查看 / 停用 / 删除
+// ---------------------------------------------------------------------------
+
+function injSourceName(item) {
+    if (item.source === 'reaction') return '路人反应';
+    const names = { manual: '手动', event: '随机事件', planner: '剧情规划', story: '剧情绑定' };
+    return names[item.source] ?? item.source ?? '手动';
+}
+
+function renderInjList(container) {
+    const list = container.querySelector('#pp_set_injlist');
+    if (!list) return;
+    if (!settings.injections.length) {
+        list.innerHTML = '<div class="pp-muted">暂无生效中的注入</div>';
+        return;
+    }
+    list.innerHTML = settings.injections.slice().reverse().map(i => `
+        <div class="pp-item">
+            <div class="pp-item-main">
+                <span class="pp-item-title">${escapeHtml(i.label)}</span>
+                <span class="pp-muted">
+                    深度 ${i.depth ?? 4} · ${i.scope === 'global' ? '全局' : '本聊天'} · 来源 ${injSourceName(i)}
+                    ${i.expires?.type === 'layers' ? ` · ${i.age ?? 0}/${i.expires.layers} 层` : ''}${i.enabled ? '' : ' · 已停用'}
+                </span>
+                ${i.mode === 'sealed'
+                    ? `<span class="pp-muted">密封内容（历史条目） · ${fingerprint(i.content)}</span>`
+                    : `<span class="pp-muted">${escapeHtml(clamp(i.content, 100))}</span>`}
+            </div>
+            <div class="pp-item-ops">
+                <label><input type="checkbox" data-inj-en="${i.id}" ${i.enabled ? 'checked' : ''} /> 启用</label>
+                <span class="menu_button fa-solid fa-trash" data-inj-del="${i.id}" title="删除"></span>
+            </div>
+        </div>`).join('');
+
+    list.querySelectorAll('[data-inj-en]').forEach(el => el.addEventListener('change', () => {
+        const item = settings.injections.find(x => x.id === el.dataset.injEn);
+        if (!item) return;
+        item.enabled = el.checked;
+        updateInjection(item);
+        renderInjList(container);
+    }));
+    list.querySelectorAll('[data-inj-del]').forEach(el => el.addEventListener('click', () => {
+        removeInjection(el.dataset.injDel);
+        renderInjList(container);
+    }));
+}

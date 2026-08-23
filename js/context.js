@@ -1,5 +1,5 @@
 // 上下文收集：对酒馆 getContext() 的唯一依赖点（版本兼容层，见开发方案 §4）
-// 规划 / 事件 / 密封生成统一从这里取聊天记录与角色卡摘要
+// 规划 / 检查报告 / 事件生成统一从这里取聊天记录与角色卡摘要
 import { clamp } from "./utils.js";
 
 export function getTavernContext() {

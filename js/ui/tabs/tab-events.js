@@ -116,7 +116,7 @@ function renderEvent(container) {
             <b>${escapeHtml(ev.title ?? '随机事件')}</b>
             <div>${escapeHtml(ev.description ?? '')}</div>
             ${options.map((o, i) => `<div class="menu_button pp-option" data-opt="${i}">${escapeHtml(o.label ?? '')}</div>`).join('')}
-            <div class="pp-muted">选择一个走向后将转为隐身注入（明盘，20 层后自动过期）</div>
+            <div class="pp-muted">选择一个走向后转为隐身注入（模型可见、聊天界面不显示，20 层后自动撤下）</div>
         </div>`;
 
     container.querySelectorAll('[data-opt]').forEach(el => el.addEventListener('click', () => {
@@ -135,8 +135,7 @@ function renderEvent(container) {
             createdAt: Date.now(),
             expires: { type: 'layers', layers: 20 },
         });
-        toastr.success('已注入');
-        document.dispatchEvent(new CustomEvent('pp-switch-tab', { detail: { id: 'injections' } }));
+        toastr.success('已注入，20 层后自动撤下（设置页底部可提前撤下）');
     }));
 }
 
@@ -620,7 +619,6 @@ function renderReactionCard(container) {
             reaction,
             age: 0,
         });
-        toastr.success(`已注入，${card.floors} 层后自动撤下（正文逐层推进扩散段）`);
-        document.dispatchEvent(new CustomEvent('pp-switch-tab', { detail: { id: 'injections' } }));
+        toastr.success(`已注入，${card.floors} 层后自动撤下（正文逐层推进扩散段；设置页底部可提前撤下）`);
     });
 }

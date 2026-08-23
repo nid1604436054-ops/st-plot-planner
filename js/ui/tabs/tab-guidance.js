@@ -760,8 +760,7 @@ function renderResult(container, main) {
             createdAt: Date.now(),
             expires: inj.expires === 'layers' ? { type: 'layers', layers: inj.layers } : { type: 'never' },
         });
-        toastr.success('已注入（明盘：模型可见，聊天界面不显示）');
-        document.dispatchEvent(new CustomEvent('pp-switch-tab', { detail: { id: 'injections' } }));
+        toastr.success('已注入（模型可见、聊天界面不显示；设置页底部可提前撤下）');
     });
 }
 

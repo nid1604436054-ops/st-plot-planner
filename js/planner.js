@@ -203,33 +203,3 @@ export async function runStoryReview({ planText = '', userNote = '', presets } =
     ]);
     return { result: extractJson(raw), raw, hits: hits.length };
 }
-
-// 密封注入内容生成：给模型一段幕后设定（如对手手牌），调用方不展示给用户（开发方案 §M4）
-export async function generateSealedContent(instruction) {
-    const chatList = collectRecentChat(settings.retrieval.contextLayers);
-    const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
-    const loreText = buildLoreContext(scanLorebooks(scanText));
-
-    const raw = await chatCompletion({
-        messages: [
-            {
-                role: 'system',
-                content: '你是角色扮演的幕后设定生成器。根据指令与上下文生成一段仅供扮演模型私下参考的设定文本'
-                    + '（例如隐藏身份、暗牌、未公开的动机或事实）。直接输出设定内容本身：不要标题、不要解释、不要 JSON。'
-                    + '内容需自包含、具体、可直接作为后续扮演的依据。',
-            },
-            {
-                role: 'user',
-                content: [
-                    '## 生成指令',
-                    String(instruction),
-                    '## 最近对话',
-                    formatChatLog(chatList),
-                    '## 世界书命中',
-                    loreText,
-                ].join('\n\n'),
-            },
-        ],
-    });
-    return raw.trim();
-}
