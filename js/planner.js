@@ -1,6 +1,6 @@
 // M2 剧情指导：检查（OOC/剧情重复/文风重复/进度）+ 剧情规划（隐藏剧本）+ 检查报告
 // 与 M3 共用「上下文收集 + 世界书检索 + 独立 API」管线，全程不碰主对话连接
-import { chatCompletion } from "./api.js";
+import { chatCompletion, chatCompletionWithTools, searchToolReady } from "./api.js";
 import { collectRecentChat, formatChatLog, characterSummary } from "./context.js";
 import { scanLorebooks, buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
@@ -76,6 +76,20 @@ function withPresets(base, custom) {
     return custom ? `${base}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n${custom}` : base;
 }
 
+// 剧情分析 / 检查报告的统一出口：搜索工具配置齐且开启时，把 web_search 交给模型自主调用
+// （并提示它什么情况该搜）；端点不支持 tools 参数时由 chatCompletionWithTools 自动降级为普通请求
+async function guidanceCompletion(messages) {
+    if (!(settings.search?.toolMode && searchToolReady())) return chatCompletion({ messages });
+    const SEARCH_HINT = '\n\n## 联网搜索\n你可以调用 web_search 工具检索现实世界的真实信息：'
+        + '涉及现实事实、时效性内容（近期事件、数据、新闻）或你不确定的现实细节时，先搜索再下结论；纯虚构设定不要搜索。'
+        + '搜索结果仅供参考，最终仍只输出上面规定的 JSON，不要输出 JSON 以外的任何文字。';
+    const { content, searchLogs } = await chatCompletionWithTools({
+        messages: messages.map(m => (m.role === 'system' ? { ...m, content: m.content + SEARCH_HINT } : m)),
+    });
+    if (searchLogs.length) toastr.info(`模型自主联网检索了：${searchLogs.join('；')}`);
+    return content;
+}
+
 // 本地检索统计（向导第 1 步展示用；纯本地，不调模型）
 // memoryTags 语义与 buildGuidanceMessages 相同：null 默认召回 / [] 全量 / 数组按标签 / false 不附带
 // memorySheets：null = 全部（开了召回的表）；数组 = 只算勾选的表（空数组 = 一张都不带）
@@ -148,12 +162,10 @@ export function buildGuidanceMessages(options = {}) {
  */
 export async function runPlotGuidance(options = {}) {
     const { system, user, hits } = buildGuidanceMessages(options);
-    const raw = await chatCompletion({
-        messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-        ],
-    });
+    const raw = await guidanceCompletion([
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+    ]);
     return { result: extractJson(raw), raw, hits };
 }
 
@@ -185,12 +197,10 @@ export async function runStoryReview({ planText = '', userNote = '', presets } =
         ...(userNote ? ['## 用户补充说明', userNote] : []),
     ].join('\n\n');
 
-    const raw = await chatCompletion({
-        messages: [
-            { role: 'system', content: withPresets(REVIEW_SYSTEM_PROMPT, assemblePresets(presets)) },
-            { role: 'user', content: userContent },
-        ],
-    });
+    const raw = await guidanceCompletion([
+        { role: 'system', content: withPresets(REVIEW_SYSTEM_PROMPT, assemblePresets(presets)) },
+        { role: 'user', content: userContent },
+    ]);
     return { result: extractJson(raw), raw, hits: hits.length };
 }
 

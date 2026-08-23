@@ -13,6 +13,12 @@ const DEFAULTS = {
         temperature: 0.7,
         maxTokens: 1500,
     },
+    search: {
+        provider: 'tavily',    // 联网搜索供应商（当前仅 Tavily，浏览器直连）
+        apiKey: '',
+        maxResults: 5,         // 单次搜索带回的结果条数
+        toolMode: true,        // 剧情分析/检查报告调用时把 web_search 作为工具交给模型自主调用
+    },
     retrieval: {
         scanDepth: 20,      // 世界书检索扫描最近多少层消息；0 = 不限（扫全部对话）
         maxEntries: 10,     // 单次检索最多带出的条目数；0 = 不限（命中多少带多少）

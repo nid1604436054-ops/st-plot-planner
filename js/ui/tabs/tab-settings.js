@@ -1,7 +1,7 @@
 // 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数
 // 配置直接放在主面板里，魔法棒 → 剧情规划器 → 设置，无需再去扩展面板
 import { settings, save } from "../../settings.js";
-import { testConnection, fetchModels } from "../../api.js";
+import { testConnection, fetchModels, searchWeb } from "../../api.js";
 import { escapeHtml } from "../../utils.js";
 
 // 拉取过的模型列表缓存：页签每次激活都会重渲染，缓存避免切换后下拉列表丢失
@@ -65,6 +65,28 @@ export const settingsTab = {
             <div id="pp_set_test_result" class="pp-muted"></div>
         </div>
         <div class="pp-section">
+            <b>联网搜索（Tavily）</b>
+            <span class="pp-muted">独立于大模型通道的搜索 API：密钥只发往 Tavily，不经过规划通道。配置后，剧情指导的「分析」与「检查当前剧情」会把 web_search 工具交给模型——涉及现实世界的时效信息或拿不准的真实细节时，模型自己决定检索并把结果用于规划。端点不支持工具调用时会自动退回普通请求，不影响原功能。</span>
+            <label class="pp-label">搜索 API 密钥（tvly- 开头，tavily.com 注册）</label>
+            <input id="pp_set_skey" class="text_pole textarea_compact" type="password" placeholder="tvly-..." autocomplete="off" />
+            <div class="pp-grid2">
+                <div>
+                    <label class="pp-label" title="单次搜索带回并塞给模型的结果条数">每次带回条数</label>
+                    <input id="pp_set_smax" class="text_pole textarea_compact" type="number" min="1" max="10" />
+                </div>
+                <div>
+                    <label class="pp-label" title="取消后规划与检查不再带搜索工具，只保留下方的手动试搜">允许模型自主调用</label>
+                    <input id="pp_set_stool" type="checkbox" />
+                </div>
+            </div>
+            <label class="pp-label">试搜（验证搜索真的能用）</label>
+            <input id="pp_set_stestq" class="text_pole textarea_compact" type="text" placeholder="输入关键词，如：最近的新闻" autocomplete="off" />
+            <div class="pp-btn-row">
+                <div id="pp_set_stest" class="menu_button">测试搜索</div>
+            </div>
+            <div id="pp_set_stest_result" class="pp-muted"></div>
+        </div>
+        <div class="pp-section">
             <b>高级设置（保持默认即可）</b>
             <span class="pp-muted">数值项填 0 = 不限制（全量 / 不截断），温度除外（温度 0 本身是有效值）。</span>
             <div class="pp-grid2">
@@ -115,6 +137,12 @@ export const settingsTab = {
         bindNum('#pp_set_maxch', () => settings.retrieval.maxChars, v => settings.retrieval.maxChars = v);
         bindNum('#pp_set_memch', () => settings.retrieval.memChars, v => settings.retrieval.memChars = v);
         bindNum('#pp_set_ctx', () => settings.retrieval.contextLayers, v => settings.retrieval.contextLayers = v);
+
+        bind('#pp_set_skey', () => settings.search.apiKey, v => settings.search.apiKey = String(v).trim());
+        bindNum('#pp_set_smax', () => settings.search.maxResults, v => settings.search.maxResults = Math.min(Math.max(v || 5, 1), 10));
+        const sTool = container.querySelector('#pp_set_stool');
+        sTool.checked = settings.search.toolMode !== false;
+        sTool.addEventListener('change', () => { settings.search.toolMode = sTool.checked; save(); });
 
         applyModelMode(container);
         container.querySelector('#pp_set_model').addEventListener('change', () => {
@@ -167,6 +195,32 @@ export const settingsTab = {
                 toastr.success('API 连接正常');
             } catch (err) {
                 result.textContent = '';
+                toastr.error(String(err.message ?? err));
+            } finally {
+                this.classList.remove('disabled');
+            }
+        });
+
+        container.querySelector('#pp_set_stest').addEventListener('click', async function () {
+            const box = container.querySelector('#pp_set_stest_result');
+            // 显式同步密钥输入框当前值，避免依赖 blur/change 触发时序
+            settings.search.apiKey = String(container.querySelector('#pp_set_skey').value || '').trim();
+            save();
+            const query = String(container.querySelector('#pp_set_stestq').value || '').trim();
+            if (!settings.search.apiKey) { toastr.warning('请先填写搜索 API 密钥'); return; }
+            if (!query) { toastr.warning('请先在输入框里填一个关键词'); return; }
+            this.classList.add('disabled');
+            box.textContent = '搜索中……';
+            try {
+                const results = await searchWeb(query);
+                box.innerHTML = results.length
+                    ? `共 ${results.length} 条结果：<div class="pp-search-list">` + results.map(r =>
+                        `<div class="pp-search-hit"><a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.title || r.url)}</a>`
+                        + `<span class="pp-muted">${escapeHtml(r.content.slice(0, 140))}</span></div>`).join('') + '</div>'
+                    : '搜索请求成功，但没有命中结果：换个关键词试试';
+                toastr.success('联网搜索可用');
+            } catch (err) {
+                box.textContent = '';
                 toastr.error(String(err.message ?? err));
             } finally {
                 this.classList.remove('disabled');

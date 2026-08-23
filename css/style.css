@@ -610,3 +610,20 @@
     width: 100%;
     box-sizing: border-box;
 }
+
+/* 设置页：联网搜索试搜结果列表 */
+.pp-search-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.pp-search-hit {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-left: 8px;
+    border-left: 3px solid var(--SmartThemeBorderColor, #666);
+    word-break: break-word;
+}
