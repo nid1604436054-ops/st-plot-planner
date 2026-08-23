@@ -555,6 +555,30 @@
     gap: 4px;
 }
 
+/* 第 4 步注入参数行：数字框/下拉框保持小尺寸（全局规则会把它们拉满宽） */
+.pp-gd-injrow input[type="number"],
+.pp-gd-injrow select {
+    width: auto;
+    flex: 0 0 auto;
+}
+
+/* 匹配设置：词表行（标签名 + 注释 + 删除），两个输入框均分宽度 */
+.pp-gd-vocab {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.pp-gd-vocab input[type="text"] {
+    width: auto;
+    flex: 1 1 40%;
+    min-width: 0;
+}
+
+.pp-gd-vocab .menu_button {
+    flex: 0 0 auto;
+}
+
 /* 抽屉内表单控件占满宽度 */
 .pp-drawer input[type="text"],
 .pp-drawer input[type="password"],

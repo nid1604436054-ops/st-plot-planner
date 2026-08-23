@@ -14,13 +14,14 @@ function roleValue(role) {
     return role === 'user' ? ROLE_USER : ROLE_SYSTEM;
 }
 
-// 写入一条注入；enabled=false 时等价于撤销
+// 写入一条注入；enabled=false 时等价于撤销（深度 0 = 紧贴上下文末尾，是合法值）
 export function applyInjection(item) {
+    const depth = Number(item.depth);
     setExtensionPrompt(
         promptKey(item.id),
         item.enabled ? String(item.content ?? '') : '',
         POSITION_IN_PROMPT,
-        Number(item.depth) || 4,
+        Number.isFinite(depth) && depth >= 0 ? depth : 4,
         false,
         roleValue(item.role),
     );

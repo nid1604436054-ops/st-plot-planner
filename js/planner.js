@@ -16,7 +16,7 @@ const OUTPUT_SCHEMA = `{
       ]
     },
     "plotRepeat": { "found": false, "note": "与进行中/历史剧情重复雷同之处；没有则空字符串" },
-    "styleRepeat": { "level": "无|轻微|明显", "note": "文风或桥段重复的表现" },
+    "styleRepeat": { "level": "无|轻微|明显", "note": "仅判 char 的自发重复：user 是否先重复、char 重复了什么" },
     "progress": { "stage": "进行中剧情推进到哪个阶段（无进行中剧情写「无」）", "pct": "约x%或「无」", "note": "判断依据" }
   },
   "plan": {
@@ -34,6 +34,7 @@ export const GUIDANCE_SYSTEM_PROMPT = [
     '1) 检查：结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）、是否与已有剧情重复、文风是否重复、正在执行的剧情推进到什么程度；',
     '2) 规划：为后续剧情设计「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
     '要求：判断必须引用对话依据；给出「进行中剧情」时对照它检查进度与重复；给了「随机事件」就将其自然融入规划；规划要具体、可执行、尊重既有设定；面向当前场景做预编排。',
+    '文风重复的判定基准：只针对角色（char）的扮演文本——先检查用户（user）近期输入是否自己在重复动作、场景或指令；角色只是跟进用户发起的重复不算文风重复；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判「轻微/明显」，并在 note 里写明用户是否先重复、角色重复了什么。',
     '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
     OUTPUT_SCHEMA,
 ].join('\n');
@@ -41,7 +42,7 @@ export const GUIDANCE_SYSTEM_PROMPT = [
 const REVIEW_SCHEMA = `{
   "completion": "约x%（当前处于规划中的哪个阶段）",
   "progress": { "moved": true, "note": "近几轮是否有效推进剧情，依据是什么" },
-  "styleRepeat": { "level": "无|轻微|明显", "note": "文风或桥段重复的表现" },
+  "styleRepeat": { "level": "无|轻微|明显", "note": "仅判 char 的自发重复：user 是否先重复、char 重复了什么" },
   "ooc": {
     "found": false,
     "items": [
@@ -56,6 +57,7 @@ export const REVIEW_SYSTEM_PROMPT = [
     '你是文字角色扮演的剧情监理。用户会给你一份「正在执行的剧情规划」和最近的对话记录，',
     '你对照规划检查执行情况：完成度、近几轮是否有效推进、文风是否重复、是否 OOC、有无其他问题，',
     '最后把所有问题点明并给出可直接执行的剧情指导。',
+    '文风重复只针对角色（char）的扮演文本判定：用户（user）自己在重复动作、场景或指令时，角色跟进不算；只有用户没有重复而角色自发重复描写套路、桥段或句式，才判轻微/明显，note 写明依据。',
     '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
     REVIEW_SCHEMA,
 ].join('\n');
@@ -75,10 +77,20 @@ function withPresets(base, custom) {
 }
 
 // 本地检索统计（向导第 1 步展示用；纯本地，不调模型）
-export function collectStats() {
+// memoryTags 语义与 buildGuidanceMessages 相同：null 默认召回 / [] 全量 / 数组按标签 / false 不附带
+export function collectStats({ memoryTags = null } = {}) {
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     const hits = scanLorebooks(formatChatLog(chatList.slice(-settings.retrieval.scanDepth)));
-    return { layers: chatList.length, hits: hits.length, memChars: buildMemoryContext().length };
+    const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags }).length;
+    return { layers: chatList.length, hits: hits.length, memChars };
+}
+
+// 记忆表格小节标题：向模型说明这批行的用途（查重/推新）与本次召回方式
+function memorySectionHeader(memoryTags) {
+    const mode = memoryTags == null
+        ? '按记忆表格页召回标签筛选'
+        : (Array.isArray(memoryTags) && memoryTags.length ? `按标签召回：${memoryTags.join('、')}` : '全量召回');
+    return `## 记忆表格（已有剧情事件记录，用于检查新规划是否与之重复、并可作为推新发展方向的参考；${mode}）`;
 }
 
 /**
@@ -91,15 +103,17 @@ export function collectStats() {
  * @param {string} [options.activePlan]          进行中剧情全文（查重与进度对照）
  * @param {string[]} [options.historySummaries]  历史剧情摘要（查重用）
  * @param {Array}  [options.presets]             本次启用的预设数组（缺省取设置里启用的）
+ * @param {*}      [options.memoryTags]          记忆表格召回方式：null/缺省=按记忆表格页召回标签，
+ *                                               []=全量, ['a','b']=按标签, false=本次不附带
  */
 export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets } = options;
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets, memoryTags = null } = options;
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
     const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
     const hits = scanLorebooks(scanText);
-    const memoryText = buildMemoryContext();
+    const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags });
 
     const summaries = (historySummaries ?? []).filter(Boolean);
     const userContent = [
@@ -109,7 +123,7 @@ export function buildGuidanceMessages(options = {}) {
         formatChatLog(chatList),
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
-        ...(memoryText ? ['## 记忆表格（已按标签筛选，未删除的行）', memoryText] : []),
+        ...(memoryText ? [memorySectionHeader(memoryTags), memoryText] : []),
         ...(activePlan ? ['## 进行中剧情（正在执行的规划，检查进度与重复时对照它）', activePlan] : []),
         ...(summaries.length ? ['## 历史剧情摘要（只用于查重）', summaries.map((s, i) => `${i + 1}. ${s}`).join('\n')] : []),
         ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),
@@ -164,7 +178,7 @@ export async function runStoryReview({ planText = '', userNote = '', presets } =
         formatChatLog(chatList),
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
-        ...(memoryText ? ['## 记忆表格（已按标签筛选，未删除的行）', memoryText] : []),
+        ...(memoryText ? ['## 记忆表格（已有剧情事件记录，用于查重与推新参考；按记忆表格页召回标签筛选）', memoryText] : []),
         ...(userNote ? ['## 用户补充说明', userNote] : []),
     ].join('\n\n');
 

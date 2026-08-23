@@ -100,7 +100,7 @@ export function parseKeys(text) {
 /**
  * 检索：扫描 scanText，返回跨所有启用书籍的命中条目。
  * 命中规则：条目启用、内容非空、且任一关键词（子串，大小写不敏感）出现在扫描文本里。
- * 按 maxEntries 截断，总量受 maxChars 限制。
+ * maxEntries / maxChars 为 0 表示不限制（命中多少带多少 / 不截断）。
  */
 export function scanLorebooks(scanText, { maxEntries, maxChars } = {}) {
     const opts = settings.retrieval;
@@ -123,11 +123,14 @@ export function scanLorebooks(scanText, { maxEntries, maxChars } = {}) {
 
     let used = 0;
     const included = [];
-    for (const { book, entry } of hits.slice(0, maxE)) {
-        const budget = maxC - used;
-        if (budget <= 0) break;
-        const content = entry.content.length > budget ? `${entry.content.slice(0, budget)}…` : entry.content;
-        used += content.length;
+    for (const { book, entry } of (maxE > 0 ? hits.slice(0, maxE) : hits)) {
+        let content = entry.content;
+        if (maxC > 0) {
+            const budget = maxC - used;
+            if (budget <= 0) break;
+            if (content.length > budget) content = `${content.slice(0, budget)}…`;
+            used += content.length;
+        }
         included.push({ bookName: book.name, comment: entry.comment, content });
     }
     return included;

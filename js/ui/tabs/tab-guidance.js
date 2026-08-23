@@ -1,16 +1,19 @@
 // 剧情指导页签：分步规划向导
-// ① 收集确认（本地检索材料 + 预设临时勾选 + 剧情构思）→ ② 随机事件闸口（可跳过）
-// → ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用）
-// 确认采用的规划存为「进行中剧情」（story.js，跟聊天文件走），旧的自动归档；
+// ① 收集确认（本地检索材料 + 预设临时勾选 + 剧情构思 + 记忆表格标签匹配）→ ② 随机事件闸口（可跳过）
+// → ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
+// 确认采用的规划存为「进行中剧情」（story.js，跟聊天文件走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
+// 跳过随机事件的路径会先停在「分析前确认」页，点确认才真正调模型。
 // 另有「检查当前剧情」：对照进行中剧情出执行报告（完成度/推进/文风/OOC/其他/建议）
 import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, GUIDANCE_SYSTEM_PROMPT } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, rollEventRule } from "../../randomEvents.js";
-import { addInjection } from "../../injection.js";
+import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
 import { storyState, activeStory, confirmPlot, endActive, attachReport, deleteStory, clearHistory } from "../../story.js";
+import { memoryState, allTags, autoTagByVocabulary, persistMemory } from "../../memoryTable.js";
+import { getTavernContext } from "../../context.js";
 import { escapeHtml } from "../../utils.js";
 
-// 向导状态机：'' 空闲 | collect ① | event ② | running ③ | result ④ | reviewing/report 检查报告
+// 向导状态机：'' 空闲 | collect ① | event ② | ready 分析前确认 | running ③ | result ④ | reviewing/report 检查报告
 let step = '';
 const run = {
     note: '',            // 剧情构思方向
@@ -18,12 +21,17 @@ const run = {
     event: null,         // { mode:'llm'|'lib'|'manual', title, choice } 入库用
     eventText: '',       // 拼给模型的事件材料
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
+    memMatch: false,     // 第 1 步：是否按标签匹配召回记忆表格
+    memTags: [],         // 按标签匹配时勾选的标签名
+    readyFrom: 'event',  // 分析前确认页的「返回」回到哪一步
 };
 // ② 随机事件闸口的界面状态
 const ev = { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false };
 // 进行中剧情全文 / 历史列表是否展开；历史里展开查看的条目 id（均只存内存）
 let showActive = false, showHistory = false, viewHistId = null;
 let report = null;      // 最近一次检查报告（内存缓存，正式存档在 story 条目上）
+// 「匹配设置」折叠区是否展开（词表/打标区域编辑，随记忆状态存聊天）
+let matchOpen = false;
 
 // 预设区折叠/编辑中状态（与向导无关，跨重渲染保持）
 let presetOpen = false;
@@ -47,9 +55,12 @@ export const guidanceTab = {
 // 剧情数据本身存 chatMetadata，随聊天文件自动切换
 export function resetGuidance() {
     step = '';
-    Object.assign(run, { note: '', presetIds: [], event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '' });
+    Object.assign(run, {
+        note: '', presetIds: [], event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
+        memMatch: false, memTags: [], readyFrom: 'event',
+    });
     Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false });
-    showActive = false; showHistory = false; viewHistId = null; report = null;
+    showActive = false; showHistory = false; viewHistId = null; report = null; matchOpen = false;
     const container = document.getElementById('pp_tab_content');
     if (container?.querySelector('#pp_gd_storybar')) guidanceTab.render(container);
 }
@@ -82,13 +93,13 @@ function renderStoryBar(container) {
     <div class="pp-item">
         <div class="pp-item-main">
             <span class="pp-item-title"><span class="pp-badge pp-badge-open">进行中</span>${escapeHtml(active.summary || '（无摘要）')}</span>
-            <span class="pp-muted">采用于 ${new Date(active.at).toLocaleString()}${active.reportAt ? ` · 最近检查 ${new Date(active.reportAt).toLocaleString()}` : ''}</span>
+            <span class="pp-muted">采用于 ${new Date(active.at).toLocaleString()}${active.reportAt ? ` · 最近检查 ${new Date(active.reportAt).toLocaleString()}` : ''}${storyInjStatus()}</span>
         </div>
         <div class="pp-item-ops">
             <span class="menu_button" id="pp_gd_story_show">${showActive ? '隐藏' : '查看'}</span>
             <span class="menu_button" id="pp_gd_story_review">检查当前剧情</span>
             <span class="menu_button" id="pp_gd_story_new">重新规划</span>
-            <span class="menu_button" id="pp_gd_story_end" title="剧情完结：退出进行中状态，归档保留">结束剧情</span>
+            <span class="menu_button" id="pp_gd_story_end" title="剧情完结：退出进行中状态，归档保留，剧情注入自动撤下">结束剧情</span>
         </div>
     </div>
     ${showActive ? `<div class="pp-gd-planview">${escapeHtml(active.planText)}${reportCardHtml(active.report, active.reportAt)}</div>` : ''}
@@ -99,7 +110,8 @@ function renderStoryBar(container) {
     el.querySelector('#pp_gd_story_new').addEventListener('click', () => startCollect(container));
     el.querySelector('#pp_gd_story_end').addEventListener('click', () => {
         endActive();
-        toastr.info('已结束进行中剧情（可在历史里回看）');
+        if (storyInjItem()) removeInjection(storyInjId());
+        toastr.info('已结束进行中剧情（归档保留，剧情注入已撤下）');
         renderStoryBar(container);
     });
     wireHistory(el, container);
@@ -154,6 +166,53 @@ function wireHistory(el, container) {
 }
 
 // ---------------------------------------------------------------------------
+// 剧情注入自动绑定：采用→创建/替换（id 固定），重新采用→换内容，结束剧情→撤下。
+// 与手动「转为隐身注入」互不影响（手动注入每次生成新 id）
+// ---------------------------------------------------------------------------
+
+function storyInjId() {
+    return `story-${getTavernContext().chatId ?? 'unknown'}`;
+}
+
+function storyInjItem() {
+    return settings.injections.find(i => i.id === storyInjId()) ?? null;
+}
+
+// 状态条上的注入状态尾巴：注入被手动停用/删掉时如实显示
+function storyInjStatus() {
+    const item = storyInjItem();
+    if (!item) return ' · 未注入';
+    return item.enabled ? ` · 已自动注入（深度 ${item.depth}）` : ' · 注入已停用';
+}
+
+function syncStoryInjection(planText, summary) {
+    const inj = settings.guidance.inject;
+    const id = storyInjId();
+    const prev = settings.injections.find(i => i.id === id);
+    const item = {
+        id,
+        label: `剧情：${String(summary || planText).trim().slice(0, 30)}`,
+        mode: 'open',
+        content: planText,
+        depth: inj.depth,
+        role: inj.role,
+        scope: 'chat',
+        chatId: getTavernContext().chatId,
+        enabled: true,
+        source: 'story',
+        createdAt: prev?.createdAt ?? Date.now(),
+        expires: { type: 'never' },   // 生命周期跟剧情走：换剧情替换内容，完结时撤下
+    };
+    const idx = settings.injections.findIndex(i => i.id === id);
+    if (idx >= 0) {
+        settings.injections[idx] = item;
+        updateInjection(item);
+    } else {
+        addInjection(item);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 主区：按向导步骤渲染
 // ---------------------------------------------------------------------------
 
@@ -162,6 +221,7 @@ function renderMain(container) {
 
     if (step === 'collect') return renderCollect(container, main);
     if (step === 'event') return renderEvent(container, main);
+    if (step === 'ready') return renderReady(container, main);
 
     if (step === 'running') {
         main.innerHTML = `
@@ -198,7 +258,7 @@ function renderMain(container) {
 
     main.innerHTML = `
     <div class="pp-section">
-        <div class="pp-muted">分步规划：① 收集确认（本地检索材料 + 预设勾选 + 剧情构思）→ ② 随机事件闸口（可跳过）→ ③ 模型分析（检查 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用）。确认采用的规划存为「进行中剧情」，可随时「检查当前剧情」出执行报告。</div>
+        <div class="pp-muted">分步规划：① 收集确认（本地检索材料 + 预设勾选 + 记忆标签匹配 + 剧情构思）→ ② 随机事件闸口（可跳过）→ ③ 模型分析（检查 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）。确认采用的规划存为「进行中剧情」并自动注入，可随时「检查当前剧情」出执行报告。</div>
     </div>`;
 }
 
@@ -211,21 +271,46 @@ function startCollect(container) {
     renderMain(container);
 }
 
+// 本次运行的记忆表格召回方式 → planner 的 memoryTags：
+// 不匹配 = []（全量）；按标签但一个没勾 = false（不附带）；按标签 = 标签名数组
+function wizardMemoryTags() {
+    if (!run.memMatch) return [];
+    return run.memTags.length ? run.memTags : false;
+}
+
+// 跳过类按钮先停在「分析前确认」页，不直接花一次模型调用
+function goReady(container, from) {
+    run.readyFrom = from;
+    step = 'ready';
+    renderMain(container);
+}
+
 // ① 收集确认：本地检索已完成，展示材料清单；预设勾选只对本次生效；构思可后补
 function renderCollect(container, main) {
     const presets = settings.guidance?.presets ?? [];
-    const stat = collectStats();
+    const tags = allTags(memoryState());
     main.innerHTML = `
     <div class="pp-section">
         <b>第 1 步 · 收集确认</b>
-        <div class="pp-muted">本地关键词/标签检索完成（不调模型）：以下材料将随分析一起发送。</div>
+        <div class="pp-muted">本地检索完成（不调模型）：以下材料将随分析一起发送。</div>
         <div class="pp-item">
             <div class="pp-item-main">
-                <span>对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 记忆表格 ${stat.memChars} 字</span>
+                <span id="pp_gd_c1_stat"></span>
                 <span class="pp-muted" id="pp_gd_c1_count">预设 ${run.presetIds.length}/${presets.length} 启用${activeStory() ? ' · 已附进行中剧情' : ''}</span>
             </div>
             <div class="pp-item-ops"><span class="menu_button" id="pp_gd_c1_preview">查看完整提示词</span></div>
         </div>
+        <label class="pp-label">记忆表格召回（只影响本次分析，不改记忆表格页的配置）</label>
+        <div class="pp-gd-selp">
+            <label title="勾选后只带所选标签的行；不勾则启用召回的表格全量带出"><input type="checkbox" id="pp_gd_c1_memmatch" ${run.memMatch ? 'checked' : ''}/> 按标签匹配</label>
+        </div>
+        <div class="pp-gd-selp" id="pp_gd_c1_chips" ${run.memMatch ? '' : 'style="display:none"'}>
+            ${tags.length
+                ? tags.map(([t, n]) => `<label class="pp-mem-chip" title="带这个标签的记忆行"><input type="checkbox" data-mtag="${escapeHtml(t)}" ${run.memTags.includes(t) ? 'checked' : ''}/> ${escapeHtml(t)} (${n})</label>`).join('')
+                : '<span class="pp-muted">还没有任何行标签：先在下方「匹配设置」里用词表打标签，或在记忆表格页手动打</span>'}
+            <span class="pp-muted" id="pp_gd_c1_memtip"></span>
+        </div>
+        <div id="pp_gd_match"></div>
         <label class="pp-label">本次启用的预设（改动不写回保存的默认值）</label>
         <div class="pp-gd-selp">
             ${presets.map(p => `<label><input type="checkbox" data-c1p="${p.id}" ${run.presetIds.includes(p.id) ? 'checked' : ''}/> ${escapeHtml(p.name)}</label>`).join('')
@@ -241,9 +326,32 @@ function renderCollect(container, main) {
     </div>
     <div id="pp_gd_promptview" class="pp-gd-builtin" style="display:none"></div>`;
 
+    const refreshMem = () => {
+        const st = collectStats({ memoryTags: wizardMemoryTags() });
+        const mode = run.memMatch
+            ? (run.memTags.length ? `按标签 ${run.memTags.length} 类` : '不附带（未勾标签）')
+            : '全量';
+        main.querySelector('#pp_gd_c1_stat').textContent =
+            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · 记忆表格 ${st.memChars} 字（${mode}）`;
+        main.querySelector('#pp_gd_c1_chips').style.display = run.memMatch ? '' : 'none';
+        main.querySelector('#pp_gd_c1_memtip').textContent =
+            run.memMatch && !run.memTags.length && tags.length ? '未勾选任何标签，本次将不附带记忆表格' : '';
+    };
+    refreshMem();
+
     const noteEl = main.querySelector('#pp_gd_note');
     noteEl.value = run.note;
     noteEl.addEventListener('input', () => { run.note = noteEl.value; });
+
+    main.querySelector('#pp_gd_c1_memmatch').addEventListener('change', e => {
+        run.memMatch = e.target.checked;
+        refreshMem();
+    });
+    main.querySelectorAll('[data-mtag]').forEach(cb => cb.addEventListener('change', () => {
+        run.memTags = [...main.querySelectorAll('[data-mtag]:checked')].map(x => x.dataset.mtag);
+        refreshMem();
+    }));
+    renderMatch(container, main);
 
     main.querySelectorAll('[data-c1p]').forEach(cb => cb.addEventListener('change', () => {
         run.presetIds = [...main.querySelectorAll('[data-c1p]:checked')].map(x => x.dataset.c1p);
@@ -261,6 +369,7 @@ function renderCollect(container, main) {
                 activePlan: activeStory()?.planText ?? '',
                 historySummaries: s.history.filter(h => h.id !== s.activeId).map(h => h.summary),
                 presets: runPresets(),
+                memoryTags: wizardMemoryTags(),
             });
             view.textContent = `【系统提示词】\n${system}\n\n【用户消息】\n${user}`;
             view.style.display = '';
@@ -273,9 +382,137 @@ function renderCollect(container, main) {
     main.querySelector('#pp_gd_c1_skip').addEventListener('click', () => {
         run.event = null;
         run.eventText = '';
-        startAnalyze(container);
+        goReady(container, 'collect');
     });
     main.querySelector('#pp_gd_c1_cancel').addEventListener('click', () => { step = ''; renderMain(container); });
+}
+
+// 匹配设置（第 1 步内折叠区）：标签词表 + 打标区域 + 用词表批量打标。
+// 词表与区域存聊天（memoryState），第 1 步勾选的匹配标签只存本次运行
+function renderMatch(container, main) {
+    const box = main.querySelector('#pp_gd_match');
+    const state = memoryState();
+    const sheets = state.mirror.sheets;
+
+    const head = `
+    <div class="pp-item" id="pp_gd_match_head" title="打标签用：词表决定模型能打哪些标签，区域决定给哪些表打">
+        <div class="pp-item-main"><b>匹配设置</b> <span class="pp-muted">标签词表 / 打标区域</span></div>
+        <div class="pp-item-ops"><span class="menu_button" id="pp_gd_match_toggle">${matchOpen ? '收起' : '展开'} <i class="fa-solid fa-chevron-${matchOpen ? 'down' : 'right'}"></i></span></div>
+    </div>`;
+    box.innerHTML = head + (matchOpen ? `
+    <div class="pp-gd-editor">
+        <label class="pp-label" title="勾选参与打标的表格；不勾 = 全部镜像表">打标区域（${sheets.length ? '不勾 = 全部表格' : '镜像里没有表格'}）</label>
+        <div class="pp-gd-selp">
+            ${sheets.map(s => `<label><input type="checkbox" data-msheet="${escapeHtml(s.uid)}" ${!state.matchSheets.length || state.matchSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)}</label>`).join('')}
+        </div>
+        <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签">标签词表（只能从这些名字里选，可加注释）</label>
+        <div id="pp_gd_vocab"></div>
+        <div class="pp-btn-row">
+            <span id="pp_gd_vocab_add" class="menu_button"><i class="fa-solid fa-plus"></i> 加一个标签</span>
+            <label><input type="checkbox" id="pp_gd_tag_over" /> 覆盖已有标签</label>
+            <span id="pp_gd_tag_run" class="menu_button" title="把区域内（默认没标签）的行分批交给模型，按词表打标签"><i class="fa-solid fa-wand-magic-sparkles"></i> 用词表打标签</span>
+        </div>
+        <div id="pp_gd_tag_status" class="pp-muted"></div>
+    </div>` : '');
+
+    box.querySelector('#pp_gd_match_toggle').addEventListener('click', () => {
+        matchOpen = !matchOpen;
+        renderMatch(container, main);
+    });
+    if (!matchOpen) return;
+
+    const vocabBox = box.querySelector('#pp_gd_vocab');
+    const renderVocab = () => {
+        vocabBox.innerHTML = state.matchTags.map((v, i) => `
+        <div class="pp-gd-vocab">
+            <input type="text" class="text_pole textarea_compact" data-vname="${i}" placeholder="标签名（如：背叛）" value="${escapeHtml(v.name ?? '')}" />
+            <input type="text" class="text_pole textarea_compact" data-vnote="${i}" placeholder="注释（可选：什么内容算这个标签）" value="${escapeHtml(v.note ?? '')}" />
+            <span class="menu_button fa-solid fa-trash" data-vdel="${i}" title="删除该标签"></span>
+        </div>`).join('') || '<span class="pp-muted">（词表为空，先加几个标签再打标）</span>';
+        vocabBox.querySelectorAll('[data-vname]').forEach(inp => inp.addEventListener('input', () => {
+            state.matchTags[Number(inp.dataset.vname)].name = inp.value;
+            persistMemory();
+        }));
+        vocabBox.querySelectorAll('[data-vnote]').forEach(inp => inp.addEventListener('input', () => {
+            state.matchTags[Number(inp.dataset.vnote)].note = inp.value;
+            persistMemory();
+        }));
+        vocabBox.querySelectorAll('[data-vdel]').forEach(btn => btn.addEventListener('click', () => {
+            state.matchTags.splice(Number(btn.dataset.vdel), 1);
+            persistMemory();
+            renderVocab();
+        }));
+    };
+    renderVocab();
+
+    box.querySelector('#pp_gd_vocab_add').addEventListener('click', () => {
+        state.matchTags.push({ name: '', note: '' });
+        persistMemory();
+        renderVocab();
+        vocabBox.querySelector('.pp-gd-vocab:last-child [data-vname]')?.focus();
+    });
+    box.querySelectorAll('[data-msheet]').forEach(cb => cb.addEventListener('change', () => {
+        state.matchSheets = [...box.querySelectorAll('[data-msheet]:checked')].map(x => x.dataset.msheet);
+        persistMemory();
+    }));
+
+    box.querySelector('#pp_gd_tag_run').addEventListener('click', async function () {
+        const status = box.querySelector('#pp_gd_tag_status');
+        const vocab = state.matchTags.filter(v => String(v.name ?? '').trim());
+        if (!vocab.length) {
+            toastr.warning('词表为空，先添加标签');
+            return;
+        }
+        this.classList.add('disabled');
+        status.textContent = '打标中……';
+        try {
+            const r = await autoTagByVocabulary({
+                vocab,
+                sheetUids: state.matchSheets,
+                overwrite: box.querySelector('#pp_gd_tag_over').checked,
+                onProgress: (a, b) => { status.textContent = `打标中…… ${a}/${b}`; },
+            });
+            status.textContent = r.total
+                ? `完成：${r.tagged}/${r.total} 行打上标签（词表标签会出现在上方勾选区）`
+                : '没有需要打标的行（都有标签了？勾「覆盖已有标签」重打）';
+            toastr.success(`打标完成：${r.tagged} 行`);
+            renderMain(container);   // 刷新标签勾选区与字数统计
+        } catch (err) {
+            status.textContent = '';
+            toastr.error(String(err.message ?? err));
+        } finally {
+            this.classList.remove('disabled');
+        }
+    });
+}
+
+// 分析前确认：材料清单一目了然，点确认才真正调模型
+function renderReady(container, main) {
+    const presets = settings.guidance?.presets ?? [];
+    const stat = collectStats({ memoryTags: wizardMemoryTags() });
+    const memDesc = run.memMatch
+        ? (run.memTags.length ? `按标签（${run.memTags.join('、')}）` : '不附带（未勾标签）')
+        : '全量召回';
+    main.innerHTML = `
+    <div class="pp-section">
+        <b>分析前确认</b>
+        <div class="pp-muted">即将调用模型开始分析（走插件独立 API，计费按你配置的接口）。请核对本次材料：</div>
+        <div class="pp-item">
+            <div class="pp-item-main">
+                <span>对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${run.presetIds.length}/${presets.length} 启用</span>
+                <span class="pp-muted">记忆表格：${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''} · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}${activeStory() ? ' · 附进行中剧情' : ''}</span>
+            </div>
+        </div>
+        <div class="pp-btn-row">
+            <span id="pp_gd_ready_go" class="menu_button">确认，开始分析</span>
+            <span id="pp_gd_ready_back" class="menu_button">返回</span>
+        </div>
+    </div>`;
+    main.querySelector('#pp_gd_ready_go').addEventListener('click', () => startAnalyze(container));
+    main.querySelector('#pp_gd_ready_back').addEventListener('click', () => {
+        step = run.readyFrom;
+        renderMain(container);
+    });
 }
 
 // ② 随机事件闸口：大模型随机 / 事件库掷骰 / 自己给意见，三选一，也可跳过
@@ -366,7 +603,7 @@ function renderEvent(container, main) {
     main.querySelector('#pp_gd_ev_skip').addEventListener('click', () => {
         run.event = null;
         run.eventText = '';
-        startAnalyze(container);
+        goReady(container, 'event');
     });
     main.querySelector('#pp_gd_ev_back').addEventListener('click', () => { step = 'collect'; renderMain(container); });
 }
@@ -417,6 +654,7 @@ async function startAnalyze(container, { revise = false } = {}) {
             activePlan: activeStory()?.planText ?? '',
             historySummaries: historySummaries(),
             presets: runPresets(),
+            memoryTags: wizardMemoryTags(),
         });
         run.result = data.result;
         run.raw = data.raw;
@@ -444,11 +682,12 @@ function renderResult(container, main) {
     const ooc = checks.ooc;
     const items = Array.isArray(ooc?.items) ? ooc.items : [];
     const checkRow = (name, body) => `<div class="pp-gd-check"><b>${name}</b>${body}</div>`;
+    const inj = settings.guidance.inject;
 
     main.innerHTML = `
     <div class="pp-section">
         <b>第 4 步 · 人工二检（世界书命中 ${run.hits} 条）</b>
-        <div class="pp-muted">检查项与规划如下；不合格「打回重新生成」，合格「确认采用」存为进行中剧情。</div>
+        <div class="pp-muted">检查项与规划如下；不合格「打回重新生成」，合格「确认采用」，不要了「不保存」回到第 1 步。</div>
         ${checkRow('OOC', ooc?.found && items.length
             ? items.map(it => `<div class="pp-hit"><b>${escapeHtml(it.aspect ?? '')} · ${escapeHtml(it.severity ?? '')}</b><div>${escapeHtml(it.evidence ?? '')}</div><div class="pp-muted">建议：${escapeHtml(it.fix ?? '')}</div></div>`).join('')
             : '<span class="pp-muted">未发现明显 OOC</span>')}
@@ -463,10 +702,18 @@ function renderResult(container, main) {
         <textarea id="pp_gd_plan" class="text_pole textarea_compact" rows="10"></textarea>
         <label class="pp-label">修改意见（打回重新生成用）</label>
         <textarea id="pp_gd_revise_note" class="text_pole textarea_compact" rows="2"></textarea>
+        <label class="pp-label" title="默认沿用上次；「确认采用」的剧情注入也按这里的深度与角色注入（剧情注入永不过期，完结时自动撤下）">注入参数</label>
+        <div class="pp-gd-selp pp-gd-injrow">
+            <label>深度 <input type="number" id="pp_gd_inj_depth" min="0" max="100" step="1" title="0 = 紧贴上下文末尾；数字越大越靠前" /></label>
+            <label>角色 <select id="pp_gd_inj_role"><option value="system">system</option><option value="user">user</option></select></label>
+            <label>过期 <select id="pp_gd_inj_exp"><option value="never">永久</option><option value="layers">N 层后</option></select></label>
+            <label id="pp_gd_inj_layers_wrap" hidden>层数 <input type="number" id="pp_gd_inj_layers" min="1" step="1" /></label>
+        </div>
         <div class="pp-btn-row">
             <span id="pp_gd_adopt" class="menu_button">确认采用</span>
             <span id="pp_gd_revise" class="menu_button">打回重新生成</span>
-            <span id="pp_gd_inject" class="menu_button">转为隐身注入</span>
+            <span id="pp_gd_inject" class="menu_button" title="手动转一条隐身注入（与剧情自动注入相互独立，按上面的过期设置）">转为隐身注入</span>
+            <span id="pp_gd_discard" class="menu_button" title="丢弃本次生成（构思、预设与事件选择保留）">不保存，回到第 1 步</span>
         </div>
     </div>`;
 
@@ -477,7 +724,46 @@ function renderResult(container, main) {
     noteEl.value = run.reviseNote;
     noteEl.addEventListener('input', () => { run.reviseNote = noteEl.value; });
 
+    // 注入参数：记住上次选择；改动时同步已启用的剧情注入的深度/角色
+    const depthEl = main.querySelector('#pp_gd_inj_depth');
+    const roleEl = main.querySelector('#pp_gd_inj_role');
+    const expEl = main.querySelector('#pp_gd_inj_exp');
+    const layersEl = main.querySelector('#pp_gd_inj_layers');
+    const layersWrap = main.querySelector('#pp_gd_inj_layers_wrap');
+    const syncInjCfgUi = () => {
+        layersWrap.hidden = inj.expires !== 'layers';
+    };
+    depthEl.value = inj.depth;
+    roleEl.value = inj.role;
+    expEl.value = inj.expires;
+    layersEl.value = inj.layers;
+    syncInjCfgUi();
+    const onInjCfgChange = () => {
+        inj.depth = Math.max(0, Number(depthEl.value) || 0);
+        inj.role = roleEl.value;
+        inj.expires = expEl.value;
+        inj.layers = Math.max(1, Number(layersEl.value) || 20);
+        syncInjCfgUi();
+        save();
+        const live = storyInjItem();
+        if (live?.enabled) {
+            live.depth = inj.depth;
+            live.role = inj.role;
+            updateInjection(live);
+        }
+    };
+    depthEl.addEventListener('change', onInjCfgChange);
+    roleEl.addEventListener('change', onInjCfgChange);
+    expEl.addEventListener('change', onInjCfgChange);
+    layersEl.addEventListener('change', onInjCfgChange);
+
     main.querySelector('#pp_gd_revise').addEventListener('click', () => startAnalyze(container, { revise: true }));
+    main.querySelector('#pp_gd_discard').addEventListener('click', () => {
+        Object.assign(run, { result: null, raw: '', hits: 0, planText: '', reviseNote: '' });
+        step = 'collect';
+        toastr.info('已丢弃本次生成（构思、预设与事件选择保留）');
+        renderMain(container);
+    });
     main.querySelector('#pp_gd_adopt').addEventListener('click', () => {
         if (!run.planText.trim()) {
             toastr.warning('规划内容为空');
@@ -490,9 +776,13 @@ function renderResult(container, main) {
             event: run.event,
             presetIds: run.presetIds,
         });
-        toastr.success('已存为进行中剧情（原剧情自动归档，可在历史回看）');
+        syncStoryInjection(run.planText, run.result?.plan?.summary ?? '');
+        toastr.success('已存为进行中剧情并自动注入（原剧情自动归档，可在历史回看）');
         step = '';
-        Object.assign(run, { note: '', presetIds: [], event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '' });
+        Object.assign(run, {
+            note: '', presetIds: [], event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
+            memMatch: false, memTags: [], readyFrom: 'event',
+        });
         report = null;
         renderStoryBar(container);
         renderMain(container);
@@ -508,13 +798,13 @@ function renderResult(container, main) {
             label: `剧情规划 ${new Date().toLocaleTimeString()}`,
             mode: 'open',
             content,
-            depth: 4,
-            role: 'system',
+            depth: inj.depth,
+            role: inj.role,
             scope: 'chat',
             enabled: true,
             source: 'planner',
             createdAt: Date.now(),
-            expires: { type: 'never' },
+            expires: inj.expires === 'layers' ? { type: 'layers', layers: inj.layers } : { type: 'never' },
         });
         toastr.success('已注入（明盘：模型可见，聊天界面不显示）');
         document.dispatchEvent(new CustomEvent('pp-switch-tab', { detail: { id: 'injections' } }));

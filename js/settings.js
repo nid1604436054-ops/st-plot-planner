@@ -14,13 +14,20 @@ const DEFAULTS = {
         maxTokens: 1500,
     },
     retrieval: {
-        scanDepth: 20,      // 世界书检索扫描最近多少层消息
-        maxEntries: 10,     // 单次检索最多带出的条目数
-        maxChars: 6000,     // 检索结果拼装的字符上限（控制规划调用的输入规模）
-        contextLayers: 30,  // 规划调用携带的最近对话层数
+        scanDepth: 20,      // 世界书检索扫描最近多少层消息；0 = 不限（扫全部对话）
+        maxEntries: 10,     // 单次检索最多带出的条目数；0 = 不限（命中多少带多少）
+        maxChars: 6000,     // 检索结果拼装的字符上限（控制规划调用的输入规模）；0 = 不限
+        contextLayers: 30,  // 规划调用携带的最近对话层数；0 = 不限（有多少层带多少层）
+        memChars: 4000,     // 记忆表格召回拼装的字符上限；0 = 不限
     },
     guidance: {
         presets: [],        // 剧情指导预设：{id, name, content, enabled}，启用的按列表顺序拼进系统提示词
+        inject: {           // 「转注入 / 剧情自动注入」的默认参数（界面改动会记住）
+            depth: 4,
+            role: 'system',
+            expires: 'never',   // 'never' 永久 | 'layers' N 层后过期
+            layers: 20,
+        },
     },
     lorebooks: [],          // M1 世界书库
     injections: [],         // M4 隐身注入项
@@ -41,6 +48,9 @@ function ensureDefaults() {
             ? [{ id: newId('gd-'), name: '我的预设', content: store.guidance.customPrompt, enabled: true }]
             : [];
     }
+    // 顶层 ??= 只对新装用户生效，老安装的嵌套新字段在这里补
+    store.retrieval.memChars ??= 4000;
+    store.guidance.inject ??= { depth: 4, role: 'system', expires: 'never', layers: 20 };
     return store;
 }
 

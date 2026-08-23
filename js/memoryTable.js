@@ -12,7 +12,7 @@
 import { getTavernContext } from "./context.js";
 import { chatCompletion } from "./api.js";
 import { extractJson } from "./utils.js";
-import { newId } from "./settings.js";
+import { newId, settings } from "./settings.js";
 
 const STATE_KEY = 'plotPlannerMemory';
 const MAX_BACKUPS = 20;
@@ -126,11 +126,15 @@ export function memoryState() {
         tags: {},                               // { [rid]: ['战斗','背叛'] }
         sheetRecall: {},                        // { [sheetUid]: { enabled, columns:[原列下标] } }
         recallTags: [],                         // 召回命中的标签；空 = 全部行
+        matchTags: [],                          // 标签匹配词表（剧情指导向导）：[{name, note}]
+        matchSheets: [],                        // 打标区域：表 uid；空 = 全部镜像表
         seen: [],                               // 已看过的行 rid，用于「新」标
         tagStandard: '',                        // AI 打标签的分类标准（上次使用）
         wipeAlert: null,
     });
     if (state.version !== 2) migrateV1(state);
+    state.matchTags ??= [];
+    state.matchSheets ??= [];
     return state;
 }
 
@@ -476,6 +480,75 @@ export async function autoTagRows({ standard = '', overwrite = false, onProgress
 }
 
 // ---------------------------------------------------------------------------
+// 标签匹配（剧情指导向导）：闭集词表 + 打标区域，给镜像行打标签。
+// 与 autoTagRows 的区别：标签只能从词表里选（不自拟），且可限定只处理某些表
+// ---------------------------------------------------------------------------
+
+const VOCAB_TAGGER_SYSTEM = [
+    '你是角色扮演记忆条目的自动分类器。逐条阅读给出的记忆条目，从「标签词表」里为每条挑 1~3 个最贴切的标签。',
+    '只能使用词表中列出的标签名，禁止自拟新标签；某条实在没有贴切标签时给空数组。',
+    '只输出一个 JSON 对象，格式：{"rows":[{"id":"条目id","tags":["标签名"]}]}，不要输出任何其他文字。',
+].join('\n');
+
+export async function autoTagByVocabulary({ vocab = [], sheetUids = [], overwrite = false, onProgress = null } = {}) {
+    const entries = vocab
+        .map(v => ({ name: String(v?.name ?? '').trim(), note: String(v?.note ?? '').trim() }))
+        .filter(v => v.name);
+    if (!entries.length) throw new Error('标签词表为空，请先在「匹配设置」里添加标签');
+
+    const state = memoryState();
+    const uids = new Set(sheetUids.filter(Boolean));
+    const rows = [];
+    for (const sheet of state.mirror.sheets) {
+        if (uids.size && !uids.has(sheet.uid)) continue;
+        for (const r of sheet.rows) {
+            if (!overwrite && (state.tags[r.rid] ?? []).length) continue;
+            rows.push({ rid: r.rid, cols: sheet.columns, cells: r.cells });
+        }
+    }
+    if (!rows.length) return { tagged: 0, total: 0 };
+
+    const vocabText = entries.map(v => v.note ? `${v.name}：${v.note}` : v.name).join('\n');
+    const BATCH = 40;
+    let tagged = 0;
+    for (let i = 0; i < rows.length; i += BATCH) {
+        const batch = rows.slice(i, i + BATCH);
+        const lines = batch.map(r =>
+            `[${r.rid}] ` + r.cells.map((c, j) => `${r.cols[j] ?? j}:${c}`).join(' | ')).join('\n');
+        const raw = await chatCompletion({
+            temperature: 0.2,
+            maxTokens: 4000,
+            messages: [
+                { role: 'system', content: VOCAB_TAGGER_SYSTEM },
+                {
+                    role: 'user',
+                    content: [
+                        '## 标签词表（只能从中选取）',
+                        vocabText,
+                        '## 记忆条目',
+                        lines,
+                        '只输出 JSON。',
+                    ].join('\n\n'),
+                },
+            ],
+        });
+        const data = extractJson(raw);
+        const validNames = new Set(entries.map(v => v.name));
+        const validIds = new Set(batch.map(r => r.rid));
+        for (const item of data?.rows ?? []) {
+            const rid = String(item?.id ?? '');
+            const tags = [...new Set((item?.tags ?? []).map(t => String(t).trim()).filter(t => validNames.has(t)))].slice(0, 3);
+            if (!rid || !validIds.has(rid) || !tags.length) continue;
+            state.tags[rid] = tags;
+            tagged++;
+        }
+        onProgress?.(Math.min(i + BATCH, rows.length), rows.length);
+    }
+    persistMemory();
+    return { tagged, total: rows.length };
+}
+
+// ---------------------------------------------------------------------------
 // 召回：按标签筛选镜像行，输出沿用记忆表格插件的提示词格式
 // ---------------------------------------------------------------------------
 
@@ -487,7 +560,7 @@ function pickColumns(values, indices) {
     return indices ? indices.map(i => values[i]).filter(v => v !== undefined) : values;
 }
 
-export function buildMemoryContext({ tagFilter = null, maxChars = 4000 } = {}) {
+export function buildMemoryContext({ tagFilter = null, maxChars } = {}) {
     const state = memoryState();
     const want = (tagFilter ?? state.recallTags).filter(Boolean);
     const blocks = [];
@@ -504,7 +577,8 @@ export function buildMemoryContext({ tagFilter = null, maxChars = 4000 } = {}) {
         blocks.push(`* ${blocks.length}:${sheet.name}\n【表格内容】\n${header}\n${body}`);
     }
     const text = blocks.join('\n');
-    return text.length > maxChars ? text.slice(0, maxChars) + '\n…（超长截断）' : text;
+    const limit = maxChars ?? settings.retrieval.memChars ?? 4000;   // 0 = 不限
+    return limit > 0 && text.length > limit ? text.slice(0, limit) + '\n…（超长截断）' : text;
 }
 
 // ---------------------------------------------------------------------------

@@ -66,6 +66,7 @@ export const settingsTab = {
         </div>
         <div class="pp-section">
             <b>高级设置（保持默认即可）</b>
+            <span class="pp-muted">数值项填 0 = 不限制（全量 / 不截断），温度除外（温度 0 本身是有效值）。</span>
             <div class="pp-grid2">
                 <div>
                     <label class="pp-label" title="越低输出越稳定，越高越发散">温度</label>
@@ -78,21 +79,24 @@ export const settingsTab = {
             </div>
             <hr class="pp-hr" />
             <div class="pp-label pp-group-title">世界书检索</div>
-            <label class="pp-label" title="在世界书里找条目时，拿最近几层对话文本去匹配关键词；范围越大越不容易漏，但越费 token">用最近几层对话找关键词</label>
-            <input id="pp_set_scan" class="text_pole textarea_compact" type="number" min="1" max="100" />
+            <label class="pp-label" title="在世界书里找条目时，拿最近几层对话文本去匹配关键词；范围越大越不容易漏，但越费 token；0 = 不限（扫全部对话）">用最近几层对话找关键词（0 = 不限）</label>
+            <input id="pp_set_scan" class="text_pole textarea_compact" type="number" min="0" max="100" />
             <div class="pp-grid2">
                 <div>
-                    <label class="pp-label" title="单次检索最多带出的世界书条目数">最多带出条目</label>
-                    <input id="pp_set_maxent" class="text_pole textarea_compact" type="number" min="1" max="50" />
+                    <label class="pp-label" title="单次检索最多带出的世界书条目数；0 = 不限（命中多少带多少）">最多带出条目（0 = 不限）</label>
+                    <input id="pp_set_maxent" class="text_pole textarea_compact" type="number" min="0" max="50" />
                 </div>
                 <div>
-                    <label class="pp-label" title="命中的条目内容拼在一起的总字数上限，防止撑爆请求">结果字数上限</label>
-                    <input id="pp_set_maxch" class="text_pole textarea_compact" type="number" min="500" step="500" />
+                    <label class="pp-label" title="命中的条目内容拼在一起的总字数上限，防止撑爆请求；0 = 不截断">结果字数上限（0 = 不限）</label>
+                    <input id="pp_set_maxch" class="text_pole textarea_compact" type="number" min="0" step="500" />
                 </div>
             </div>
             <hr class="pp-hr" />
-            <label class="pp-label" title="「剧情指导 / 随机事件」调用大模型时，附带最近几层对话当上下文（只影响本插件的规划请求，不影响主对话）">规划时附带最近几层对话</label>
-            <input id="pp_set_ctx" class="text_pole textarea_compact" type="number" min="4" max="200" />
+            <label class="pp-label" title="记忆表格召回结果拼进提示词的字符上限；0 = 不限。全量召回表格很大时注意 token 消耗">记忆表格召回字数上限（0 = 不限）</label>
+            <input id="pp_set_memch" class="text_pole textarea_compact" type="number" min="0" step="500" />
+            <hr class="pp-hr" />
+            <label class="pp-label" title="「剧情指导 / 随机事件」调用大模型时，附带最近几层对话当上下文（只影响本插件的规划请求，不影响主对话）；0 = 不限（有多少层带多少层）">规划时附带最近几层对话（0 = 不限）</label>
+            <input id="pp_set_ctx" class="text_pole textarea_compact" type="number" min="0" max="200" />
         </div>`;
 
         const bind = (id, get, set) => {
@@ -109,6 +113,7 @@ export const settingsTab = {
         bindNum('#pp_set_scan', () => settings.retrieval.scanDepth, v => settings.retrieval.scanDepth = v);
         bindNum('#pp_set_maxent', () => settings.retrieval.maxEntries, v => settings.retrieval.maxEntries = v);
         bindNum('#pp_set_maxch', () => settings.retrieval.maxChars, v => settings.retrieval.maxChars = v);
+        bindNum('#pp_set_memch', () => settings.retrieval.memChars, v => settings.retrieval.memChars = v);
         bindNum('#pp_set_ctx', () => settings.retrieval.contextLayers, v => settings.retrieval.contextLayers = v);
 
         applyModelMode(container);
