@@ -18,18 +18,28 @@ function requireConfig() {
     }
 }
 
-// 取补全的最终文本：部分推理模型/中转在正文为空时把内容放进思考字段，兜底取一次；
-// 仍为空多半是推理把「单次上限 tokens」耗光、正文一个字没生成，报可操作的错
-function pickContent(message) {
-    let text = typeof message?.content === 'string' ? message.content : '';
+// 取补全的最终文本，兼容三种正文形态：普通字符串 / 分段数组（content:[{type:'text'}]）/
+// 推理模型正文为空时把内容放进思考字段（reasoning_content / reasoning）。
+// 仍取不到时按证据报错：finish_reason 与 usage 能区分「长度耗尽 / 被过滤 / 字段不认识」
+function pickContent(message, { finishReason = '', completionTokens = null } = {}) {
+    const c = message?.content;
+    let text = typeof c === 'string' ? c
+        : (Array.isArray(c) ? c.map(p => (typeof p === 'string' ? p : String(p?.text ?? ''))).join('') : '');
     if (!text.trim()) {
         const r = [message?.reasoning_content, message?.reasoning].find(v => typeof v === 'string' && v.trim());
         if (r) text = r;
     }
-    if (!text.trim()) {
-        throw new ApiError('模型返回了空内容：推理模型常见原因是思考耗光了「单次上限 tokens」，到「设置 → 高级设置」调大后重试');
+    if (text.trim()) return text;
+
+    const raw = JSON.stringify(message) ?? '';
+    const evidence = `finish_reason=${finishReason || '（无）'}${completionTokens != null ? `，completion_tokens=${completionTokens}` : ''}，消息原文（前 150 字）：${raw.slice(0, 150)}`;
+    if (finishReason === 'length') {
+        throw new ApiError(`模型返回了空内容（${evidence}）。输出长度上限用完且一字未落到正文：推理模型的思考也计入「单次上限 tokens」，继续调大或换非推理模型`);
     }
-    return text;
+    if (finishReason === 'content_filter' || finishReason === 'sensitive') {
+        throw new ApiError(`模型返回了空内容（${evidence}）。被服务商内容安全过滤拦下（finish_reason 已标明），换模型/服务商或精简对话后重试`);
+    }
+    throw new ApiError(`模型返回了空内容（${evidence}）。finish_reason=stop 却无正文，多半是服务商内容安全过滤（命中敏感内容时返回 200 但正文置空，可换模型/服务商或精简对话再试），也可能是回答放在了上面「消息原文」里不认识的字段——把这段报错发维护者即可适配`);
 }
 
 /**
@@ -78,9 +88,9 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
 
     if (!stream) {
         const data = await res.json();
-        const message = data?.choices?.[0]?.message;
-        if (!message) throw new ApiError('API 返回结构异常（缺少 choices[0].message）');
-        return pickContent(message);
+        const choice = data?.choices?.[0];
+        if (!choice?.message) throw new ApiError('API 返回结构异常（缺少 choices[0].message）');
+        return pickContent(choice.message, { finishReason: choice.finish_reason, completionTokens: data?.usage?.completion_tokens });
     }
 
     // SSE 流式：逐行解析 data: {...}，聚合增量并回调 onDelta
@@ -279,7 +289,7 @@ export async function chatCompletionWithTools({ messages, temperature, maxTokens
         const message = data?.choices?.[0]?.message;
         const calls = withTools && Array.isArray(message?.tool_calls) ? message.tool_calls : [];
         if (!calls.length) {
-            return { content: pickContent(message), searchLogs };
+            return { content: pickContent(message, { finishReason: data?.choices?.[0]?.finish_reason, completionTokens: data?.usage?.completion_tokens }), searchLogs };
         }
         if (round >= maxToolRounds) {
             // 到达轮次上限：撤掉工具并明确要求收尾，逼模型基于已有信息输出最终结果
