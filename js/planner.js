@@ -122,9 +122,11 @@ function memorySectionHeader(memoryTags) {
  *                                               []=全量, ['a','b']=按标签, false=本次不附带
  * @param {*}      [options.memorySheets]        记忆表格表范围：null/缺省=全部（开了召回的表），
  *                                               数组=只带勾选的表（空数组=一张都不带）
+ * @param {Array}  [options.storageItems]        游戏玩法条目（{name, content}）：勾选后作为
+ *                                               「游戏玩法」小节发给模型，规划须在其约束内设计
  */
 export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets, memoryTags = null, memorySheets = null } = options;
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets, memoryTags = null, memorySheets = null, storageItems = [] } = options;
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
@@ -133,6 +135,7 @@ export function buildGuidanceMessages(options = {}) {
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets });
 
     const summaries = (historySummaries ?? []).filter(Boolean);
+    const gpList = (storageItems ?? []).filter(i => String(i?.content ?? '').trim());
     const userContent = [
         '## 角色设定摘要',
         characterSummary() || '（无角色卡）',
@@ -141,6 +144,8 @@ export function buildGuidanceMessages(options = {}) {
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
         ...(memoryText ? [memorySectionHeader(memoryTags), memoryText] : []),
+        ...(gpList.length ? ['## 游戏玩法（当前生效的玩法规则，规划必须遵守其约束）',
+            gpList.map(i => `### ${String(i.name ?? '未命名')}\n${String(i.content).trim()}`).join('\n\n')] : []),
         ...(activePlan ? ['## 进行中剧情（正在执行的规划，检查进度与重复时对照它）', activePlan] : []),
         ...(summaries.length ? ['## 历史剧情摘要（只用于查重）', summaries.map((s, i) => `${i + 1}. ${s}`).join('\n')] : []),
         ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),

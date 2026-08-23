@@ -1,4 +1,4 @@
-// 主面板：顶部下拉抽屉 + 五个功能页签（四个模块 + 设置；随机事件并入剧情指导页下部）
+// 主面板：顶部下拉抽屉 + 四个功能页签（三个模块 + 设置；随机事件与游戏玩法并入剧情指导页下部）
 // 高度只在「打开抽屉 / 切换页签」时按内容适配一次，封顶在聊天输入框上沿；
 // 页签内的勾选、输入、展开收起不再改变面板高度，内容超出在面板内部滚动。
 // 右下角手柄可手动拉——条目很多时可拉下去盖住输入框一次看更多；
@@ -8,10 +8,9 @@
 import { worldbookTab } from "./tabs/tab-worldbook.js";
 import { memoryTab } from "./tabs/tab-memory.js";
 import { guidanceTab } from "./tabs/tab-guidance.js";
-import { storageTab } from "./tabs/tab-storage.js";
 import { settingsTab } from "./tabs/tab-settings.js";
 
-const TABS = [worldbookTab, memoryTab, guidanceTab, storageTab, settingsTab];
+const TABS = [worldbookTab, memoryTab, guidanceTab, settingsTab];
 let activeId = TABS[0].id;
 
 // 上次自动适配写入的高度；当前内联高度与它不一致 = 用户拖过，停止自动适配

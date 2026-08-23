@@ -1,16 +1,19 @@
-// 剧情指导页签：分步规划向导 + 随机事件工具区（原独立页签并入，挂在页面底部）
-// ① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签）+ 预设临时勾选 + 剧情构思）→ ② 随机事件闸口（可跳过）
-// → ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
+// 剧情指导页签：分步规划向导 + 随机事件工具区 + 游戏玩法工具区（均挂在页面底部）
+// ① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签）+ 游戏玩法勾选 + 预设临时勾选 + 剧情构思）
+// → ② 随机事件闸口（可跳过）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
 // 确认采用的规划存为「进行中剧情」（story.js，跟聊天文件走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
 // 跳过随机事件的路径会先停在「分析前确认」页，点确认才真正调模型。
 // 另有「检查当前剧情」：对照进行中剧情出执行报告（完成度/推进/文风/OOC/其他/建议）
-// 掷骰入口只有向导第 2 步；页面下部工具区（tab-events.js）只放路人反应与事件库配置
+// 掷骰入口只有向导第 2 步；页面下部工具区（tab-events.js）只放路人反应与事件库配置；
+// 游戏玩法（tab-storage.js）挂在最底部折叠区，其生效条目由第 1 步勾选随分析发送
 import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, GUIDANCE_SYSTEM_PROMPT } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
 import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
 import { storyState, activeStory, confirmPlot, endActive, attachReport, deleteStory, clearHistory } from "../../story.js";
 import { renderEventsTools, resetEventsTools } from "./tab-events.js";
+import { renderStorageTools } from "./tab-storage.js";
+import { storageItemsInEffect } from "../../store.js";
 import { memoryState } from "../../memoryTable.js";
 import { getTavernContext } from "../../context.js";
 import { escapeHtml } from "../../utils.js";
@@ -20,6 +23,7 @@ let step = '';
 const run = {
     note: '',            // 剧情构思方向
     presetIds: [],       // 本次启用的预设（临时勾选，不写回设置）
+    gpIds: null,         // 本次随分析发送的游戏玩法条目 id；null = 未初始化（进第 1 步时默认勾当前生效的）
     event: null,         // { mode:'llm'|'lib'|'manual', title, choice } 入库用
     eventText: '',       // 拼给模型的事件材料
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
@@ -46,11 +50,13 @@ export const guidanceTab = {
         <div class="pp-section" id="pp_gd_storybar"></div>
         <div id="pp_gd_main"></div>
         <div class="pp-section" id="pp_gd_preset"></div>
-        <div id="pp_gd_events"></div>`;
+        <div id="pp_gd_events"></div>
+        <div id="pp_gd_storage"></div>`;
         renderStoryBar(container);
         renderMain(container);
         renderPreset(container);
         renderEventsTools(container.querySelector('#pp_gd_events'));
+        renderStorageTools(container.querySelector('#pp_gd_storage'));
     },
 };
 
@@ -59,7 +65,7 @@ export const guidanceTab = {
 export function resetGuidance() {
     step = '';
     Object.assign(run, {
-        note: '', presetIds: [], event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
+        note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
         memSheets: null, memMatch: false, memTags: [], readyFrom: 'event',
     });
     Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
@@ -262,7 +268,7 @@ function renderMain(container) {
 
     main.innerHTML = `
     <div class="pp-section">
-        <div class="pp-muted">分步规划：① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签） + 预设勾选 + 剧情构思）→ ② 随机事件闸口（可跳过）→ ③ 模型分析（检查 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）。确认采用的规划存为「进行中剧情」并自动注入，可随时「检查当前剧情」出执行报告。</div>
+        <div class="pp-muted">分步规划：① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签） + 游戏玩法勾选 + 预设勾选 + 剧情构思）→ ② 随机事件闸口（可跳过）→ ③ 模型分析（检查 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）。确认采用的规划存为「进行中剧情」并自动注入，可随时「检查当前剧情」出执行报告。</div>
     </div>`;
 }
 
@@ -270,6 +276,10 @@ function startCollect(container) {
     step = 'collect';
     if (!run.presetIds.length) {
         run.presetIds = (settings.guidance?.presets ?? []).filter(p => p.enabled).map(p => p.id);
+    }
+    // 游戏玩法：每次进第 1 步若未手动勾过，默认勾「当前生效中」的条目（生效判定与主对话注入同一套）
+    if (run.gpIds == null) {
+        run.gpIds = storageItemsInEffect().map(i => i.id);
     }
     renderStoryBar(container);
     renderMain(container);
@@ -288,6 +298,11 @@ function wizardMemorySheets() {
     return run.memSheets;
 }
 
+// 本次运行随分析发送的游戏玩法条目（第 1 步勾选，默认 = 当前生效中）
+function wizardStorageItems() {
+    return (settings.storageItems ?? []).filter(i => (run.gpIds ?? []).includes(i.id));
+}
+
 // 跳过类按钮先停在「分析前确认」页，不直接花一次模型调用
 function goReady(container, from) {
     run.readyFrom = from;
@@ -302,6 +317,9 @@ function renderCollect(container, main) {
     const state = memoryState();
     // 第一层只列开了「参与召回」的表（与记忆表格页的召回开关取交集）
     const recallSheets = state.mirror.sheets.filter(s => (state.sheetRecall[s.uid] ?? {}).enabled !== false);
+    // 游戏玩法：只列启用中的条目；「生效中」标记与主对话注入同一判定
+    const gpItems = settings.storageItems.filter(i => i.enabled);
+    const gpHit = new Set(storageItemsInEffect().map(i => i.id));
     main.innerHTML = `
     <div class="pp-section">
         <b>第 1 步 · 收集确认</b>
@@ -334,6 +352,11 @@ function renderCollect(container, main) {
             ${presets.map(p => `<label><input type="checkbox" data-c1p="${p.id}" ${run.presetIds.includes(p.id) ? 'checked' : ''}/> ${escapeHtml(p.name)}</label>`).join('')
             || '<span class="pp-muted">（还没有预设，可在下方「规划预设」里新建）</span>'}
         </div>
+        <label class="pp-label">游戏玩法（勾选的玩法规则随本次分析发给模型，规划须按其约束设计；默认勾选当前生效中的条目）</label>
+        <div class="pp-gd-selp">
+            ${gpItems.map(i => `<label title="勾选后该条玩法规则作为材料发给规划模型（不影响它注入主对话）"><input type="checkbox" data-c1g="${i.id}" ${(run.gpIds ?? []).includes(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-muted">（生效中）</span>' : ''}</label>`).join('')
+            || '<span class="pp-muted">（还没有玩法条目，可在本页底部「游戏玩法」折叠区添加）</span>'}
+        </div>
         <label class="pp-label">剧情构思方向（可选：已有的想法、约束、重点，随本次分析发给模型）</label>
         <textarea id="pp_gd_note" class="text_pole textarea_compact" rows="3"></textarea>
         <div class="pp-btn-row">
@@ -351,8 +374,9 @@ function renderCollect(container, main) {
     const refreshMem = () => {
         const st = collectStats({ memoryTags: wizardMemoryTags(), memorySheets: wizardMemorySheets() });
         const sheetDesc = run.memSheets == null ? '全部表' : `${run.memSheets.length} 张表`;
+        const gpDesc = gpItems.length ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
         main.querySelector('#pp_gd_c1_stat').textContent =
-            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · 记忆表格 ${st.memChars} 字（${sheetDesc} · ${memModeDesc()}）`;
+            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · 记忆表格 ${st.memChars} 字（${sheetDesc} · ${memModeDesc()}）${gpDesc}`;
         main.querySelector('#pp_gd_c1_chips').style.display = run.memMatch ? '' : 'none';
         main.querySelector('#pp_gd_c1_memtip').textContent =
             run.memMatch && !run.memTags.length ? '未勾选任何标签，本次将不附带记忆表格' : '';
@@ -401,6 +425,10 @@ function renderCollect(container, main) {
         run.presetIds = [...main.querySelectorAll('[data-c1p]:checked')].map(x => x.dataset.c1p);
         main.querySelector('#pp_gd_c1_count').textContent = `预设 ${run.presetIds.length}/${presets.length} 启用${activeStory() ? ' · 已附进行中剧情' : ''}`;
     }));
+    main.querySelectorAll('[data-c1g]').forEach(cb => cb.addEventListener('change', () => {
+        run.gpIds = [...main.querySelectorAll('[data-c1g]:checked')].map(x => x.dataset.c1g);
+        refreshMem();
+    }));
 
     main.querySelector('#pp_gd_c1_preview').addEventListener('click', () => {
         const view = main.querySelector('#pp_gd_promptview');
@@ -415,6 +443,7 @@ function renderCollect(container, main) {
                 presets: runPresets(),
                 memoryTags: wizardMemoryTags(),
                 memorySheets: wizardMemorySheets(),
+                storageItems: wizardStorageItems(),
             });
             view.textContent = `【系统提示词】\n${system}\n\n【用户消息】\n${user}`;
             view.style.display = '';
@@ -441,6 +470,7 @@ function renderReady(container, main) {
         : run.memMatch
             ? (run.memTags.length ? `按标签（${run.memTags.join('、')}）` : '不附带（未勾标签）')
             : '全量召回';
+    const gpOn = settings.storageItems.some(i => i.enabled);
     main.innerHTML = `
     <div class="pp-section">
         <b>分析前确认</b>
@@ -448,7 +478,7 @@ function renderReady(container, main) {
         <div class="pp-item">
             <div class="pp-item-main">
                 <span>对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${run.presetIds.length}/${presets.length} 启用</span>
-                <span class="pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''} · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}${activeStory() ? ' · 附进行中剧情' : ''}</span>
+                <span class="pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''} · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}${activeStory() ? ' · 附进行中剧情' : ''}</span>
             </div>
         </div>
         <div class="pp-btn-row">
@@ -652,6 +682,7 @@ async function startAnalyze(container, { revise = false } = {}) {
             presets: runPresets(),
             memoryTags: wizardMemoryTags(),
             memorySheets: wizardMemorySheets(),
+            storageItems: wizardStorageItems(),
         });
         run.result = data.result;
         run.raw = data.raw;
@@ -777,7 +808,7 @@ function renderResult(container, main) {
         toastr.success('已存为进行中剧情并自动注入（原剧情自动归档，可在历史回看）');
         step = '';
         Object.assign(run, {
-            note: '', presetIds: [], event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
+            note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
             memSheets: null, memMatch: false, memTags: [], readyFrom: 'event',
         });
         report = null;
@@ -835,6 +866,7 @@ function rewriteByAdvice(container) {
     if (!active || !report?.advice) return;
     run.note = '';
     run.presetIds = (settings.guidance?.presets ?? []).filter(p => p.enabled).map(p => p.id);
+    if (run.gpIds == null) run.gpIds = storageItemsInEffect().map(i => i.id);   // 与第 1 步同默认：生效中的玩法条目
     run.event = null;
     run.eventText = '';
     run.planText = active.planText;   // 上一版 = 当前剧情
