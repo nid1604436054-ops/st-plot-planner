@@ -3,7 +3,7 @@
 // 卡片结构（吸收用户 NPC_Reaction 预设）：显著性分级 / 即时反应写法（写一次就够）/
 // 扩散链（按楼层分段，贴世界观）/ 底线（不可逆伤害一律禁止）/ 楼层预算（到期自动撤下）。
 import { chatCompletion } from "./api.js";
-import { collectPlanningContext, characterSummary } from "./context.js";
+import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
 import { buildLoreContext } from "./lorebook.js";
 import { extractJson } from "./utils.js";
 

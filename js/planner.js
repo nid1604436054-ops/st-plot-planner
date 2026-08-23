@@ -1,7 +1,7 @@
 // M2 剧情指导：检查（OOC/剧情重复/文风重复/进度）+ 剧情规划（隐藏剧本）+ 检查报告
 // 与 M3 共用「上下文收集 + 世界书检索 + 独立 API」管线，全程不碰主对话连接
 import { chatCompletion, chatCompletionWithTools, searchToolReady } from "./api.js";
-import { collectPlanningContext, characterSummary } from "./context.js";
+import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
 import { buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
