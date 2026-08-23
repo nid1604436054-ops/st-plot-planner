@@ -1,4 +1,4 @@
-// 路人反应校准卡：把「刚发生的引人注目的事」转成有边界、随楼层扩散再收束的幕后注入
+// 路人反应校准卡：模型从最近对话里认出「刚发生的引人注目的事」，转成有边界、随楼层扩散再收束的幕后注入
 // 解决两个极端：模型要么每层都全场哗哗地重复路人反应，要么一笔带过后世界装失忆。
 // 卡片结构（吸收用户 NPC_Reaction 预设）：显著性分级 / 即时反应写法（写一次就够）/
 // 扩散链（按楼层分段，贴世界观）/ 底线（不可逆伤害一律禁止）/ 楼层预算（到期自动撤下）。
@@ -10,7 +10,7 @@ import { extractJson } from "./utils.js";
 
 const DEFAULT_BOUNDARY = '不得导致感情实质破裂、主要角色受异性实质侵犯、user 无法逆转的损失；危机可以重，出口必须存在。';
 
-const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器」。用户会描述一件引人注目的事（或让你从最近对话里判断），'
+const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器」。用户会给你最近对话，你从中找出最近一件最引人注目的事，'
     + '你生成一张路人反应卡，用于注入幕后指导主对话模型。'
     + '核心认知：路人的功能是证明角色的存在感——绝大多数反应止步一到三句，不喧宾夺主，不自行发展成独立剧情；'
     + '少数反应有余地时才升级成事件，事件是副产物不是目的，要写成已发生、不写「可能会发生」，提供方向不提供剧情。'
@@ -24,13 +24,12 @@ const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器�
     + '古风/奇幻用口耳相传、悬赏告示、教会或官府注意等。段与段要递进（扩散、发酵或平息），区间加起来与 floors 匹配。';
 
 /**
- * 生成一张路人反应卡。
+ * 生成一张路人反应卡（引人注目的事从最近对话里自动判定，不手填）。
  * @param {object} [options]
- * @param {string} [options.what]  刚发生的引人注目的事（空则让模型从最近对话里找）
- * @param {string} [options.note]  补充说明（期望烈度、扩散方向、要避开什么）
+ * @param {string} [options.note]  指导意见（期望烈度、扩散方向、要避开什么）
  * @returns {Promise<{salience:number, immediate:string, diffusion:Array, boundaries:string, floors:number}>}
  */
-export async function generateReactionCard({ what = '', note = '' } = {}) {
+export async function generateReactionCard({ note = '' } = {}) {
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
     const hits = scanLorebooks(scanText);
@@ -41,9 +40,9 @@ export async function generateReactionCard({ what = '', note = '' } = {}) {
         formatChatLog(chatList),
         '## 世界书命中',
         buildLoreContext(hits),
-        '## 引人注目的事',
-        what.trim() || '（未填写：请从最近对话里找出最近一件最引人注目的事；实在没有就按日常被注视处理，salience 取 1）',
-        note.trim() ? `## 补充说明\n${note.trim()}` : '',
+        '## 任务',
+        '从最近对话里找出最近一件最引人注目的事，围绕它生成反应卡；实在没有就按日常被注视处理，salience 取 1。',
+        note.trim() ? `## 指导意见\n${note.trim()}` : '',
     ].filter(Boolean).join('\n\n');
 
     const raw = await chatCompletion({

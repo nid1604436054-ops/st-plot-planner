@@ -1,7 +1,8 @@
 // 随机事件工具区（挂在剧情指导页下部）：路人反应校准 + 底部「事件库设置」「AI 建库」两个折叠区。
 // 掷骰入口只有分步规划向导第 2 步（随机事件闸口），这里不再放独立的掷骰按钮；
 // 「事件库设置」里调掷骰三板块（事件条目 / 维度随机 / AI 自主）的开关与权重，供向导第 2 步的掷骰用。
-// 路人反应卡：引人注目的事 → 显著性/即时反应/扩散链/底线/楼层预算 → 转自动过期注入（逐层换段）
+// 路人反应卡：从最近对话认出引人注目的事（不手填，唯一输入框是指导意见）→ 显著性/即时反应/扩散链/
+// 底线/楼层预算 → 转自动过期注入（逐层换段；生效期间规划与检查报告自动附带同一口径，见 planner.js）
 import { settings, save, newId } from "../../settings.js";
 import { defaultEventRules, generateEventEntries, dimNameOf } from "../../randomEvents.js";
 import { generateReactionCard, composeReactionText } from "../../reactions.js";
@@ -11,7 +12,7 @@ import { escapeHtml, clamp } from "../../utils.js";
 
 let editingDim = null, editingRule = null;                     // 展开编辑中的维度 / 条目 id
 const lib = { dimId: '', count: 5, note: '', preview: [], busy: false };  // AI 建库草稿
-const rx = { what: '', note: '', card: null, busy: false, touched: false }; // 路人反应卡
+const rx = { note: '', card: null, busy: false, touched: false }; // 路人反应卡（note = 指导意见）
 const folds = { settings: false, dims: false, entries: false, ailib: false }; // 折叠区展开状态（跨重渲染保留）
 
 // 渲染随机事件工具区（路人反应 + 底部两个折叠区），由剧情指导页挂载；掷骰本身在向导第 2 步
@@ -24,19 +25,14 @@ export function renderEventsTools(container) {
     container.innerHTML = `
     <div class="pp-section">
         <b>路人反应校准</b>
-        <div class="pp-muted">模型处理路人反应常走两个极端：每层都全场哗哗地重复，或一笔带过后世界装失忆。这里把「刚发生的引人注目的事」交给模型出一张反应卡：即时反应怎么写、余波怎么随楼层扩散、底线在哪、几层收束。确认后作为隐身注入生效，正文按楼层自动换段，到期自动撤下。</div>
-        <label class="pp-label">刚发生了什么引人注目的事（不填则模型从最近对话里找）</label>
-        <textarea id="pp_rx_what" class="text_pole textarea_compact" rows="2" placeholder="例：主角刚在商场中庭当众唱了一首歌"></textarea>
-        <label class="pp-label">补充说明（可选：期望烈度、扩散方向、要避开什么）</label>
-        <textarea id="pp_rx_note" class="text_pole textarea_compact" rows="2"></textarea>
+        <div class="pp-muted">模型处理路人反应常走两个极端：每层都全场哗哗地重复，或一笔带过后世界装失忆。这里让模型从最近对话里认出刚发生的引人注目的事，出一张反应卡：即时反应怎么写、余波怎么随楼层扩散、底线在哪、几层收束。确认后作为隐身注入生效，正文按楼层自动换段，到期自动撤下；生效期间，上面分步向导的规划与检查报告会自动带上同一份口径。</div>
+        <label class="pp-label">指导意见（可选：期望烈度、扩散方向、要避开什么；引人注目的事由模型从最近对话里认出）</label>
+        <textarea id="pp_rx_note" class="text_pole textarea_compact" rows="2" placeholder="例：别闹大，控制在背后议论和转发的程度"></textarea>
         <div class="pp-btn-row"><span id="pp_rx_gen" class="menu_button">生成反应卡</span></div>
         <div id="pp_rx_card"></div>
     </div>
     <div id="pp_ev_settings_wrap"></div>`;
 
-    const what = container.querySelector('#pp_rx_what');
-    what.value = rx.what;
-    what.addEventListener('input', () => { rx.what = what.value; });
     const note = container.querySelector('#pp_rx_note');
     note.value = rx.note;
     note.addEventListener('input', () => { rx.note = note.value; });
@@ -49,7 +45,7 @@ export function renderEventsTools(container) {
 // 聊天切换时由剧情指导页一并调用：反应卡是当前聊天的内容，跟着清；
 // AI 建库草稿是建库工具状态（不分聊天），保留
 export function resetEventsTools() {
-    Object.assign(rx, { what: '', note: '', card: null, busy: false, touched: false });
+    Object.assign(rx, { note: '', card: null, busy: false, touched: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +466,7 @@ async function buildReaction(container) {
     const btn = container.querySelector('#pp_rx_gen');
     btn.textContent = '生成中……';
     try {
-        rx.card = await generateReactionCard({ what: rx.what, note: rx.note });
+        rx.card = await generateReactionCard({ note: rx.note });
         renderReactionCard(container);
     } catch (err) {
         toastr.error(String(err.message ?? err));
@@ -522,7 +518,7 @@ function renderReactionCard(container) {
         const reaction = rx.touched && text !== auto ? { ...card, edited: true } : card;
         addInjection({
             id: newId('inj-'),
-            label: `路人反应：${(rx.what || card.immediate || '').slice(0, 24)}`,
+            label: card.immediate ? `路人反应：${card.immediate.slice(0, 24)}` : '路人反应',
             mode: 'open',
             content: text,
             depth: 4,
@@ -535,6 +531,6 @@ function renderReactionCard(container) {
             reaction,
             age: 0,
         });
-        toastr.success(`已注入，${card.floors} 层后自动撤下（正文逐层推进扩散段；设置页底部可提前撤下）`);
+        toastr.success(`已注入，${card.floors} 层后自动撤下（正文逐层推进扩散段；生效期间规划与检查报告自动附带，设置页底部可提前撤下）`);
     });
 }

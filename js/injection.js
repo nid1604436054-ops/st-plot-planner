@@ -66,6 +66,15 @@ export function replayScopedInjections() {
     }
 }
 
+// 当前生效的反应卡注入（正文即主对话提示词里逐层换段的同一份文本）。
+// 剧情规划与检查报告通道附带它用（planner.js）：规划模型与主对话模型看到同一批反应指导
+export function activeReactionInjections() {
+    const chatId = getTavernContext().chatId;
+    return settings.injections.filter(i => i.enabled && i.source === 'reaction'
+        && String(i.content ?? '').trim()
+        && !(i.scope === 'chat' && i.chatId !== undefined && i.chatId !== chatId));
+}
+
 // 每收到一条消息，推进「按层数过期」的计数（开发方案 §M4 生命周期）；
 // 带反应卡的注入（source=reaction）同时按新楼层重写正文（扩散链逐层换段、临近到期提示收束）。
 // 绑定其他聊天的 scope=chat 注入不跟着别的聊天计数。

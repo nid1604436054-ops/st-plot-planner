@@ -5,6 +5,7 @@ import { collectRecentChat, formatChatLog, characterSummary } from "./context.js
 import { scanLorebooks, buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
+import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
 import { extractJson } from "./utils.js";
 
@@ -116,6 +117,14 @@ function gameplaySection(items, header) {
     return [header, list.map(i => `### ${String(i.name ?? '未命名')}\n${String(i.content).trim()}`).join('\n\n')];
 }
 
+// 路人反应小节：生效中的反应卡注入自动附带（分析与检查报告共用）。
+// 附带的正文就是主对话提示词里逐层换段的同一份文本——规划/检查模型与主对话模型看到同一口径
+function reactionSection(header) {
+    const list = activeReactionInjections();
+    if (!list.length) return [];
+    return [header, list.map(i => String(i.content).trim()).join('\n\n')];
+}
+
 /**
  * 组装剧情指导分析要发的 system/user 两条消息（runPlotGuidance 与「查看完整提示词」预览共用）。
  * @param {object} [options]
@@ -152,6 +161,7 @@ export function buildGuidanceMessages(options = {}) {
         buildLoreContext(hits),
         ...(memoryText ? [memorySectionHeader(memoryTags), memoryText] : []),
         ...gameplaySection(storageItems, '## 游戏玩法（当前生效的玩法规则，规划必须遵守其约束）'),
+        ...reactionSection('## 路人反应（当前生效的反应卡，后续剧情安排与其扩散、收束口径一致）'),
         ...(activePlan ? ['## 进行中剧情（正在执行的规划，检查进度与重复时对照它）', activePlan] : []),
         ...(summaries.length ? ['## 历史剧情摘要（只用于查重）', summaries.map((s, i) => `${i + 1}. ${s}`).join('\n')] : []),
         ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),
@@ -182,7 +192,7 @@ export async function runPlotGuidance(options = {}) {
 
 /**
  * 检查报告：对照进行中剧情与最近对话，输出完成度/推进/文风/OOC/其他问题/建议。
- * 当前生效的游戏玩法条目自动附带（与主对话注入同一判定），检查执行情况时对照它。
+ * 当前生效的游戏玩法条目与路人反应卡自动附带（与主对话注入同一判定），检查执行情况时对照它们。
  * @param {object} [options]
  * @param {string} options.planText   进行中剧情全文
  * @param {string} [options.userNote] 补充说明
@@ -207,6 +217,7 @@ export async function runStoryReview({ planText = '', userNote = '', presets } =
         buildLoreContext(hits),
         ...(memoryText ? ['## 记忆表格（已有剧情事件记录，用于查重与推新参考；按记忆表格页召回标签筛选）', memoryText] : []),
         ...gameplaySection(storageItemsInEffect(), '## 游戏玩法（当前生效的玩法规则，检查执行情况时对照它）'),
+        ...reactionSection('## 路人反应（当前生效的反应卡，检查执行情况时对照它）'),
         ...(userNote ? ['## 用户补充说明', userNote] : []),
     ].join('\n\n');
 
