@@ -18,6 +18,20 @@ function requireConfig() {
     }
 }
 
+// 取补全的最终文本：部分推理模型/中转在正文为空时把内容放进思考字段，兜底取一次；
+// 仍为空多半是推理把「单次上限 tokens」耗光、正文一个字没生成，报可操作的错
+function pickContent(message) {
+    let text = typeof message?.content === 'string' ? message.content : '';
+    if (!text.trim()) {
+        const r = [message?.reasoning_content, message?.reasoning].find(v => typeof v === 'string' && v.trim());
+        if (r) text = r;
+    }
+    if (!text.trim()) {
+        throw new ApiError('模型返回了空内容：推理模型常见原因是思考耗光了「单次上限 tokens」，到「设置 → 高级设置」调大后重试');
+    }
+    return text;
+}
+
 /**
  * 发起一次对话补全。
  * @param {object} options
@@ -64,11 +78,9 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
 
     if (!stream) {
         const data = await res.json();
-        const content = data?.choices?.[0]?.message?.content;
-        if (typeof content !== 'string') {
-            throw new ApiError('API 返回结构异常（缺少 choices[0].message.content）');
-        }
-        return content;
+        const message = data?.choices?.[0]?.message;
+        if (!message) throw new ApiError('API 返回结构异常（缺少 choices[0].message）');
+        return pickContent(message);
     }
 
     // SSE 流式：逐行解析 data: {...}，聚合增量并回调 onDelta
@@ -267,9 +279,7 @@ export async function chatCompletionWithTools({ messages, temperature, maxTokens
         const message = data?.choices?.[0]?.message;
         const calls = withTools && Array.isArray(message?.tool_calls) ? message.tool_calls : [];
         if (!calls.length) {
-            const content = message?.content;
-            if (typeof content !== 'string') throw new ApiError('API 返回结构异常（缺少 choices[0].message.content）');
-            return { content, searchLogs };
+            return { content: pickContent(message), searchLogs };
         }
         if (round >= maxToolRounds) {
             // 到达轮次上限：撤掉工具并明确要求收尾，逼模型基于已有信息输出最终结果

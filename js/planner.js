@@ -184,7 +184,12 @@ export async function runPlotGuidance(options = {}) {
         { role: 'system', content: system },
         { role: 'user', content: user },
     ]);
-    return { result: extractJson(raw), raw, hits };
+    try {
+        return { result: extractJson(raw), raw, hits };
+    } catch (err) {
+        err.raw = raw;   // 解析失败也把原始输出附到错误上，方便上层展示排查
+        throw err;
+    }
 }
 
 /**
@@ -220,5 +225,10 @@ export async function runStoryReview({ planText = '', userNote = '', presets } =
         { role: 'system', content: withPresets(REVIEW_SYSTEM_PROMPT, assemblePresets(presets)) },
         { role: 'user', content: userContent },
     ]);
-    return { result: extractJson(raw), raw, hits: hits.length };
+    try {
+        return { result: extractJson(raw), raw, hits: hits.length };
+    } catch (err) {
+        err.raw = raw;
+        throw err;
+    }
 }

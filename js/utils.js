@@ -15,14 +15,23 @@ export function clamp(text, max) {
 }
 
 // 容错提取模型输出中的 JSON：剥掉 ``` 围栏，截取首个 { 到最后一个 }
+// 报错自带原始输出片段（找不到 JSON 给开头、解析失败给结尾），排查不用另找入口
 export function extractJson(text) {
     const stripped = String(text ?? '').replace(/```(?:json)?/gi, '');
     const start = stripped.indexOf('{');
     const end = stripped.lastIndexOf('}');
     if (start === -1 || end === -1 || end <= start) {
-        throw new Error('模型输出中未找到 JSON（可查看原始输出排查）');
+        const head = stripped.trim().slice(0, 160);
+        throw new Error(head
+            ? `模型输出中未找到 JSON。输出开头：「${head}」`
+            : '模型输出为空：推理模型常见原因是思考耗光了「单次上限 tokens」，到「设置 → 高级设置」调大后重试');
     }
-    return JSON.parse(stripped.slice(start, end + 1));
+    try {
+        return JSON.parse(stripped.slice(start, end + 1));
+    } catch (err) {
+        const tail = stripped.slice(start).slice(-160).trim();
+        throw new Error(`模型输出不是合法 JSON（${err.message}；结尾突兀多半是被「单次上限 tokens」截断，到「设置 → 高级设置」调大后重试）。输出结尾：「${tail}」`);
+    }
 }
 
 // 密封内容的「指纹」：只暴露长度与校验值，不暴露正文
