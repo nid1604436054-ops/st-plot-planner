@@ -14,6 +14,21 @@ export function clamp(text, max) {
     return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
+// 粗估一段文本的 token 数（浏览器里没有真分词器的折中办法）：
+// 中日韩/全角字符按 1 字 ≈ 1 token，其余（英文/数字/符号）按约 4 字符 ≈ 1 token。
+// 各家模型分词器差异不小，结果只作规模参考，不用于计费
+export function estimateTokens(text) {
+    const s = String(text ?? '');
+    let wide = 0;
+    for (const ch of s) {
+        const c = ch.codePointAt(0);
+        if ((c >= 0x2E80 && c <= 0x9FFF) ||     // CJK 部首·标点·汉字·假名
+            (c >= 0xAC00 && c <= 0xD7AF) ||     // 韩文音节
+            (c >= 0xF900 && c <= 0xFFEF)) wide++;   // CJK 兼容汉字·全角符号
+    }
+    return Math.round(wide + (s.length - wide) / 4);
+}
+
 // 修模型常犯的 JSON 格式伤（只在字符串与结构边界动小手术，不动内容）：
 // 值内未转义的英文引号补转义（引号后不是结构位置即视为内文引号）、值内裸换行/制表转义、
 // 换行分隔的属性/元素缺逗号补上、尾逗号删掉。仅在直接解析失败后作为第二道尝试。

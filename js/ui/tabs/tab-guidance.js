@@ -17,7 +17,7 @@ import { renderStorageTools } from "./tab-storage.js";
 import { storageItemsInEffect } from "../../store.js";
 import { memoryState } from "../../memoryTable.js";
 import { getTavernContext } from "../../context.js";
-import { escapeHtml } from "../../utils.js";
+import { escapeHtml, estimateTokens } from "../../utils.js";
 
 // 向导状态机：'' 空闲 | collect ① | event ② | ready 分析前确认 | running ③ | result ④ | reviewing/report 检查报告
 let step = '';
@@ -449,7 +449,10 @@ function renderCollect(container, main) {
                 memorySheets: wizardMemorySheets(),
                 storageItems: wizardStorageItems(),
             });
-            view.textContent = `【系统提示词】\n${system}\n\n【用户消息】\n${user}`;
+            const sysTok = estimateTokens(system);
+            const usrTok = estimateTokens(user);
+            view.innerHTML = `<div class="pp-muted" style="margin-bottom:6px" title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考">合计约 ${(sysTok + usrTok).toLocaleString()} tokens（系统提示词 ${sysTok.toLocaleString()} · 用户消息 ${usrTok.toLocaleString()}），粗估值；这是输入规模，不占「单次上限 tokens」</div>`
+                + escapeHtml(`【系统提示词】\n${system}\n\n【用户消息】\n${user}`);
             view.style.display = '';
         } catch (err) {
             toastr.error(String(err.message ?? err));
