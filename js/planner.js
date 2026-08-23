@@ -87,10 +87,18 @@ async function guidanceCompletion(messages) {
     const SEARCH_HINT = '\n\n## 联网搜索\n你可以调用 web_search 工具检索现实世界的真实信息：'
         + '涉及现实事实、时效性内容（近期事件、数据、新闻）或你不确定的现实细节时，先搜索再下结论；纯虚构设定不要搜索。'
         + '搜索结果仅供参考，最终仍只输出上面规定的 JSON，不要输出 JSON 以外的任何文字。';
-    const { content, searchLogs } = await chatCompletionWithTools({
+    const { content, searchLogs, usage } = await chatCompletionWithTools({
         messages: messages.map(m => (m.role === 'system' ? { ...m, content: m.content + SEARCH_HINT } : m)),
     });
-    if (searchLogs.length) toastr.info(`模型自主联网检索了：${searchLogs.join('；')}`);
+    // 多轮往返时把真实账单亮出来（取服务商 usage，非估算）：每轮都重发全部材料，
+    // 输入按次数累加——不然后台看到的总输入比预览大好几倍，没法对账
+    const bill = [];
+    if (usage?.requests > 1) {
+        bill.push(`联网搜索往返共 ${usage.requests} 次请求（每次重发全部材料）`
+            + (usage.promptTokens ? `，累计输入约 ${usage.promptTokens.toLocaleString()} · 输出约 ${usage.completionTokens.toLocaleString()} tokens` : ''));
+    }
+    if (searchLogs.length) bill.push(`模型自主联网检索了：${searchLogs.join('；')}`);
+    if (bill.length) toastr.info(bill.join('；'));
     return content;
 }
 

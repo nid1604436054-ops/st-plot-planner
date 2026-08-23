@@ -18,6 +18,7 @@ import { storageItemsInEffect } from "../../store.js";
 import { memoryState } from "../../memoryTable.js";
 import { getTavernContext } from "../../context.js";
 import { escapeHtml, estimateTokens } from "../../utils.js";
+import { searchToolReady } from "../../api.js";
 
 // 向导状态机：'' 空闲 | collect ① | event ② | ready 分析前确认 | running ③ | result ④ | reviewing/report 检查报告
 let step = '';
@@ -298,6 +299,10 @@ function wizardStorageItems() {
     return (settings.storageItems ?? []).filter(i => (run.gpIds ?? []).includes(i.id));
 }
 
+// 联网搜索工具是否会对本次分析生效：设置页开了「允许模型自主调用」且填了搜索密钥。
+// 生效时模型可能多轮检索，每轮把全部材料原样重发，后台总输入 = 单次规模 × 请求次数
+const searchToolActive = () => settings.search?.toolMode !== false && searchToolReady();
+
 // 跳过类按钮先停在「分析前确认」页，不直接花一次模型调用
 function goReady(container, from) {
     run.readyFrom = from;
@@ -451,7 +456,7 @@ function renderCollect(container, main) {
             });
             const sysTok = estimateTokens(system);
             const usrTok = estimateTokens(user);
-            view.innerHTML = `<div class="pp-muted" style="margin-bottom:6px" title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考">合计约 ${(sysTok + usrTok).toLocaleString()} tokens（系统提示词 ${sysTok.toLocaleString()} · 用户消息 ${usrTok.toLocaleString()}），粗估值；这是输入规模，不占「单次上限 tokens」</div>`
+            view.innerHTML = `<div class="pp-muted" style="margin-bottom:6px" title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考">合计约 ${(sysTok + usrTok).toLocaleString()} tokens（系统提示词 ${sysTok.toLocaleString()} · 用户消息 ${usrTok.toLocaleString()}），粗估值；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：模型多轮检索时每轮重发全部材料，实际输入按请求次数累加' : ''}</div>`
                 + escapeHtml(`【系统提示词】\n${system}\n\n【用户消息】\n${user}`);
             view.style.display = '';
         } catch (err) {
@@ -482,7 +487,7 @@ function renderReady(container, main) {
     <div class="pp-section">
         <b>分析前确认</b>
         <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${run.presetIds.length}/${presets.length} 启用 · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}</div>
-        <div class="pp-gd-stat pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${activeStory() ? ' · 附进行中剧情' : ''}</div>
+        <div class="pp-gd-stat pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（多轮往返会累加输入）' : ''}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">确认，开始分析</span>
             <span id="pp_gd_ready_back" class="menu_button">返回</span>

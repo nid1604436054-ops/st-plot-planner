@@ -283,6 +283,9 @@ async function postCompletion(body, signal) {
 export async function chatCompletionWithTools({ messages, temperature, maxTokens, signal, maxToolRounds = 3 } = {}) {
     const msgs = messages.map(m => ({ ...m }));
     const searchLogs = [];
+    // 真实账单（服务商返回的 usage 累计，非估算）：工具每往返一轮就把全部材料原样重发一遍，
+    // 输入按请求次数累加——后台看到的总输入是 N 倍单次规模，这里记下来供界面汇报
+    const usage = { requests: 0, promptTokens: 0, completionTokens: 0 };
     let withTools = true;
 
     for (let round = 0; ; round++) {
@@ -304,10 +307,14 @@ export async function chatCompletionWithTools({ messages, temperature, maxTokens
             throw err;
         }
 
+        usage.requests++;
+        usage.promptTokens += data?.usage?.prompt_tokens ?? 0;
+        usage.completionTokens += data?.usage?.completion_tokens ?? 0;
+
         const message = data?.choices?.[0]?.message;
         const calls = withTools && Array.isArray(message?.tool_calls) ? message.tool_calls : [];
         if (!calls.length) {
-            return { content: pickContent(message, { finishReason: data?.choices?.[0]?.finish_reason, completionTokens: data?.usage?.completion_tokens }), searchLogs };
+            return { content: pickContent(message, { finishReason: data?.choices?.[0]?.finish_reason, completionTokens: data?.usage?.completion_tokens }), searchLogs, usage };
         }
         if (round >= maxToolRounds) {
             // 到达轮次上限：撤掉工具并明确要求收尾，逼模型基于已有信息输出最终结果
