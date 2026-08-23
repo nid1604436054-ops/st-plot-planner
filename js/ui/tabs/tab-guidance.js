@@ -570,7 +570,7 @@ function renderEvent(container, main) {
                 ev.event = await generateAiChoiceRandomEvent({ dimensions: r.dimensions });
                 const dim = r.dimensions.find(d => d.name === ev.event?.dimension) ?? null;
                 commitRolledEvent({ dimension: dim, title: ev.event.title, source: 'ai' });
-                status.textContent = `来自AI 自主${dim ? `·维度「${dim.name}」` : ''}`;
+                status.textContent = `来自 AI 自主${dim ? `·维度「${dim.name}」` : ''}`;
             } else {
                 ev.mode = 'free';
                 ev.event = await generateFreeRandomEvent({ dimension: r.dimension, useLibrary: ev.useLibrary, wantPreview: ev.wantPreview });
@@ -812,6 +812,8 @@ function renderResult(container, main) {
             note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
             memSheets: null, memMatch: false, memTags: [], readyFrom: 'event',
         });
+        // 第 2 步闸口状态一并清空：上一轮的事件卡/走向/意见不带进新一轮规划（「不保存，回到第 1 步」才保留）
+        Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
         report = null;
         renderStoryBar(container);
         renderMain(container);

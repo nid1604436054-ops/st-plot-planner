@@ -80,13 +80,17 @@ export function normalizeCard(card) {
     };
 }
 
-// age = 已过去的楼层数（0 = 刚发生）；返回当前应处的扩散段
+// age = 已过去的楼层数（0 = 刚发生）；返回当前应处的扩散段。
+// 模型给的区间可能不连续（首段不从 1 起、中间留空档）：空档楼层归入「已开始的最近一段」，
+// 早于首段的楼层用第一段——绝不能直落末段，否则第一层就把收束文案写进正文
 export function reactionStageAt(card, age) {
     const f = age + 1;
+    let fallback = null;
     for (const s of card.diffusion) {
         if (f >= s.from && f <= s.to) return s;
+        if (s.from <= f) fallback = s;
     }
-    return card.diffusion[card.diffusion.length - 1];
+    return fallback ?? card.diffusion[0];
 }
 
 /**

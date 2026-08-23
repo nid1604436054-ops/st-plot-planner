@@ -484,8 +484,8 @@ export async function autoTagByVocabulary({ vocab = [], sheetUids = [], overwrit
             tagged++;
         }
         onProgress?.(Math.min(i + BATCH, rows.length), rows.length);
+        persistMemory();   // 每批落一次盘：中途某批失败时，前面批次已打的标签不丢
     }
-    persistMemory();
     return { tagged, total: rows.length };
 }
 

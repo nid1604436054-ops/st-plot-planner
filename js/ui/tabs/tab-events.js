@@ -17,8 +17,10 @@ const folds = { settings: false, dims: false, entries: false, ailib: false }; //
 
 // 渲染随机事件工具区（路人反应 + 底部两个折叠区），由剧情指导页挂载；掷骰本身在向导第 2 步
 export function renderEventsTools(container) {
-    if (!settings.eventRules.length) {
-        settings.eventRules = defaultEventRules();
+    // 默认条目只在首次使用时种一次（seeded 标记）：之后删空事件库是合法状态，不再复活
+    if (!settings.events.seeded) {
+        settings.events.seeded = true;
+        if (!settings.eventRules.length) settings.eventRules = defaultEventRules();
         save();
     }
     if (!lib.dimId) lib.dimId = settings.eventDimensions[0]?.id ?? '';

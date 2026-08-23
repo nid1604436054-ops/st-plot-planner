@@ -58,6 +58,11 @@ export const worldbookTab = {
                 openBooks.add(book.id);
                 save();
                 toastr.success(`已导入「${book.name}」：${book.entries.length} 个条目`);
+                // 酒馆原生常驻条目通常不写关键词，而本插件检索只认关键词（无"永远在场"概念）——空关键词=永不命中，导入时点破
+                const keyless = book.entries.filter(en => !en.disabled && !(en.keys ?? []).length).length;
+                if (keyless) {
+                    toastr.warning(`「${book.name}」有 ${keyless} 条没有关键词（多为酒馆里的常驻条目）：本插件检索只认关键词，这些条目永远不会被带进规划，请到条目旁补上关键词（如条目标题或剧情常提的词）`);
+                }
                 renderBooks(container);
             } catch (err) {
                 toastr.error(`导入失败：${err.message}`);

@@ -17,10 +17,11 @@ export function initWandMenu() {
         return true;
     };
 
-    // 扩展菜单由核心先建好，正常情况一次就挂上；万一抢跑则短暂轮询
+    // 扩展菜单由核心先建好，正常情况一次就挂上；万一抢跑则短暂轮询（设上限，别空转）
     if (!tryAppend()) {
+        let tries = 0;
         const timer = setInterval(() => {
-            if (tryAppend()) clearInterval(timer);
+            if (tryAppend() || ++tries > 20) clearInterval(timer);
         }, 500);
     }
 }

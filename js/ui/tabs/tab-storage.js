@@ -59,12 +59,16 @@ export function renderStorageTools(container) {
             toastr.warning('请填写名称与内容');
             return;
         }
+        // 深度 0 是合法值（紧贴上下文末尾，同 injection 语义），不能被 || 6 吞掉；留空才回退默认
+        const depthRaw = fold.querySelector('#pp_st_depth').value.trim();
+        const depth = depthRaw !== '' && Number.isFinite(Number(depthRaw))
+            ? Math.min(Math.max(Math.round(Number(depthRaw)), 0), 16) : 6;
         addItem({
             id: newId('si-'),
             name,
             keys: fold.querySelector('#pp_st_keys').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
             constant: fold.querySelector('#pp_st_const').checked,
-            depth: Number(fold.querySelector('#pp_st_depth').value) || 6,
+            depth,
             content,
             enabled: true,
         });
