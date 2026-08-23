@@ -1,27 +1,20 @@
-// 随机事件工具区（原独立页签，现挂在剧情指导页下部）：常用动作置顶（掷骰 / 路人反应校准），
-// 事件库配置折叠进底部「事件库设置」，AI 建库独立成区
-// 掷骰三板块并行（事件条目 / 维度随机 / AI 自主）：板块开关旁直接填权重，每次掷骰先按权重抽板块
+// 随机事件工具区（挂在剧情指导页下部）：路人反应校准 + 底部「事件库设置」「AI 建库」两个折叠区。
+// 掷骰入口只有分步规划向导第 2 步（随机事件闸口），这里不再放独立的掷骰按钮；
+// 「事件库设置」里调掷骰三板块（事件条目 / 维度随机 / AI 自主）的开关与权重，供向导第 2 步的掷骰用。
 // 路人反应卡：引人注目的事 → 显著性/即时反应/扩散链/底线/楼层预算 → 转自动过期注入（逐层换段）
 import { settings, save, newId } from "../../settings.js";
-import {
-    defaultEventRules, rollEventPipeline, commitRolledEvent,
-    generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, generateEventEntries, dimNameOf,
-} from "../../randomEvents.js";
+import { defaultEventRules, generateEventEntries, dimNameOf } from "../../randomEvents.js";
 import { generateReactionCard, composeReactionText } from "../../reactions.js";
 import { addInjection } from "../../injection.js";
 import { currentFloor } from "../../context.js";
 import { escapeHtml, clamp } from "../../utils.js";
 
-const state = { event: null, sourceLabel: '', busy: false };   // 掷骰产出的事件卡
 let editingDim = null, editingRule = null;                     // 展开编辑中的维度 / 条目 id
 const lib = { dimId: '', count: 5, note: '', preview: [], busy: false };  // AI 建库草稿
 const rx = { what: '', note: '', card: null, busy: false, touched: false }; // 路人反应卡
 const folds = { settings: false, dims: false, entries: false, ailib: false }; // 折叠区展开状态（跨重渲染保留）
 
-// 「参考事件库 / 顺带出预览剧情」勾选：向导第 2 步与本工具区共用同一份，两处掷骰的提示词保持一致
-export const eventsPrefs = { useLibrary: true, wantPreview: false };
-
-// 渲染整个随机事件工具区（掷骰 + 路人反应 + 底部两个折叠区），由剧情指导页挂载
+// 渲染随机事件工具区（路人反应 + 底部两个折叠区），由剧情指导页挂载；掷骰本身在向导第 2 步
 export function renderEventsTools(container) {
     if (!settings.eventRules.length) {
         settings.eventRules = defaultEventRules();
@@ -29,19 +22,6 @@ export function renderEventsTools(container) {
     }
     if (!lib.dimId) lib.dimId = settings.eventDimensions[0]?.id ?? '';
     container.innerHTML = `
-    <div class="pp-section">
-        <b>掷骰生成事件</b>
-        <div class="pp-muted">掷一次随机遭遇：先在勾选的掷骰板块（事件条目 / 维度随机 / AI 自主，权重在底部设置区调）里抽一个，再走该板块。刚连出过的维度会歇一轮，最近出过的事件不重复；选一个走向可转为隐身注入。</div>
-        <div class="pp-gd-selp">
-            <label title="掷到「维度随机」时把事件库条目列给模型参考，可从中选方向也可另起（与向导第 2 步的勾选是同一份）"><input type="checkbox" id="pp_ev_optlib" ${eventsPrefs.useLibrary ? 'checked' : ''}/> 参考事件库</label>
-            <label title="掷到「维度随机」时顺带给一版走向预览，显示在事件卡里（与向导第 2 步的勾选是同一份）"><input type="checkbox" id="pp_ev_optprev" ${eventsPrefs.wantPreview ? 'checked' : ''}/> 顺带出预览剧情</label>
-        </div>
-        <div class="pp-btn-row">
-            <div id="pp_ev_roll" class="menu_button"><i class="fa-solid fa-dice"></i> 掷骰生成事件</div>
-        </div>
-        <div id="pp_ev_status" class="pp-muted"></div>
-    </div>
-    <div id="pp_ev_output"></div>
     <div class="pp-section">
         <b>路人反应校准</b>
         <div class="pp-muted">模型处理路人反应常走两个极端：每层都全场哗哗地重复，或一笔带过后世界装失忆。这里把「刚发生的引人注目的事」交给模型出一张反应卡：即时反应怎么写、余波怎么随楼层扩散、底线在哪、几层收束。确认后作为隐身注入生效，正文按楼层自动换段，到期自动撤下。</div>
@@ -54,11 +34,6 @@ export function renderEventsTools(container) {
     </div>
     <div id="pp_ev_settings_wrap"></div>`;
 
-    container.querySelector('#pp_ev_roll').addEventListener('click', () => roll(container));
-
-    container.querySelector('#pp_ev_optlib').addEventListener('change', e => { eventsPrefs.useLibrary = e.target.checked; });
-    container.querySelector('#pp_ev_optprev').addEventListener('change', e => { eventsPrefs.wantPreview = e.target.checked; });
-
     const what = container.querySelector('#pp_rx_what');
     what.value = rx.what;
     what.addEventListener('input', () => { rx.what = what.value; });
@@ -69,93 +44,12 @@ export function renderEventsTools(container) {
     if (rx.card) renderReactionCard(container);
 
     renderSettings(container);
-    if (state.event) renderEvent(container);
 }
 
-// 聊天切换时由剧情指导页一并调用：事件卡 / 反应卡是当前聊天的内容，跟着清；
+// 聊天切换时由剧情指导页一并调用：反应卡是当前聊天的内容，跟着清；
 // AI 建库草稿是建库工具状态（不分聊天），保留
 export function resetEventsTools() {
-    Object.assign(state, { event: null, sourceLabel: '', busy: false });
     Object.assign(rx, { what: '', note: '', card: null, busy: false, touched: false });
-}
-
-// ---------------------------------------------------------------------------
-// 掷骰
-// ---------------------------------------------------------------------------
-
-async function roll(container) {
-    if (state.busy) return;
-    const status = container.querySelector('#pp_ev_status');
-    const r = rollEventPipeline();
-    if (r.mode === 'none') {
-        status.textContent = `本次未掷出事件（${r.reason}）`;
-        state.event = null;
-        container.querySelector('#pp_ev_output').innerHTML = '';
-        return;
-    }
-    state.busy = true;
-    status.textContent = r.mode === 'library'
-        ? `掷中「${r.rule.name}」（${r.rule.severity === 'heavy' ? '重' : '轻'}），生成中……`
-        : r.mode === 'ai'
-            ? 'AI 自主挑维度中，生成中……'
-            : `本轮流维度「${r.dimension.name}」自由生成，生成中……`;
-    try {
-        if (r.mode === 'library') {
-            state.event = await generateRandomEvent(r.rule);
-            state.sourceLabel = `事件库「${r.rule.name}」· ${r.rule.severity === 'heavy' ? '重' : '轻'}`;
-            commitRolledEvent({ rule: r.rule, dimension: r.dimension, title: state.event.title, source: 'library' });
-        } else if (r.mode === 'ai') {
-            state.event = await generateAiChoiceRandomEvent({ dimensions: r.dimensions });
-            const dim = r.dimensions.find(d => d.name === state.event?.dimension) ?? null;
-            state.sourceLabel = `AI 自主${dim ? `·维度「${dim.name}」` : ''}`;
-            commitRolledEvent({ dimension: dim, title: state.event.title, source: 'ai' });
-        } else {
-            state.event = await generateFreeRandomEvent({ dimension: r.dimension, useLibrary: eventsPrefs.useLibrary, wantPreview: eventsPrefs.wantPreview });
-            state.sourceLabel = `维度「${r.dimension.name}」自由生成`;
-            commitRolledEvent({ dimension: r.dimension, title: state.event.title, source: 'free' });
-        }
-        renderEvent(container);
-        status.textContent = `来自${state.sourceLabel}`;
-        renderRules(container);   // 冷却中的条目状态变了，刷新列表（板块关闭时内部自动跳过）
-    } catch (err) {
-        status.textContent = '';
-        toastr.error(String(err.message ?? err));
-    } finally {
-        state.busy = false;
-    }
-}
-
-function renderEvent(container) {
-    const ev = state.event;
-    const options = Array.isArray(ev.options) ? ev.options : [];
-
-    container.querySelector('#pp_ev_output').innerHTML = `
-        <div class="pp-section">
-            <b>${escapeHtml(ev.title ?? '随机事件')}</b>
-            <div>${escapeHtml(ev.description ?? '')}</div>
-            ${ev.preview ? `<div class="pp-muted">预览走向：${escapeHtml(ev.preview)}</div>` : ''}
-            ${options.map((o, i) => `<div class="menu_button pp-option" data-opt="${i}">${escapeHtml(o.label ?? '')}</div>`).join('')}
-            <div class="pp-muted">选择一个走向后转为隐身注入（模型可见、聊天界面不显示，20 层后自动撤下）</div>
-        </div>`;
-
-    container.querySelectorAll('[data-opt]').forEach(el => el.addEventListener('click', () => {
-        const opt = options[Number(el.dataset.opt)] ?? {};
-        const content = `【随机事件·${ev.title ?? ''}】${ev.description ?? ''}\n已选定走向：${opt.label ?? ''}\n幕后提示：${opt.hint ?? ''}`;
-        addInjection({
-            id: newId('inj-'),
-            label: `事件：${ev.title ?? ''} · ${opt.label ?? ''}`,
-            mode: 'open',
-            content,
-            depth: 4,
-            role: 'system',
-            scope: 'chat',
-            enabled: true,
-            source: 'event',
-            createdAt: Date.now(),
-            expires: { type: 'layers', layers: 20 },
-        });
-        toastr.success('已注入，20 层后自动撤下（设置页底部可提前撤下）');
-    }));
 }
 
 // ---------------------------------------------------------------------------
