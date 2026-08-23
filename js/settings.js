@@ -36,9 +36,12 @@ const DEFAULTS = {
         },
     },
     events: {
-        libraryRatio: 60,   // 掷骰走事件库条目的百分比，其余次数按维度加权走自由生成
+        branches: {         // 掷骰三板块：每次掷骰先在勾选板块里按权重抽一个，再走该板块的抽取逻辑
+            entries: { enabled: true, weight: 6 },   // 事件条目：从事件库按 权重×概率 抽一条
+            free: { enabled: true, weight: 4 },      // 维度随机：按维度权重抽方向即兴
+            ai: { enabled: false, weight: 2 },       // AI 自主：模型从维度清单里挑最贴合剧情的
+        },
         recent: [],         // 最近掷出的事件（防重复与密度规则用）：{title, dimension, source, at}
-        sections: { dims: true, entries: true, ai: true },  // 随机事件页板块开关；entries=false 时掷骰全走即兴
     },
     lorebooks: [],          // M1 世界书库
     injections: [],         // M4 隐身注入项
@@ -73,8 +76,18 @@ function ensureDefaults() {
     if (!Array.isArray(store.eventDimensions) || !store.eventDimensions.length) {
         store.eventDimensions = JSON.parse(JSON.stringify(DEFAULTS.eventDimensions));
     }
-    store.events ??= { libraryRatio: 60, recent: [] };
-    store.events.sections ??= { dims: true, entries: true, ai: true };
+    store.events ??= { recent: [] };
+    // 掷骰三板块迁移：旧的「事件库占比」百分比换算成 条目/随机 权重，AI 自主默认关（不改变既有口味）
+    if (!store.events.branches) {
+        const ratio = Math.min(Math.max(Number(store.events.libraryRatio ?? 60) || 0, 0), 100);
+        store.events.branches = {
+            entries: { enabled: true, weight: ratio / 10 },
+            free: { enabled: true, weight: (100 - ratio) / 10 },
+            ai: { enabled: false, weight: 2 },
+        };
+    }
+    delete store.events.libraryRatio;
+    delete store.events.sections;
     if (Array.isArray(store.eventRules)) {
         const legacyDim = { '偶遇旧识': 'dim-rel', '环境突变': 'dim-env', '意外阻碍': 'dim-friction', '有利线索': 'dim-favor' };
         for (const r of store.eventRules) {

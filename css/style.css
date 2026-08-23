@@ -686,3 +686,15 @@
     cursor: pointer;
 }
 
+/* 掷骰板块行：开关与权重输入成对出现 */
+.pp-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.pp-branch input[type="number"] {
+    width: 3.2em;
+    padding: 0 4px;
+}
+

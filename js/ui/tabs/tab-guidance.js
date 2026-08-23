@@ -5,7 +5,7 @@
 // 跳过随机事件的路径会先停在「分析前确认」页，点确认才真正调模型。
 // 另有「检查当前剧情」：对照进行中剧情出执行报告（完成度/推进/文风/OOC/其他/建议）
 import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, GUIDANCE_SYSTEM_PROMPT } from "../../planner.js";
-import { generateRandomEvent, generateFreeRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
+import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
 import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
 import { storyState, activeStory, confirmPlot, endActive, attachReport, deleteStory, clearHistory } from "../../story.js";
@@ -470,7 +470,7 @@ function renderEvent(container, main) {
         </div>
         <div class="pp-btn-row">
             <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰，直接让模型即兴生成"><i class="fa-solid fa-dice"></i> 大模型随机</span>
-            <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：条目过滤（启用/维度/触发关键词/冷却）→ 按权重×概率抽一条（必出）；其余比例按维度加权走自由生成（占比在「随机事件」页配置）"><i class="fa-solid fa-dice-three"></i> 掷骰（库/自由）</span>
+            <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：先在勾选的掷骰板块（事件条目/维度随机/AI自主）里按板块权重抽一个——条目板块按权重×概率抽一条（必出），维度随机按维度权重抽方向，AI自主由模型看剧情挑维度；板块开关与权重在「随机事件」页底部"><i class="fa-solid fa-dice-three"></i> 掷骰（三板块）</span>
         </div>
         <label class="pp-label">或自己给指导意见（不掷骰，直接写事件/走向想法）</label>
         <textarea id="pp_gd_ev_manual" class="text_pole textarea_compact" rows="2"></textarea>
@@ -514,13 +514,21 @@ function renderEvent(container, main) {
         }
         status.textContent = r.mode === 'library'
             ? `掷中「${r.rule.name}」，生成中……`
-            : `维度「${r.dimension.name}」自由生成中……`;
+            : r.mode === 'ai'
+                ? 'AI 自主挑维度中，生成中……'
+                : `维度「${r.dimension.name}」自由生成中……`;
         try {
             if (r.mode === 'library') {
                 ev.mode = 'lib';
                 ev.event = await generateRandomEvent(r.rule);
                 commitRolledEvent({ rule: r.rule, dimension: r.dimension, title: ev.event.title, source: 'library' });
                 status.textContent = `来自事件库「${r.rule.name}」`;
+            } else if (r.mode === 'ai') {
+                ev.mode = 'ai';
+                ev.event = await generateAiChoiceRandomEvent({ dimensions: r.dimensions });
+                const dim = r.dimensions.find(d => d.name === ev.event?.dimension) ?? null;
+                commitRolledEvent({ dimension: dim, title: ev.event.title, source: 'ai' });
+                status.textContent = `来自AI 自主${dim ? `·维度「${dim.name}」` : ''}`;
             } else {
                 ev.mode = 'free';
                 ev.event = await generateFreeRandomEvent({ dimension: r.dimension, useLibrary: ev.useLibrary, wantPreview: ev.wantPreview });

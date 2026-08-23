@@ -1,6 +1,6 @@
 // M3 随机事件（三层结构）：维度层（骨架/方向池）→ 条目层（事件库）→ 掷骰管线
-// 管线：条目过滤（启用/维度/触发关键词/冷却）→ 库内「权重×概率」加权抽一（必出一条）；
-// 其余次数按维度加权走「自由生成」（空库自动全走自由）。
+// 掷骰三板块并行（事件条目 / 维度随机 / AI 自主）：先在勾选且有货的板块里按板块权重抽一个，
+// 条目板块按「权重×概率」加权抽一条（必出），随机板块按维度权重抽方向，AI 自主板块由模型挑维度。
 // 设计取向（吸收用户 NPC_Reaction 预设）：轻重有别（轻＝一根针，重＝一个局）、宁重不轻、
 // 危机可重但出口必须存在、密度受控（同维度连出两次暂停一轮、最近事件防重复）。
 import { chatCompletion } from "./api.js";
@@ -64,7 +64,8 @@ function weightedPick(list, rng, weightOf = x => Math.max(Number(x.weight) || 0,
 
 /**
  * 掷骰管线（纯掷骰，无副作用；生成成功后由调用方 commitRolledEvent 落账）。
- * @returns {{mode:'library', rule:object, dimension:object}|{mode:'free', dimension:object}|{mode:'none', reason:string}}
+ * 三板块并行：先按板块权重抽一个板块，再走该板块的抽取逻辑；没勾选或没货的板块不参与。
+ * @returns {{mode:'library', rule:object, dimension:object}|{mode:'free', dimension:object}|{mode:'ai', dimensions:object[]}|{mode:'none', reason:string}}
  */
 export function rollEventPipeline(rng = Math.random) {
     const dims = (settings.eventDimensions ?? []).filter(d => d.enabled !== false);
@@ -87,16 +88,24 @@ export function rollEventPipeline(rng = Math.random) {
         return !kws.length || kws.some(k => scanText.includes(k.toLowerCase()));
     });
 
-    // 板块开关：事件条目被整体关闭时不再走库，全部按维度即兴
-    const useLibrary = settings.events?.sections?.entries !== false;
-    const ratio = Math.min(Math.max(Number(settings.events?.libraryRatio ?? 60) || 0, 0), 100) / 100;
-    if (useLibrary && eligible.length && rng() < ratio) {
+    // 三板块抽取：勾选且有货的板块按板块权重抽一个（全 0 权重时等机会）
+    const branchOn = key => settings.events?.branches?.[key]?.enabled !== false;
+    const branchW = key => Math.max(Number(settings.events?.branches?.[key]?.weight) || 0, 0);
+    const branches = [];
+    if (branchOn('entries') && eligible.length) branches.push({ key: 'entries', weight: branchW('entries') });
+    if (branchOn('free') && openDims.length) branches.push({ key: 'free', weight: branchW('free') });
+    if (branchOn('ai') && openDims.length) branches.push({ key: 'ai', weight: branchW('ai') });
+    if (!branches.length) return { mode: 'none', reason: '没有可用的掷骰板块（都没勾选，或勾选的板块没货）' };
+
+    const branch = weightedPick(branches, rng, b => b.weight);
+    if (branch.key === 'entries') {
         // 触发概率并入权重参与抽取：概率只改变相对命中率，掷骰必出一条（全 0 时退化为等权抽一）
         const rule = weightedPick(eligible, rng,
             r => Math.max(Number(r.weight) || 0, 0) * Math.max(Number(r.probability) || 0, 0));
         return { mode: 'library', rule, dimension: dims.find(d => d.id === rule.dimension) ?? null };
     }
-    return { mode: 'free', dimension: weightedPick(openDims, rng) };
+    if (branch.key === 'free') return { mode: 'free', dimension: weightedPick(openDims, rng) };
+    return { mode: 'ai', dimensions: openDims };   // 密度暂停的维度已从清单剔除，AI 自主也只能从中选
 }
 
 /**
@@ -188,6 +197,37 @@ export async function generateFreeRandomEvent({ dimension = null, useLibrary = f
             ? rules.map(r => `- ${r.name}：${r.promptHint ?? ''}`).join('\n')
             : '（事件库为空，请即兴生成）');
     }
+
+    const raw = await chatCompletion({
+        messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: sections.join('\n\n') },
+        ],
+    });
+    return extractJson(raw);
+}
+
+/**
+ * AI 自主板块：把候选维度清单交给模型，由它结合当前剧情挑最贴合的一个，按该维度气质即兴事件。
+ * 挑选与生成在同一次调用里完成，不额外花调用。
+ * @param {object} [options]
+ * @param {object[]} [options.dimensions]  候选维度对象数组（密度暂停的维度已由管线剔除）
+ * @returns {Promise<{title:string, description:string, dimension:string, options:Array<{label:string, hint:string}>}>}
+ */
+export async function generateAiChoiceRandomEvent({ dimensions = [] } = {}) {
+    const system = '你是文字角色扮演的随机遭遇生成器。基于当前情境即兴生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
+        + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'
+        + '用户给出了维度清单：由你判断哪个维度最贴合当前剧情氛围，从中挑一个（只能挑清单里的），按它的气质展开。'
+        + '轻重自定、宁重不轻（过轻会执行敷衍），但危机必须留出口。'
+        + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
+        + '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
+        + '"dimension": "你选用的维度名（必须与清单里的一致）", '
+        + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ] }\n'
+        + 'options 给 3 个左右。';
+
+    const sections = contextSections();
+    sections.push('## 维度清单（从中挑最贴合当前剧情的一个）',
+        dimensions.length ? dimensions.map(d => `- ${d.name}：${d.prompt ?? ''}`).join('\n') : '（清单为空，请即兴生成，dimension 填「即兴」）');
 
     const raw = await chatCompletion({
         messages: [

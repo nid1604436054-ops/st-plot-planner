@@ -1,10 +1,10 @@
-// 随机事件页签：常用动作置顶（掷骰 / 路人反应校准），事件库配置折叠进底部「事件库设置」
-// 板块开关（settings.events.sections）控制 维度/条目/AI建库 是否出现；关闭「条目」后掷骰全走维度即兴
+// 随机事件页签：常用动作置顶（掷骰 / 路人反应校准），事件库配置折叠进底部「事件库设置」，AI 建库独立成区
+// 掷骰三板块并行（事件条目 / 维度随机 / AI 自主）：板块开关旁直接填权重，每次掷骰先按权重抽板块
 // 路人反应卡：引人注目的事 → 显著性/即时反应/扩散链/底线/楼层预算 → 转自动过期注入（逐层换段）
 import { settings, save, newId } from "../../settings.js";
 import {
     defaultEventRules, rollEventPipeline, commitRolledEvent,
-    generateRandomEvent, generateFreeRandomEvent, generateEventEntries, dimNameOf,
+    generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, generateEventEntries, dimNameOf,
 } from "../../randomEvents.js";
 import { generateReactionCard, composeReactionText } from "../../reactions.js";
 import { addInjection } from "../../injection.js";
@@ -15,11 +15,7 @@ const state = { event: null, sourceLabel: '', busy: false };   // 掷骰产出�
 let editingDim = null, editingRule = null;                     // 展开编辑中的维度 / 条目 id
 const lib = { dimId: '', count: 5, note: '', preview: [], busy: false };  // AI 建库草稿
 const rx = { what: '', note: '', card: null, busy: false, touched: false }; // 路人反应卡
-const folds = { settings: false, dims: false, entries: false, ai: false }; // 折叠区展开状态（跨重渲染保留）
-
-function sections() {
-    return settings.events?.sections ?? { dims: true, entries: true, ai: true };
-}
+const folds = { settings: false, dims: false, entries: false, ailib: false }; // 折叠区展开状态（跨重渲染保留）
 
 export const eventsTab = {
     id: 'events',
@@ -33,7 +29,7 @@ export const eventsTab = {
         container.innerHTML = `
         <div class="pp-section">
             <b>掷骰生成事件</b>
-            <div class="pp-muted">掷一次随机遭遇：可能从事件库里抽一个，也可能按维度即兴。刚连出过的维度会歇一轮，最近出过的事件不重复；选一个走向可转为隐身注入。</div>
+            <div class="pp-muted">掷一次随机遭遇：先在勾选的掷骰板块（事件条目 / 维度随机 / AI 自主，权重在底部设置区调）里抽一个，再走该板块。刚连出过的维度会歇一轮，最近出过的事件不重复；选一个走向可转为隐身注入。</div>
             <div class="pp-btn-row">
                 <div id="pp_ev_roll" class="menu_button"><i class="fa-solid fa-dice"></i> 掷骰生成事件</div>
             </div>
@@ -85,12 +81,19 @@ async function roll(container) {
     state.busy = true;
     status.textContent = r.mode === 'library'
         ? `掷中「${r.rule.name}」（${r.rule.severity === 'heavy' ? '重' : '轻'}），生成中……`
-        : `本轮流维度「${r.dimension.name}」自由生成，生成中……`;
+        : r.mode === 'ai'
+            ? 'AI 自主挑维度中，生成中……'
+            : `本轮流维度「${r.dimension.name}」自由生成，生成中……`;
     try {
         if (r.mode === 'library') {
             state.event = await generateRandomEvent(r.rule);
             state.sourceLabel = `事件库「${r.rule.name}」· ${r.rule.severity === 'heavy' ? '重' : '轻'}`;
             commitRolledEvent({ rule: r.rule, dimension: r.dimension, title: state.event.title, source: 'library' });
+        } else if (r.mode === 'ai') {
+            state.event = await generateAiChoiceRandomEvent({ dimensions: r.dimensions });
+            const dim = r.dimensions.find(d => d.name === state.event?.dimension) ?? null;
+            state.sourceLabel = `AI 自主${dim ? `·维度「${dim.name}」` : ''}`;
+            commitRolledEvent({ dimension: dim, title: state.event.title, source: 'ai' });
         } else {
             state.event = await generateFreeRandomEvent({ dimension: r.dimension });
             state.sourceLabel = `维度「${r.dimension.name}」自由生成`;
@@ -146,70 +149,73 @@ function renderEvent(container) {
 function renderSettings(container) {
     const wrap = container.querySelector('#pp_ev_settings_wrap');
     if (!wrap) return;
-    const sec = sections();
     const fold = (key, title, inner) => `
         <details class="pp-fold" data-fold="${key}" ${folds[key] ? 'open' : ''}>
             <summary>${title}</summary>
             ${inner}
         </details>`;
+    const branches = settings.events?.branches ?? {};
+    const branchRow = (key, name, hint) => {
+        const b = branches[key] ?? {};
+        return `<span class="pp-branch" title="${hint}"><label><input type="checkbox" data-brcb="${key}" ${b.enabled !== false ? 'checked' : ''}/> ${name}</label>`
+            + `<input type="number" class="text_pole" min="0" step="0.5" data-brw="${key}" value="${b.weight ?? 1}" title="板块权重：越大越容易被掷到"/></span>`;
+    };
 
     wrap.innerHTML = `
     <details class="pp-fold pp-fold-root" data-fold="settings" ${folds.settings ? 'open' : ''}>
-        <summary><i class="fa-solid fa-gear"></i> 事件库设置（维度 / 条目 / AI 建库）</summary>
+        <summary><i class="fa-solid fa-gear"></i> 事件库设置（掷骰板块 · 条目 · 维度）</summary>
         <div class="pp-fold-toggles">
-            <label><input type="checkbox" data-sec="dims" ${sec.dims ? 'checked' : ''}/> 事件维度</label>
-            <label><input type="checkbox" data-sec="entries" ${sec.entries ? 'checked' : ''}/> 事件条目</label>
-            <label><input type="checkbox" data-sec="ai" ${sec.ai ? 'checked' : ''}/> AI 建库</label>
+            ${branchRow('entries', '事件条目', '掷骰走事件库：从合格条目里按权重×概率抽一条')}
+            ${branchRow('free', '维度随机', '掷骰随机抽一个维度，让模型按它的气质即兴')}
+            ${branchRow('ai', 'AI 自主', '掷骰把维度清单交给模型，由它挑最贴合当前剧情的一个')}
         </div>
-        <div class="pp-muted">不勾的板块从这里消失；关闭「事件条目」后掷骰不再走事件库，全部按维度即兴。</div>
-        ${sec.dims ? fold('dims', `事件维度（${(settings.eventDimensions ?? []).length} 个）`, `
-            <div class="pp-muted">维度是题材分类：即兴事件按它抽方向，库内条目按它分组，改描述就是改即兴事件的口味。删除维度不会删条目（条目会变成「未分组」，可再挂回别的维度）。</div>
-            <div id="pp_ev_dims"></div>
-            <div class="pp-btn-row"><span id="pp_ev_dim_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建维度</span></div>`) : ''}
-        ${sec.entries ? fold('entries', `事件条目（${settings.eventRules.length} 条）`, `
-            <label class="pp-label">事件库占比（%）：掷骰走事件库条目的比例，其余走维度自由生成</label>
-            <input id="pp_ev_ratio" class="text_pole textarea_compact" type="number" min="0" max="100" step="5" />
+        <div class="pp-muted">每次掷骰先在勾选的板块里按旁边填的权重抽一个，再走该板块；没勾选或没货（如条目全在冷却）的板块自动退出本轮。</div>
+        ${fold('entries', `事件条目（${settings.eventRules.length} 条）`, `
             <div class="pp-muted">轻重口径：轻＝一根针，不自带走向；重＝一个局，不处理会发酵。冷却按掷中时的楼层起算；触发关键词留空 = 不限，填了则最近对话里要出现才算候选。</div>
             <div id="pp_ev_rules"></div>
-            <div class="pp-btn-row"><span id="pp_ev_rule_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建条目</span></div>`) : ''}
-        ${sec.ai ? fold('ai', 'AI 建库', `
-            <div class="pp-muted">选一个维度，让模型按维度气质批量出条目草稿，勾选后并入事件库（概率/权重/冷却用默认值，导入后可再调）。</div>
-            <div class="pp-grid2">
-                <div>
-                    <label class="pp-label">维度</label>
-                    <select id="pp_ev_libdim" class="text_pole textarea_compact"></select>
-                </div>
-                <div>
-                    <label class="pp-label">数量（1-10）</label>
-                    <input id="pp_ev_libcount" class="text_pole textarea_compact" type="number" min="1" max="10" />
-                </div>
+            <div class="pp-btn-row"><span id="pp_ev_rule_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建条目</span></div>`)}
+        ${fold('dims', `事件维度（${(settings.eventDimensions ?? []).length} 个）`, `
+            <div class="pp-muted">维度是题材分类：维度随机与 AI 自主都从它出方向，库内条目按它分组，改描述就是改即兴事件的口味。删除维度不会删条目（条目会变成「未分组」，可再挂回别的维度）。</div>
+            <div id="pp_ev_dims"></div>
+            <div class="pp-btn-row"><span id="pp_ev_dim_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建维度</span></div>`)}
+    </details>
+    <details class="pp-fold pp-fold-root" data-fold="ailib" ${folds.ailib ? 'open' : ''}>
+        <summary><i class="fa-solid fa-robot"></i> AI 建库（出条目草稿，勾选后导入事件库）</summary>
+        <div class="pp-muted">选一个维度，让模型按维度气质批量出条目草稿，勾选后并入事件库（概率/权重/冷却用默认值，导入后可再调）。只是填库工具，不参与掷骰。</div>
+        <div class="pp-grid2">
+            <div>
+                <label class="pp-label">维度</label>
+                <select id="pp_ev_libdim" class="text_pole textarea_compact"></select>
             </div>
-            <label class="pp-label">补充说明（可选：想要的题材、烈度、要避开什么）</label>
-            <textarea id="pp_ev_libnote" class="text_pole textarea_compact" rows="2" placeholder="例：偏日常向，不要涉及警察；重事件占一半"></textarea>
-            <div class="pp-btn-row"><span id="pp_ev_libgen" class="menu_button">生成条目草稿</span></div>
-            <div id="pp_ev_libprev"></div>`) : ''}
+            <div>
+                <label class="pp-label">数量（1-10）</label>
+                <input id="pp_ev_libcount" class="text_pole textarea_compact" type="number" min="1" max="10" />
+            </div>
+        </div>
+        <label class="pp-label">补充说明（可选：想要的题材、烈度、要避开什么）</label>
+        <textarea id="pp_ev_libnote" class="text_pole textarea_compact" rows="2" placeholder="例：偏日常向，不要涉及警察；重事件占一半"></textarea>
+        <div class="pp-btn-row"><span id="pp_ev_libgen" class="menu_button">生成条目草稿</span></div>
+        <div id="pp_ev_libprev"></div>
     </details>`;
 
     // 折叠状态记忆（toggle 事件不冒泡，逐个绑定）
     wrap.querySelectorAll('details[data-fold]').forEach(el =>
         el.addEventListener('toggle', () => { folds[el.dataset.fold] = el.open; }));
 
-    // 板块开关：写入设置并重建本区块
-    wrap.querySelectorAll('[data-sec]').forEach(cb => cb.addEventListener('change', () => {
-        (settings.events ??= {}).sections ??= { dims: true, entries: true, ai: true };
-        settings.events.sections[cb.dataset.sec] = cb.checked;
+    // 掷骰板块：勾选 = 参与掷骰，旁边数字 = 板块权重（被抽中的相对机会）
+    wrap.querySelectorAll('[data-brcb]').forEach(cb => cb.addEventListener('change', () => {
+        const b = ((settings.events ??= {}).branches ??= {});
+        b[cb.dataset.brcb] ??= { enabled: true, weight: 1 };
+        b[cb.dataset.brcb].enabled = cb.checked;
+        if (cb.checked && !(Number(b[cb.dataset.brcb].weight) > 0)) b[cb.dataset.brcb].weight = 2;   // 勾回时权重为 0 会永远掷不到，补个默认
         save();
-        renderSettings(container);
     }));
-
-    const ratio = wrap.querySelector('#pp_ev_ratio');
-    if (ratio) {
-        ratio.value = settings.events?.libraryRatio ?? 60;
-        ratio.addEventListener('change', () => {
-            (settings.events ??= {}).libraryRatio = Math.min(Math.max(Number(ratio.value) || 60, 0), 100);
-            save();
-        });
-    }
+    wrap.querySelectorAll('[data-brw]').forEach(inp => inp.addEventListener('change', () => {
+        const b = settings.events?.branches?.[inp.dataset.brw];
+        if (!b) return;
+        b.weight = Math.max(Number(inp.value) || 0, 0);
+        save();
+    }));
 
     // 新建按钮只在这里绑（renderDims/renderRules 会被反复调用，不能把按钮绑定放里面）
     wrap.querySelector('#pp_ev_dim_add')?.addEventListener('click', () => {
