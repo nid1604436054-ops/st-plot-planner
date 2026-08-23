@@ -18,6 +18,12 @@ function requireConfig() {
     }
 }
 
+// 关闭思考参数（设置页「关闭思考」勾上时附带）：GLM 系认 thinking、Qwen 系认 enable_thinking，
+// 一并带上各家只认自己的、陌生的多半忽略；端点对陌生参数直接报 400/422 时由调用处去掉重发一次
+function thinkingOffParams() {
+    return settings.api.thinkingOff ? { thinking: { type: 'disabled' }, enable_thinking: false } : {};
+}
+
 // 取补全的最终文本，兼容三种正文形态：普通字符串 / 分段数组（content:[{type:'text'}]）/
 // 推理模型正文为空时把内容放进思考字段（reasoning_content / reasoning）。
 // 仍取不到时按证据报错：finish_reason 与 usage 能区分「长度耗尽 / 被过滤 / 字段不认识」
@@ -58,23 +64,30 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
     const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
     const stream = typeof onDelta === 'function';
 
+    const doFetch = extra => fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+            model,
+            messages,
+            temperature: temperature ?? settings.api.temperature,
+            max_tokens: maxTokens ?? settings.api.maxTokens,
+            stream,
+            ...extra,
+        }),
+        signal,
+    });
+
     let res;
     try {
-        res = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-            },
-            body: JSON.stringify({
-                model,
-                messages,
-                temperature: temperature ?? settings.api.temperature,
-                max_tokens: maxTokens ?? settings.api.maxTokens,
-                stream,
-            }),
-            signal,
-        });
+        const extra = thinkingOffParams();
+        res = await doFetch(extra);
+        if (extra && (res.status === 400 || res.status === 422)) {
+            res = await doFetch({});   // 端点不认关闭思考的参数：去掉重发一次
+        }
     } catch (err) {
         if (err.name === 'AbortError') throw err;
         // 网络层失败最常见的原因是 CORS 拦截或地址写错
@@ -233,17 +246,22 @@ async function postCompletion(body, signal) {
     requireConfig();
     const { baseUrl, apiKey } = settings.api;
     const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    const doFetch = extra => fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: JSON.stringify({ ...body, ...extra }),
+        signal,
+    });
     let res;
     try {
-        res = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-            },
-            body: JSON.stringify(body),
-            signal,
-        });
+        const extra = thinkingOffParams();
+        res = await doFetch(extra);
+        if (extra && (res.status === 400 || res.status === 422)) {
+            res = await doFetch({});   // 端点不认关闭思考的参数：去掉重发一次
+        }
     } catch (err) {
         if (err.name === 'AbortError') throw err;
         throw new ApiError(`请求失败（检查地址是否正确、服务商是否支持浏览器跨域）：${err.message}`);

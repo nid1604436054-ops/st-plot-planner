@@ -12,6 +12,7 @@ const DEFAULTS = {
         model: '',
         temperature: 0.7,
         maxTokens: 1500,
+        thinkingOff: false, // 推理模型关闭思考：请求体附加主流关闭参数（GLM 系 thinking / Qwen 系 enable_thinking），端点不认时自动去参重试
     },
     search: {
         provider: 'tavily',    // 联网搜索供应商（当前仅 Tavily，浏览器直连）

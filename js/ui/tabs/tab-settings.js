@@ -96,6 +96,10 @@ export const settingsTab = {
                     <label class="pp-label" title="规划类请求单次最多生成的 tokens">单次上限 tokens</label>
                     <input id="pp_set_maxtok" class="text_pole textarea_compact" type="number" min="128" step="64" />
                 </div>
+                <div>
+                    <label class="pp-label" title="推理模型把「单次上限 tokens」全花在思考上、正文一个字不出（报空内容且 finish_reason=length）时勾上：请求会带上主流服务商的关闭思考参数（GLM 系 thinking / Qwen 系 enable_thinking），端点不认这些参数时自动去掉重发一次">关闭思考</label>
+                    <input id="pp_set_thinkoff" type="checkbox" />
+                </div>
             </div>
             <hr class="pp-hr" />
             <div class="pp-label pp-group-title">世界书检索</div>
@@ -141,6 +145,9 @@ export const settingsTab = {
         bindNum('#pp_set_maxch', () => settings.retrieval.maxChars, v => settings.retrieval.maxChars = v);
         bindNum('#pp_set_memch', () => settings.retrieval.memChars, v => settings.retrieval.memChars = v);
         bindNum('#pp_set_ctx', () => settings.retrieval.contextLayers, v => settings.retrieval.contextLayers = v);
+        const thinkOff = container.querySelector('#pp_set_thinkoff');
+        thinkOff.checked = settings.api.thinkingOff === true;
+        thinkOff.addEventListener('change', () => { settings.api.thinkingOff = thinkOff.checked; save(); });
 
         bind('#pp_set_skey', () => settings.search.apiKey, v => settings.search.apiKey = String(v).trim());
         bindNum('#pp_set_smax', () => settings.search.maxResults, v => settings.search.maxResults = Math.min(Math.max(v || 5, 1), 10));
