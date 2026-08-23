@@ -1,17 +1,22 @@
-// 游戏玩法工具区（挂在剧情指导页最底部的折叠区，原「储存空间」页签并入并改名）：
-// 游戏规则等一次性内容的条目库 + 按触发词/常驻注入主对话 + 导入导出。
-// 条目本身仍随消息事件自动扫描注入（store.js）；生效中的条目可在分步向导第 1 步勾选，
-// 作为「游戏玩法」材料随规划分析一起发给模型，保证规划也按这些规则设计。
+// 游戏玩法工具区（原「储存空间」页签并入并改名）：游戏规则等一次性内容的条目库
+// + 按触发词/常驻注入主对话 + 导入导出。折叠区追加挂载进剧情指导页底部的折叠区容器
+// （与「事件库设置」「AI 建库」同容器，三个根折叠区边距统一合并、间距一致）。
+// 条目本身仍随消息事件自动扫描注入（store.js）；生效中的条目在分步向导第 1 步默认勾选、
+// 作为「游戏玩法」材料随规划分析一起发给模型，检查报告（runStoryReview）也自动附带。
 import { settings, save, newId } from "../../settings.js";
 import { addItem, removeItem, scanAndApplyStorage } from "../../store.js";
 import { escapeHtml, clamp, downloadJson, readFileAsText } from "../../utils.js";
 
 let stFold = false;   // 折叠区展开状态（跨重渲染保留）
 
-// 渲染游戏玩法折叠区（添加表单 + 条目列表 + 导入导出），由剧情指导页挂载
+// 渲染游戏玩法折叠区（添加表单 + 条目列表 + 导入导出），追加到剧情指导页底部的折叠区容器
 export function renderStorageTools(container) {
-    container.innerHTML = `
-    <details class="pp-fold pp-fold-root" data-fold="storage" ${stFold ? 'open' : ''}>
+    if (!container) return;
+    const fold = document.createElement('details');
+    fold.className = 'pp-fold pp-fold-root';
+    fold.dataset.fold = 'storage';
+    if (stFold) fold.open = true;
+    fold.innerHTML = `
         <summary><i class="fa-solid fa-gamepad"></i> 游戏玩法（条目库 · 按触发注入主对话）</summary>
         <div class="pp-muted">游戏规则、地图、跑团数值等一次性内容的条目库：常驻条目恒注入，带触发词的条目在最近对话提到时自动注入主对话（模型可见、聊天界面不显示），不必专门写成世界书。生效中的条目在分步向导第 1 步默认勾选，随规划分析一起发给模型，规划也会按这些规则设计。</div>
         <div class="pp-grid2">
@@ -42,14 +47,14 @@ export function renderStorageTools(container) {
             <input id="pp_st_import" type="file" accept=".json,application/json" hidden />
         </div>
         <label class="pp-label">条目列表</label>
-        <div id="pp_st_list"></div>
-    </details>`;
+        <div id="pp_st_list"></div>`;
+    container.appendChild(fold);
 
-    container.querySelector('details[data-fold="storage"]').addEventListener('toggle', e => { stFold = e.target.open; });
+    fold.addEventListener('toggle', () => { stFold = fold.open; });
 
-    container.querySelector('#pp_st_add').addEventListener('click', () => {
-        const content = container.querySelector('#pp_st_content').value.trim();
-        const name = container.querySelector('#pp_st_name').value.trim();
+    fold.querySelector('#pp_st_add').addEventListener('click', () => {
+        const content = fold.querySelector('#pp_st_content').value.trim();
+        const name = fold.querySelector('#pp_st_name').value.trim();
         if (!content || !name) {
             toastr.warning('请填写名称与内容');
             return;
@@ -57,26 +62,26 @@ export function renderStorageTools(container) {
         addItem({
             id: newId('si-'),
             name,
-            keys: container.querySelector('#pp_st_keys').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
-            constant: container.querySelector('#pp_st_const').checked,
-            depth: Number(container.querySelector('#pp_st_depth').value) || 6,
+            keys: fold.querySelector('#pp_st_keys').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+            constant: fold.querySelector('#pp_st_const').checked,
+            depth: Number(fold.querySelector('#pp_st_depth').value) || 6,
             content,
             enabled: true,
         });
         toastr.success('已添加并按当前剧情注入');
-        renderList(container);
+        renderList(fold);
     });
 
-    container.querySelector('#pp_st_replay').addEventListener('click', () => {
+    fold.querySelector('#pp_st_replay').addEventListener('click', () => {
         scanAndApplyStorage();
         toastr.info('已按当前剧情重放玩法条目');
     });
 
-    container.querySelector('#pp_st_export').addEventListener('click', () => {
+    fold.querySelector('#pp_st_export').addEventListener('click', () => {
         downloadJson('plot-planner-storage.json', settings.storageItems);
     });
 
-    container.querySelector('#pp_st_import').addEventListener('change', async e => {
+    fold.querySelector('#pp_st_import').addEventListener('change', async e => {
         const file = e.target.files?.[0];
         if (!file) return;
         try {
@@ -100,18 +105,18 @@ export function renderStorageTools(container) {
             scanAndApplyStorage();
             save();
             toastr.success(`导入 ${added} 条`);
-            renderList(container);
+            renderList(fold);
         } catch (err) {
             toastr.error(`导入失败：${err.message}`);
         }
         e.target.value = '';
     });
 
-    renderList(container);
+    renderList(fold);
 }
 
-function renderList(container) {
-    const list = container.querySelector('#pp_st_list');
+function renderList(root) {
+    const list = root.querySelector('#pp_st_list');
     if (!settings.storageItems.length) {
         list.innerHTML = '<div class="pp-muted">暂无条目</div>';
         return;
@@ -141,6 +146,6 @@ function renderList(container) {
     }));
     list.querySelectorAll('[data-st-del]').forEach(el => el.addEventListener('click', () => {
         removeItem(el.dataset.stDel);
-        renderList(container);
+        renderList(root);
     }));
 }

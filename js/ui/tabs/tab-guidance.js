@@ -5,7 +5,8 @@
 // 跳过随机事件的路径会先停在「分析前确认」页，点确认才真正调模型。
 // 另有「检查当前剧情」：对照进行中剧情出执行报告（完成度/推进/文风/OOC/其他/建议）
 // 掷骰入口只有向导第 2 步；页面下部工具区（tab-events.js）只放路人反应与事件库配置；
-// 游戏玩法（tab-storage.js）挂在最底部折叠区，其生效条目由第 1 步勾选随分析发送
+// 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列，生效条目由第 1 步勾选随分析发送，
+// 检查报告（runStoryReview）自动附带当前生效条目
 import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, GUIDANCE_SYSTEM_PROMPT } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
 import { addInjection, updateInjection, removeInjection } from "../../injection.js";
@@ -50,13 +51,13 @@ export const guidanceTab = {
         <div class="pp-section" id="pp_gd_storybar"></div>
         <div id="pp_gd_main"></div>
         <div class="pp-section" id="pp_gd_preset"></div>
-        <div id="pp_gd_events"></div>
-        <div id="pp_gd_storage"></div>`;
+        <div id="pp_gd_events"></div>`;
         renderStoryBar(container);
         renderMain(container);
         renderPreset(container);
         renderEventsTools(container.querySelector('#pp_gd_events'));
-        renderStorageTools(container.querySelector('#pp_gd_storage'));
+        // 挂进事件工具区的折叠区容器：三个根折叠区同容器，边距合并、间距一致
+        renderStorageTools(container.querySelector('#pp_ev_settings_wrap'));
     },
 };
 
@@ -247,7 +248,7 @@ function renderMain(container) {
         main.innerHTML = `
         <div class="pp-section">
             <b>检查当前剧情中……</b>
-            <div class="pp-muted">对照进行中剧情与最近对话出执行报告，走插件独立 API。</div>
+            <div class="pp-muted">对照进行中剧情与最近对话出执行报告（自动附带生效中的游戏玩法规则），走插件独立 API。</div>
         </div>`;
         return;
     }

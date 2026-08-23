@@ -4,6 +4,7 @@ import { chatCompletion, chatCompletionWithTools, searchToolReady } from "./api.
 import { collectRecentChat, formatChatLog, characterSummary } from "./context.js";
 import { scanLorebooks, buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
+import { storageItemsInEffect } from "./store.js";
 import { settings } from "./settings.js";
 import { extractJson } from "./utils.js";
 
@@ -108,6 +109,13 @@ function memorySectionHeader(memoryTags) {
     return `## 记忆表格（已有剧情事件记录，用于检查新规划是否与之重复、并可作为推新发展方向的参考；${mode}）`;
 }
 
+// 游戏玩法小节：分析与检查报告共用同一格式（每条带名字做小标题）
+function gameplaySection(items, header) {
+    const list = (items ?? []).filter(i => String(i?.content ?? '').trim());
+    if (!list.length) return [];
+    return [header, list.map(i => `### ${String(i.name ?? '未命名')}\n${String(i.content).trim()}`).join('\n\n')];
+}
+
 /**
  * 组装剧情指导分析要发的 system/user 两条消息（runPlotGuidance 与「查看完整提示词」预览共用）。
  * @param {object} [options]
@@ -135,7 +143,6 @@ export function buildGuidanceMessages(options = {}) {
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets });
 
     const summaries = (historySummaries ?? []).filter(Boolean);
-    const gpList = (storageItems ?? []).filter(i => String(i?.content ?? '').trim());
     const userContent = [
         '## 角色设定摘要',
         characterSummary() || '（无角色卡）',
@@ -144,8 +151,7 @@ export function buildGuidanceMessages(options = {}) {
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
         ...(memoryText ? [memorySectionHeader(memoryTags), memoryText] : []),
-        ...(gpList.length ? ['## 游戏玩法（当前生效的玩法规则，规划必须遵守其约束）',
-            gpList.map(i => `### ${String(i.name ?? '未命名')}\n${String(i.content).trim()}`).join('\n\n')] : []),
+        ...gameplaySection(storageItems, '## 游戏玩法（当前生效的玩法规则，规划必须遵守其约束）'),
         ...(activePlan ? ['## 进行中剧情（正在执行的规划，检查进度与重复时对照它）', activePlan] : []),
         ...(summaries.length ? ['## 历史剧情摘要（只用于查重）', summaries.map((s, i) => `${i + 1}. ${s}`).join('\n')] : []),
         ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),
@@ -176,6 +182,7 @@ export async function runPlotGuidance(options = {}) {
 
 /**
  * 检查报告：对照进行中剧情与最近对话，输出完成度/推进/文风/OOC/其他问题/建议。
+ * 当前生效的游戏玩法条目自动附带（与主对话注入同一判定），检查执行情况时对照它。
  * @param {object} [options]
  * @param {string} options.planText   进行中剧情全文
  * @param {string} [options.userNote] 补充说明
@@ -199,6 +206,7 @@ export async function runStoryReview({ planText = '', userNote = '', presets } =
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
         ...(memoryText ? ['## 记忆表格（已有剧情事件记录，用于查重与推新参考；按记忆表格页召回标签筛选）', memoryText] : []),
+        ...gameplaySection(storageItemsInEffect(), '## 游戏玩法（当前生效的玩法规则，检查执行情况时对照它）'),
         ...(userNote ? ['## 用户补充说明', userNote] : []),
     ].join('\n\n');
 
