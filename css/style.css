@@ -705,7 +705,7 @@
     word-break: break-word;
 }
 
-/* 随机事件页：路人反应卡的扩散链分段 */
+/* 随机事件页：旧版路人反应卡的扩散链分段（新卡不再渲染，样式保留给可能存在的旧界面残留） */
 .pp-rx-stage {
     padding-left: 8px;
     border-left: 3px solid var(--SmartThemeBorderColor, #666);

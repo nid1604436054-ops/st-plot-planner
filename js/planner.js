@@ -7,6 +7,7 @@ import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
 import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
+import { materialSections as baseMaterialSections, gameplaySection, assemblePresets, withPresets } from "./materials.js";
 import { extractJson, fingerprint } from "./utils.js";
 
 // 输出 schema 两套变体：存在进行中剧情时才要求 progress（推进到哪个阶段 + 约百分比）。
@@ -78,19 +79,10 @@ export const REVIEW_SYSTEM_PROMPT = [
     REVIEW_SCHEMA,
 ].join('\n');
 
-// 用户预设（格式/文风等固定要求）拼装：显式传入列表时按传入的来（向导的本次勾选），
-// 缺省取设置里启用的；按列表顺序拼成带名小节。JSON 输出格式不能被预设改掉，否则解析会失败
-export function assemblePresets(presets) {
-    const src = Array.isArray(presets) ? presets : (settings.guidance?.presets ?? []).filter(p => p.enabled);
-    return src
-        .filter(p => String(p?.content ?? '').trim())
-        .map(p => `### ${p.name}\n${String(p.content).trim()}`)
-        .join('\n\n');
-}
-
-export function withPresets(base, custom) {
-    return custom ? `${base}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n${custom}` : base;
-}
+// 用户预设拼装（assemblePresets/withPresets）与材料小节构建已抽到 materials.js（reactions.js
+// 也要用、又不能依赖本文件——planner → injection → reactions 已成链）；这里转发导出，
+// randomEvents.js 等既有引用方不用改
+export { assemblePresets, withPresets } from "./materials.js";
 
 // 真实账单提示（数字取服务商 usage 实报，非估算）：分析与检查调用结束就亮出来，
 // 方便和「查看完整提示词」的材料字数对账——中文实际约 1.4~1.6 字/token，比预览粗估省。
@@ -281,23 +273,10 @@ export function collectStats({ memoryTags = null, memorySheets = null } = {}) {
     return { layers: chatList.length, hits: hits.length, memChars };
 }
 
-// 记忆表格小节标题：向模型说明这批行的用途（查重/推新）与本次召回方式
-function memorySectionHeader(memoryTags) {
-    const mode = memoryTags == null
-        ? '按记忆表格页召回标签筛选'
-        : (Array.isArray(memoryTags) && memoryTags.length ? `按标签召回：${memoryTags.join('、')}` : '全量召回');
-    return `## 记忆表格（已有剧情事件记录，用于检查新规划是否与之重复、并可作为推新发展方向的参考；${mode}）`;
-}
-
-// 游戏玩法小节：分析与检查报告共用同一格式（每条带名字做小标题）
-function gameplaySection(items, header) {
-    const list = (items ?? []).filter(i => String(i?.content ?? '').trim());
-    if (!list.length) return [];
-    return [header, list.map(i => `### ${String(i.name ?? '未命名')}\n${String(i.content).trim()}`).join('\n\n')];
-}
+// 记忆表格 / 游戏玩法小节的构建在 materials.js（与路人反应校准共用同一批口径）
 
 // 路人反应小节：生效中的反应卡注入自动附带（分析与检查报告共用）。
-// 附带的正文就是主对话提示词里逐层换段的同一份文本——规划/检查模型与主对话模型看到同一口径
+// 附带的正文就是主对话提示词里的同一份文本——规划/检查模型与主对话模型看到同一口径
 function reactionSection(header) {
     const list = activeReactionInjections();
     if (!list.length) return [];
@@ -323,25 +302,13 @@ function reactionSection(header) {
  */
 // 供规划分析与随机事件生成共用的材料小节（两处口径完全一致）：
 // 角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要。
-// 随机事件是向导第 2 步，材料必须与第 1 步预览同一批——各算一份必然对不上账
-export function materialSections({ memoryTags = null, memorySheets = null, storageItems = [], activePlan = '', historySummaries = [] } = {}) {
-    const { chatList, hits } = collectPlanningContext();
-    if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
-    const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets });
-    const summaries = (historySummaries ?? []).filter(Boolean);
-    const parts = [
-        '## 角色设定摘要',
-        characterSummary() || '（无角色卡）',
-        '## 最近对话记录',
-        formatChatLog(chatList),
-        '## 检索命中的世界书条目',
-        buildLoreContext(hits),
-        ...(memoryText ? [memorySectionHeader(memoryTags), memoryText] : []),
-        ...gameplaySection(storageItems, '## 游戏玩法（当前生效的玩法规则，规划必须遵守其约束）'),
-        ...reactionSection('## 路人反应（当前生效的反应卡，后续剧情安排与其扩散、收束口径一致）'),
-        ...(activePlan ? ['## 进行中剧情（正在执行的规划，检查进度与重复时对照它）', activePlan] : []),
-        ...(summaries.length ? ['## 历史剧情摘要（只用于查重）', summaries.map((s, i) => `${i + 1}. ${s}`).join('\n')] : []),
-    ];
+// 随机事件是向导第 2 步，材料必须与第 1 步预览同一批——各算一份必然对不上账。
+// 小节本体在 materials.js（reactions.js 也直接用它出反应卡）；「路人反应」小节在这里插入
+export function materialSections(opts = {}) {
+    const { parts, hits } = baseMaterialSections(opts);
+    const idx = parts.findIndex(p => p.startsWith('## 进行中剧情'));
+    parts.splice(idx === -1 ? parts.length : idx, 0,
+        ...reactionSection('## 路人反应（当前生效的反应卡，后续剧情安排与其余波、收束口径一致）'));
     return { parts, hits };
 }
 

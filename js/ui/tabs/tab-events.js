@@ -1,8 +1,10 @@
 // 随机事件工具区（挂在剧情指导页下部）：路人反应校准 + 底部「事件库设置」「AI 建库」两个折叠区。
 // 掷骰入口只有分步规划向导第 2 步（随机事件闸口），这里不再放独立的掷骰按钮；
 // 「事件库设置」里调掷骰三板块（事件条目 / 维度随机 / AI 自主）的开关与权重，供向导第 2 步的掷骰用。
-// 路人反应卡：从最近对话认出引人注目的事（不手填，唯一输入框是指导意见）→ 显著性/即时反应/扩散链/
-// 底线/楼层预算 → 转自动过期注入（逐层换段；生效期间规划与检查报告自动附带同一口径，见 planner.js）
+// 路人反应卡：从最近对话认出引人注目的事（不手填，唯一输入框是指导意见；材料与向导第 1 步
+// 同一批勾选——预设拼进指令、世界书/记忆表格/玩法随材料，见 reactions.js）
+// → 显著性/即时口径/余波口径/底线/楼层预算（一层 = 一条角色回复）→ 转自动到期注入
+// （生效期间规划与检查报告自动附带同一口径，见 planner.js）
 import { settings, save, newId } from "../../settings.js";
 import { defaultEventRules, generateEventEntries, dimNameOf } from "../../randomEvents.js";
 import { generateReactionCard, composeReactionText } from "../../reactions.js";
@@ -27,6 +29,7 @@ export function renderEventsTools(container) {
     container.innerHTML = `
     <div class="pp-section">
         <b>路人反应校准</b>
+        <div class="pp-muted" title="与向导第 1 步同一批勾选（存对话记忆，换对话各用各的）：预设按勾选拼进指令，世界书按启用的书检索命中，记忆表格与游戏玩法按勾选附带，另带进行中剧情。短线剧情想省材料，去第 1 步少勾即可">材料 = 向导第 1 步的勾选（预设/世界书/记忆表格/玩法，随对话记忆）＋ 进行中剧情</div>
         <label class="pp-label">指导意见</label>
         <textarea id="pp_rx_note" class="text_pole textarea_compact" rows="2" placeholder="例：别闹大，控制在背后议论和转发的程度"></textarea>
         <div class="pp-btn-row"><span id="pp_rx_gen" class="menu_button">生成反应卡</span></div>
@@ -481,15 +484,15 @@ function renderReactionCard(container) {
         <div class="pp-item pp-gd-evcard">
             <b>路人反应卡</b>
             <div>显著性 <span style="color:#e8c06a">${stars}</span>（${card.salience}/5）</div>
-            <label class="pp-label">即时反应写法（每轮 1-3 句，写一次就够）</label>
+            <label class="pp-label">即时反应口径（每轮 1-3 句，织进当前场景，写一次就够）</label>
             <div>${escapeHtml(card.immediate)}</div>
-            <label class="pp-label">扩散链（按楼层分段推进）</label>
-            ${card.diffusion.map(st => `<div class="pp-rx-stage"><b>第 ${escapeHtml(st.floors)} 层：</b>${escapeHtml(st.text)}</div>`).join('')}
+            <label class="pp-label">余波口径（消息传开/平息的方向，不写场面）</label>
+            <div>${escapeHtml(card.aftermath)}</div>
             <label class="pp-label">底线</label>
             <div>${escapeHtml(card.boundaries)}</div>
-            <label class="pp-label">楼层预算（有效层数，到期自动撤下）</label>
+            <label class="pp-label">楼层预算（一层 = 一条角色回复，user 消息不计；到期自动撤下）</label>
             <input id="pp_rx_floors" class="text_pole textarea_compact" type="number" min="2" max="30" value="${card.floors}" />
-            <label class="pp-label">注入正文预览（可改；改过后不再按楼层自动换段，只按层数过期）</label>
+            <label class="pp-label">注入正文预览（可改；改过就按这份文本固定生效，只按层数过期）</label>
             <textarea id="pp_rx_text" class="text_pole textarea_compact" rows="10">${escapeHtml(composeReactionText(card, 0))}</textarea>
             <div class="pp-btn-row">
                 <span id="pp_rx_ok" class="menu_button">确认，转为隐身注入</span>
@@ -528,6 +531,6 @@ function renderReactionCard(container) {
             reaction,
             age: 0,
         });
-        toastr.success(`已注入，${card.floors} 层后自动撤下（正文逐层推进扩散段；生效期间规划与检查报告自动附带，设置页底部可提前撤下）`);
+        toastr.success(`已注入，${card.floors} 层后自动撤下（一层 = 一条角色回复；生效期间规划与检查报告自动附带同一口径，设置页底部可提前撤下）`);
     });
 }

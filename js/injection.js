@@ -75,8 +75,9 @@ export function activeReactionInjections() {
         && !(i.scope === 'chat' && i.chatId !== undefined && i.chatId !== chatId));
 }
 
-// 每收到一条消息，推进「按层数过期」的计数（开发方案 §M4 生命周期）；
-// 带反应卡的注入（source=reaction）同时按新楼层重写正文（扩散链逐层换段、临近到期提示收束）。
+// 每收到一条角色回复，推进「按层数过期」的计数（开发方案 §M4 生命周期；一层 = 一条角色回复，
+// user 消息不计——tick 只挂在 MESSAGE_RECEIVED 上）；
+// 带反应卡的注入（source=reaction）同时按新楼层重写正文（旧式扩散链卡逐层换段，新卡口径不变、临近到期提示收束）。
 // 绑定其他聊天的 scope=chat 注入不跟着别的聊天计数。
 export function tickInjectionExpiries() {
     const chatId = getTavernContext().chatId;
