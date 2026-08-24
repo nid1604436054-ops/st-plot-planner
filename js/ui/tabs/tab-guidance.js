@@ -449,9 +449,8 @@ function renderCollect(container, main) {
         const memSeg = !recallSheets.length ? '记忆表格 不附带'
             : `记忆表格 ${st.memChars} 字（${sheetDesc} · ${memModeDesc()}）`;
         const gpDesc = gpItems.length ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
-        const guardDesc = st.guardRows ? ` · 防重复 ${st.guardRows} 行` : '';
         main.querySelector('#pp_gd_c1_stat').textContent =
-            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${guardDesc}${gpDesc}`;
+            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}`;
         const chipsEl = main.querySelector('#pp_gd_c1_chips');
         if (chipsEl) chipsEl.style.display = run.memMatch ? '' : 'none';
         const tipEl = main.querySelector('#pp_gd_c1_memtip');
@@ -565,7 +564,7 @@ function renderReady(container, main) {
     <div class="pp-section">
         <b>分析前确认</b>
         <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${(run.presetIds ?? []).length}/${presets.length} 启用 · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}</div>
-        <div class="pp-gd-stat pp-muted" title="防重复行：词表里标了「防重复」的标签命中的记忆行，分析时自动附带并要求新剧情避免复刻同类事件流程（「记忆表格」页词表里开关）">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${stat.guardRows ? ` · 防重复 ${stat.guardRows} 行` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（先轻量判断，需要才检索）' : ''}</div>
+        <div class="pp-gd-stat pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（先轻量判断，需要才检索）' : ''}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">确认，开始分析</span>
             <span id="pp_gd_ready_back" class="menu_button">返回</span>

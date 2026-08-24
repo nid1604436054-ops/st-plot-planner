@@ -3,7 +3,7 @@
 import { chatCompletion, searchWeb, searchToolReady } from "./api.js";
 import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
 import { buildLoreContext } from "./lorebook.js";
-import { buildMemoryContext, buildRepeatGuardContext } from "./memoryTable.js";
+import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
 import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
@@ -48,6 +48,7 @@ export function guidanceSystemPrompt(hasActivePlan = false) {
         '2) 规划：为后续剧情设计「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
         '要求：判断必须引用对话依据；给出「进行中剧情」时对照它检查进度与重复；给了「随机事件」就将其自然融入规划；规划要具体、可执行、尊重既有设定；面向当前场景做预编排。',
         '检查与规划必须耦合：checks 判出的每个问题都要在 plan 里得到处置，判了不改等于白判——OOC 在 beats 里写明怎么拉回人设/事实/关系，剧情与文风重复写明怎么绕开、往哪个新方向走；需要扮演模型后续持续注意的规避要点（如别再重复某类描写）放进 risks；不允许 checks 报了问题而 plan 与之无关。',
+        '记忆表格里若已有多条同标签或同类型的既有事件（行尾带标签，如多次约会、多次同类冲突），视为这类事件已经写过：规划可以再安排同类事件，但不要复刻已有记录的流程与桥段，过程或走向须有新意。',
     '文风重复的判定基准：只针对角色（char）的扮演文本——先检查用户（user）近期输入是否自己在重复动作、场景或指令；角色只是跟进用户发起的重复不算文风重复；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判「轻微/明显」，并在 note 里写明用户是否先重复、角色重复了什么。',
     '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
     '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
@@ -267,12 +268,10 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
 // 本地检索统计（向导第 1 步展示用；纯本地，不调模型）
 // memoryTags 语义与 buildGuidanceMessages 相同：null 默认召回 / [] 全量 / 数组按标签 / false 不附带
 // memorySheets：null = 全部（开了召回的表）；数组 = 只算勾选的表（空数组 = 一张都不带）
-// guardRows：防重复标签命中的记忆行数（词表里标了「防重复」的标签→带这些标签的行，分析时自动附带）
 export function collectStats({ memoryTags = null, memorySheets = null } = {}) {
     const { chatList, hits } = collectPlanningContext();
     const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets }).length;
-    const guardRows = buildRepeatGuardContext().rows;
-    return { layers: chatList.length, hits: hits.length, memChars, guardRows };
+    return { layers: chatList.length, hits: hits.length, memChars };
 }
 
 // 记忆表格 / 游戏玩法小节的构建在 materials.js（与路人反应校准共用同一批口径）
@@ -303,12 +302,11 @@ function reactionSection(header) {
  *                                               「游戏玩法」小节发给模型，规划须在其约束内设计
  */
 // 供规划分析与随机事件生成共用的材料小节（两处口径完全一致）：
-// 角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 已发生的同类事件 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要。
+// 角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要。
 // 随机事件是向导第 2 步，材料必须与第 1 步预览同一批——各算一份必然对不上账。
-// 防重复小节在这里统一开（planner 这条链 = 规划 + 事件生成；反应卡走 materials.js 底层不带）
 // 小节本体在 materials.js（reactions.js 也直接用它出反应卡）；「路人反应」小节在这里插入
 export function materialSections(opts = {}) {
-    const { parts, hits } = baseMaterialSections({ repeatGuard: true, ...opts });
+    const { parts, hits } = baseMaterialSections(opts);
     const idx = parts.findIndex(p => p.startsWith('## 进行中剧情'));
     parts.splice(idx === -1 ? parts.length : idx, 0,
         ...reactionSection('## 路人反应（当前生效的反应卡，后续剧情安排与其余波、收束口径一致）'));

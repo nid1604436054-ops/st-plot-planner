@@ -181,7 +181,7 @@ function renderTagging(container) {
 
     el.innerHTML = `
     <b title="把镜像里还没标签的行分批交给「设置」页配置的 API，按下方的词表自动打标签（模型只能从词表里选，不能自拟）；之后「召回设置」和剧情指导第 1 步的「按标签匹配」用的就是这些标签">打标签</b>
-    <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签；「防重复」＝事件类型标记——带这个标签的记忆行在每次剧情规划时自动附带，要求新剧情避免复刻同类事件的流程">标签词表（一行一个，注释可选）</label>
+    <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签">标签词表（一行一个，注释可选）</label>
     <div id="pp_mem_vocab"></div>
     <div class="pp-btn-row">
         <span id="pp_mem_vocab_add" class="menu_button"><i class="fa-solid fa-plus"></i> 加一个标签</span>
@@ -202,7 +202,6 @@ function renderTagging(container) {
         <div class="pp-tag-vocab">
             <input type="text" class="text_pole textarea_compact" data-vname="${i}" placeholder="标签名（如：背叛）" value="${escapeHtml(v.name ?? '')}" />
             <input type="text" class="text_pole textarea_compact" data-vnote="${i}" placeholder="注释（可选：什么内容算这个标签）" value="${escapeHtml(v.note ?? '')}" />
-            <span class="menu_button pp-vocab-guard${v.repeat ? ' on' : ''}" data-vrep="${i}" title="防重复标签（事件类型标记）：带这个标签的记忆行在每次剧情规划时自动作为「已发生的同类事件」附带，要求新规划别复刻同类事件的流程——适合给约会、冲突这类容易流程雷同的事件类型">防重复</span>
             <span class="menu_button fa-solid fa-trash" data-vdel="${i}" title="删除该标签"></span>
         </div>`).join('') || '<span class="pp-muted">（词表为空，先加几个标签再打标）</span>';
         vocabBox.querySelectorAll('[data-vname]').forEach(inp => inp.addEventListener('input', () => {
@@ -212,12 +211,6 @@ function renderTagging(container) {
         vocabBox.querySelectorAll('[data-vnote]').forEach(inp => inp.addEventListener('input', () => {
             state.matchTags[Number(inp.dataset.vnote)].note = inp.value;
             persistMemory();
-        }));
-        vocabBox.querySelectorAll('[data-vrep]').forEach(btn => btn.addEventListener('click', () => {
-            const v = state.matchTags[Number(btn.dataset.vrep)];
-            v.repeat = !v.repeat;
-            persistMemory();
-            renderVocab();
         }));
         vocabBox.querySelectorAll('[data-vdel]').forEach(btn => btn.addEventListener('click', () => {
             state.matchTags.splice(Number(btn.dataset.vdel), 1);

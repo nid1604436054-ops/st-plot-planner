@@ -712,27 +712,12 @@
     flex: 0 0 auto;
 }
 
-/* 记忆表格「打标签」区：词表行（标签名 + 注释 + 防重复开关 + 删除），两个输入框均分宽度 */
+/* 记忆表格「打标签」区：词表行（标签名 + 注释 + 删除），两个输入框均分宽度 */
 .pp-tag-vocab {
     display: flex;
     gap: 8px;
     align-items: center;
     margin: 4px 0;
-}
-
-/* 词表行的「防重复」开关（事件类型标记）：灭＝淡色、亮＝绿色描边。
-   padding 覆盖要带 .pp-drawer 与全量 menu_button 放宽规则同权重、靠后生效 */
-.pp-drawer .pp-vocab-guard {
-    font-size: 0.85em;
-    opacity: 0.55;
-    padding: 3px 10px;
-    flex: 0 0 auto;
-}
-
-.pp-drawer .pp-vocab-guard.on {
-    opacity: 1;
-    color: #7fd18a;
-    border: 1px solid #7fd18a;
 }
 
 .pp-tag-vocab input[type="text"] {

@@ -520,7 +520,12 @@ export function buildMemoryContext({ tagFilter = null, sheetUids = null, maxChar
         const colIdx = Array.isArray(recall.columns) ? recall.columns : null;
         const rows = sheet.rows
             .filter(r => want.length === 0 || (state.tags[r.rid] ?? []).some(t => want.includes(t)))
-            .map(r => pickColumns(r.cells, colIdx));
+            .map(r => {
+                const cells = pickColumns(r.cells, colIdx);
+                // 行尾带上这行的标签：模型能看见「同标签的同类事件已有多条」，配合规划提示词防流程复刻
+                const tags = state.tags[r.rid];
+                return tags?.length ? [...cells, `标签:${tags.join('/')}`] : cells;
+            });
         if (!rows.length) continue;
         const header = 'rowIndex,' + pickColumns(sheet.columns, colIdx).map((c, i) => `${i}:${csvSafe(c)}`).join(',');
         const body = rows.map((r, i) => `${i},${r.map(csvSafe).join(',')}`).join('\n');
@@ -529,41 +534,6 @@ export function buildMemoryContext({ tagFilter = null, sheetUids = null, maxChar
     const text = blocks.join('\n');
     const limit = maxChars ?? settings.retrieval.memChars ?? 4000;   // 0 = 不限
     return limit > 0 && text.length > limit ? text.slice(0, limit) + '\n…（超长截断）' : text;
-}
-
-// ---------------------------------------------------------------------------
-// 防重复标签：词表里标了 repeat 的标签名。带这些标签的镜像行在每次剧情规划分析时
-// 自动附带为「已发生的同类事件」小节，并要求新规划避免复刻同类事件的流程——
-// 同一张卡多角色的公共环境事件（如约会）容易写成高度雷同的流程，靠这层机制避雷。
-// 与「召回设置」是两条通道：查重不看召回开关/表范围，只要行带防重复标签就计入
-// ---------------------------------------------------------------------------
-
-export function repeatGuardTags() {
-    const state = memoryState();
-    return [...new Set((state.matchTags ?? [])
-        .filter(v => v?.repeat && String(v.name ?? '').trim())
-        .map(v => String(v.name).trim()))];
-}
-
-export function buildRepeatGuardContext(maxChars = 2000) {
-    const state = memoryState();
-    const guards = new Set(repeatGuardTags());
-    if (!guards.size) return { text: '', rows: 0, tags: [] };
-    const lines = [];
-    for (const sheet of state.mirror.sheets) {
-        for (const r of sheet.rows) {
-            const hit = (state.tags[r.rid] ?? []).filter(t => guards.has(t));
-            if (!hit.length) continue;
-            const cells = r.cells.map((c, i) => String(c ?? '').trim() ? `${sheet.columns[i] ?? i}:${csvSafe(c)}` : '').filter(Boolean).join(' | ');
-            lines.push(`· [${hit.join('/')}]（${sheet.name}）${cells}`);
-        }
-    }
-    const text = lines.join('\n');
-    return {
-        rows: lines.length,
-        tags: [...guards],
-        text: maxChars > 0 && text.length > maxChars ? text.slice(0, maxChars) + '\n…（超长截断）' : text,
-    };
 }
 
 // ---------------------------------------------------------------------------

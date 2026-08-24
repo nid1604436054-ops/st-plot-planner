@@ -5,7 +5,7 @@
 // 「路人反应」小节因此不在这里，由 planner.js 在外层插入（见 planner.materialSections）。
 import { collectPlanningContext, formatChatLog, characterSummary, chatMeta, persistChat } from "./context.js";
 import { buildLoreContext } from "./lorebook.js";
-import { buildMemoryContext, buildRepeatGuardContext } from "./memoryTable.js";
+import { buildMemoryContext } from "./memoryTable.js";
 import { settings } from "./settings.js";
 
 // 记忆表格小节标题：向模型说明这批行的用途与本次召回方式（规划查重 / 路人反应背景各有口径）
@@ -61,25 +61,22 @@ export function saveReactionPicks(picks) {
 }
 
 /**
- * 组装共用的材料小节：角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 已发生的同类事件 / 游戏玩法 / 进行中剧情 / 历史摘要。
+ * 组装共用的材料小节：角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 进行中剧情 / 历史摘要。
  * 各小节标题带用途说明；调用方用途不同时可用 headers 覆写对应小节的口径文字。
+ * 记忆行行尾自带标签（buildMemoryContext），同标签同类事件的防复刻由规划系统提示词一句话约束，不做专门功能
  * @param {*}      [options.memoryTags]        记忆表格召回方式：null=按记忆表格页召回标签，
  *                                             []=全量, ['a','b']=按标签, false=本次不附带
  * @param {*}      [options.memorySheets]      记忆表格表范围：null=全部（开了召回的表），数组=只带勾选的表（空数组=不带）
- * @param {boolean} [options.repeatGuard]      是否附带「已发生的同类事件」防重复小节（词表里标了
- *                                             防重复的标签→带这些标签的行自动附上，要求新规划避免流程雷同）。
- *                                             规划分析与随机事件开（planner.materialSections 统一开），反应卡不开
  * @param {Array}  [options.storageItems]      游戏玩法条目（{name, content}）
  * @param {string} [options.activePlan]        进行中剧情全文
  * @param {string[]} [options.historySummaries] 历史剧情摘要（查重用）
  * @param {object} [options.headers]           小节标题覆写：{ memoryPurpose, gameplay, activePlan }
  * @param {string[]} [options.enabledIds]      世界书书单覆盖（缺省 = 本对话启用的书单）
  */
-export function materialSections({ memoryTags = null, memorySheets = null, repeatGuard = false, storageItems = [], activePlan = '', historySummaries = [], headers = {}, enabledIds } = {}) {
+export function materialSections({ memoryTags = null, memorySheets = null, storageItems = [], activePlan = '', historySummaries = [], headers = {}, enabledIds } = {}) {
     const { chatList, hits } = collectPlanningContext({ enabledIds });
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets });
-    const guard = repeatGuard ? buildRepeatGuardContext() : { text: '', rows: 0 };
     const summaries = (historySummaries ?? []).filter(Boolean);
     const parts = [
         '## 角色设定摘要',
@@ -89,7 +86,6 @@ export function materialSections({ memoryTags = null, memorySheets = null, repea
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
         ...(memoryText ? [memorySectionHeader(memoryTags, headers.memoryPurpose), memoryText] : []),
-        ...(guard.rows ? ['## 已发生的同类事件（防重复：这些同类事件已经写过，新规划不要再复刻其流程与桥段——可以再安排同类型事件，但过程、重点或走向必须有明显新意）', guard.text] : []),
         ...gameplaySection(storageItems, headers.gameplay ?? '## 游戏玩法（当前生效的玩法规则，规划必须遵守其约束）'),
         ...(activePlan ? [headers.activePlan ?? '## 进行中剧情（正在执行的规划，检查进度与重复时对照它）', activePlan] : []),
         ...(summaries.length ? ['## 历史剧情摘要（只用于查重）', summaries.map((s, i) => `${i + 1}. ${s}`).join('\n')] : []),
