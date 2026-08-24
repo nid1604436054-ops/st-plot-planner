@@ -5,8 +5,8 @@
 // user 消息不计，到期自动撤下）。旧版按楼层分段的「扩散链」卡片还存在旧注入里，
 // composeReactionText 走兼容分支继续逐层换段——3~4 层根本扩散不开，新卡不再产扩散链。
 // 材料用反应区自己的「材料勾选」（materials.reactionPicks，存对话记忆，独立于向导第 1 步）：
-// 预设拼进系统提示词，世界书/记忆表格/游戏玩法/进行中剧情按勾选发送——长线剧情里角色的
-// 身世、名声在世界书与记忆里，不带就没法校准路人认知。
+// 预设拼进系统提示词，世界书（书单之外可再按条目标签筛一层）/记忆表格/游戏玩法/进行中剧情
+// 按勾选发送——长线剧情里角色的身世、名声在世界书与记忆里，不带就没法校准路人认知。
 import { chatCompletion } from "./api.js";
 import { activeStory } from "./story.js";
 import { materialSections, reactionPicks, assemblePresets, withPresets } from "./materials.js";
@@ -54,6 +54,7 @@ export async function generateReactionCard({ note = '' } = {}) {
         storageItems: (settings.storageItems ?? []).filter(i => gpIds.includes(i.id)),
         activePlan,
         enabledIds: picks.books ?? undefined, // null = 沿用本对话「世界书」页的启用书单
+        loreTags: picks.loreMatch ? picks.loreTags : null, // 按标签筛条目；开了没勾 = 一条不带
         headers: {
             memoryPurpose: '既往剧情事件记录，是路人与世界已有认知的背景',
             gameplay: '## 游戏玩法（当前生效的玩法规则，路人与世界的反应须遵守其约束）',

@@ -377,7 +377,7 @@ st-plot-planner/
 │   ├── settings.js            # 设置单例：extension_settings['plot-planner'] 读写
 │   ├── api.js                 # M0 独立通道：OpenAI 兼容 chat/completions（含 SSE、web_search 工具）
 │   ├── context.js             # 兼容层：SillyTavern.getContext() 唯一依赖点
-│   ├── lorebook.js            # M1 世界书：导入（双格式）+ 关键词/正则检索
+│   ├── lorebook.js            # M1 世界书：导入（双格式）+ 关键词检索（条目可带标签，tagFilter 先按标签筛再走关键词）
 │   ├── planner.js             # M2 剧情指导：分析 + 检查报告提示词组装
 │   ├── materials.js           # 共用材料小节构建（materials.materialSections/picksMaterials/预设拼装）
 │   ├── randomEvents.js        # M3 随机事件：维度/条目/掷骰管线、生成
@@ -452,3 +452,4 @@ st-plot-planner/
 | 2026-08-24 | 游戏玩法区两处小改：①「按当前剧情重放」更名「立即重扫注入」并加悬浮注释——立刻按最近对话重查各条目的触发词：命中的注入、未命中的撤下；平时切对话/收到新消息自动做，自己编辑或删除消息后用它手动对齐；②触发词扫描窗口从写死 20 层改为可设置：settings 新增 storageScanLayers（默认 20、老安装迁移补 20、0 = 不限扫全部对话，与 scanDepth 同约定），游戏玩法折叠区新增「触发词扫描楼层」输入框（改动即保存并立刻按新窗口重扫），store.js 的 storageItemsInEffect/scanAndApplyStorage 默认窗口改从设置取、显式传参不受影响；主对话自动扫描（切对话/新消息）、向导第 1 步默认勾选与「生效中」徽标、检查报告附带的玩法条目全部跟随新窗口。TODO B④ 结案：不并 scanDepth，独立设置 |
 | 2026-08-24 | 路人反应校准 v2——口径化并与规划协同（应用户两轮反馈：①生成文本不合理，唯一有用的是即时写法，3~4 层根本扩散不开、镜头硬切到 NPC 身上写内心戏；②要与剧情规划协同，材料须能带预设和选择性的世界书）：生成材料改为与向导第 1 步同一批勾选（新抽 materials.js：materialSections/picksMaterials/assemblePresets/withPresets 自 planner.js 迁出，planner 转发导出并在外层插「路人反应」小节，避免 planner→injection→reactions 成环）——预设拼进系统提示词、世界书按对话书单检索命中、记忆表格与玩法按勾选附带、另带进行中剧情；卡片结构砍掉按楼层分段的扩散链，改为 aftermath 余波口径单段（显著性 1-3 不外传自然平息、4-5 给传播走向，只给方向不写场面），提示词立铁律：反应织进当前场景、不切镜头到不在场者、不写路人内心戏、不虚构路人跟进后续；楼层预算改按显著性匹配（1-2 级 2-4、3 级 4-8、4 级 10-18、5 级 16-30）并在界面标注一层=一条角色回复（tick 挂 MESSAGE_RECEIVED 本就只数 AI 回复，user 消息不计，此前不可见）；旧版扩散链卡片（存在注入里的）由 composeReactionText 兼容分支继续逐层换段直到到期 |
 | 2026-08-24 | 反应卡材料勾选独立化（应用户反馈：不该跟规划全量提示词挂钩、要去别的板块删减太麻烦）：上一版「材料随向导第 1 步勾选」改为反应区自带「材料勾选」折叠——世界书（默认＝本对话书单，点任意一本切为独立勾选）/记忆表格（勾选的表全量，默认不附带）/游戏玩法（默认＝生效中）/预设（默认＝启用中，拼进系统指令）/进行中剧情（默认附带）五组各自勾选，存 chatMetadata.plotPlannerReactionPicks（随聊天文件，与 plotPlannerPicks 互不影响）；materials.js 的 picksMaterials 换成 reactionPicks/saveReactionPicks，collectPlanningContext/materialSections 增加 enabledIds 书单覆盖参数（缺省仍＝本对话书单，规划/检查/事件路径不变） |
+| 2026-08-24 | 世界书条目标签 + 反应卡按标签筛条目（应用户反馈：反应区世界书只有书级勾选、缺书内标签筛选）：LoreEntry 新增 tags 字段（世界书页条目行就地编辑，逗号分隔，全局共享；不参与关键词检索、只作筛选用途，酒馆 JSON 无此字段、导入后正常为空），scanLorebooks 新增 tagFilter（数组＝只带带其中任一标签的条目，常驻同样受筛；空数组＝一条不带，与缺省不筛语义不同），collectPlanningContext/materialSections 贯通 loreTags；反应区「材料勾选」的世界书组在书单之下新增「按标签筛选条目」层——标签 chips 计数只统计当前书单内启用条目、换书范围就地重建，开关与勾选随对话记忆存 plotPlannerReactionPicks.loreMatch/loreTags，开了筛选没勾标签时提示「世界书条目将一条都带不出」；规划分析/检查路径不传 loreTags 维持原样（筛选只管反应卡） |

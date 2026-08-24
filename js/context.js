@@ -53,10 +53,11 @@ export function formatChatLog(list) {
 // 最近对话取 contextLayers 层，世界书检索只扫其中最近 scanDepth 层（0 = 不限）。
 // 以后改检索口径只动这里，各调用方不再各写一遍。
 // enabledIds：调用方自带书单时用它覆盖本对话的启用书单（反应卡的独立勾选用；缺省 = 本对话书单）
-export function collectPlanningContext({ enabledIds } = {}) {
+// loreTags：条目标签筛选（反应卡「按标签筛选」用；null = 不筛，数组 = 只带带这些标签的条目）
+export function collectPlanningContext({ enabledIds, loreTags } = {}) {
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
-    const hits = scanLorebooks(scanText, { enabledIds: enabledIds ?? chatEnabledBookIds() });
+    const hits = scanLorebooks(scanText, { enabledIds: enabledIds ?? chatEnabledBookIds(), tagFilter: loreTags ?? null });
     return { chatList, scanText, hits };
 }
 

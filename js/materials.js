@@ -40,6 +40,8 @@ export function withPresets(base, custom) {
 // 反应卡自己的材料勾选（chatMetadata.plotPlannerReactionPicks，按对话存聊天文件）——
 // 独立于向导第 1 步的勾选（plotPlannerPicks 管规划分析），两边互不影响：
 //   books     null = 沿用本对话「世界书」页的启用书单；数组 = 本批独立书单（String id）
+//   loreMatch 是否按条目标签筛世界书（默认 false）；标签在「世界书」页条目旁编辑，全局共享
+//   loreTags  按标签筛时勾选的标签名（loreMatch 开而一个没勾 = 世界书一条都带不出）
 //   memSheets 勾选的记忆表 uid（空 = 不附带记忆；反应卡不做标签层，勾了全量）
 //   gpIds     null = 附带当前生效中的玩法条目；数组 = 本批勾选（空 = 不附带）
 //   presetIds null = 附带启用中的预设；数组 = 本批勾选（空 = 不附带）
@@ -48,6 +50,8 @@ export function reactionPicks() {
     const p = chatMeta().plotPlannerReactionPicks;
     return {
         books: Array.isArray(p?.books) ? p.books.map(String) : null,
+        loreMatch: Boolean(p?.loreMatch),
+        loreTags: Array.isArray(p?.loreTags) ? p.loreTags : [],
         memSheets: Array.isArray(p?.memSheets) ? p.memSheets : [],
         gpIds: Array.isArray(p?.gpIds) ? p.gpIds : null,
         presetIds: Array.isArray(p?.presetIds) ? p.presetIds : null,
@@ -71,9 +75,11 @@ export function saveReactionPicks(picks) {
  * @param {string[]} [options.historySummaries] 历史剧情摘要（查重用）
  * @param {object} [options.headers]           小节标题覆写：{ memoryPurpose, gameplay, activePlan }
  * @param {string[]} [options.enabledIds]      世界书书单覆盖（缺省 = 本对话启用的书单）
+ * @param {*}      [options.loreTags]          世界书条目标签筛选：null=不筛, []=一条不带,
+ *                                             ['a','b']=只带带这些标签的条目（常驻同样受筛）
  */
-export function materialSections({ memoryTags = null, memorySheets = null, storageItems = [], activePlan = '', historySummaries = [], headers = {}, enabledIds } = {}) {
-    const { chatList, hits } = collectPlanningContext({ enabledIds });
+export function materialSections({ memoryTags = null, memorySheets = null, storageItems = [], activePlan = '', historySummaries = [], headers = {}, enabledIds, loreTags } = {}) {
+    const { chatList, hits } = collectPlanningContext({ enabledIds, loreTags });
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets });
     const summaries = (historySummaries ?? []).filter(Boolean);

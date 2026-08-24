@@ -1,5 +1,6 @@
 // 世界书页签：导入（酒馆 JSON / 纯文本单条粘贴）、书改名/启停/删除、
-// 条目级编辑（标题/关键词/内容/删除/添加）、检索测试。
+// 条目级编辑（标题/关键词/标签/内容/删除/添加）、检索测试。
+// 标签不参与关键词检索：只供「路人反应」的材料勾选按标签筛条目（全局共享，与按对话的书单是两回事）
 // 「启用」勾选按对话记忆（chatMetadata.plotPlannerBooks）：每个对话一套书单、
 // 随聊天文件保存，切换对话自动恢复各自的勾选，不用每次重勾
 import { settings, save } from "../../settings.js";
@@ -210,6 +211,7 @@ function renderBooks(container) {
                         <label class="pp-entry-const" title="常驻：不看关键词，每次检索恒带出（对齐酒馆原生的常驻条目），排在关键词命中前面"><input type="checkbox" data-econst="${b.id}:${e.uid}" ${e.constant ? 'checked' : ''} /> 常驻</label>
                         <input type="text" class="text_pole pp-entry-name" data-ename="${b.id}:${e.uid}" value="${escapeHtml(e.comment)}" placeholder="条目标题" title="条目标题，可直接修改" />
                         <input type="text" class="text_pole pp-entry-keys" data-ekeys="${b.id}:${e.uid}" value="${escapeHtml((e.keys ?? []).join(','))}" placeholder="关键词，逗号分隔" title="检索关键词，逗号分隔；留空则只有勾「常驻」才会带出" />
+                        <input type="text" class="text_pole pp-entry-tags" data-etags="${b.id}:${e.uid}" value="${escapeHtml((e.tags ?? []).join(','))}" placeholder="标签，逗号分隔" title="条目标签，逗号分隔：全局共享，不参与关键词检索；「路人反应」的材料勾选里可按标签筛选只带这些条目" />
                         <span class="menu_button fa-solid fa-pen" data-eedit="${b.id}:${e.uid}" title="编辑内容"></span>
                         <span class="menu_button fa-solid fa-trash" data-edel="${b.id}:${e.uid}" title="删除条目"></span>
                     </div>
@@ -270,6 +272,14 @@ function renderBooks(container) {
         if (!entry) return;
         entry.keys = parseKeys(el.value);
         el.value = entry.keys.join(',');
+        save();
+    }));
+    list.querySelectorAll('[data-etags]').forEach(el => el.addEventListener('change', () => {
+        const [bookId, uid] = el.dataset.etags.split(':');
+        const entry = findEntry(bookId, uid);
+        if (!entry) return;
+        entry.tags = parseKeys(el.value);
+        el.value = entry.tags.join(',');
         save();
     }));
     list.querySelectorAll('[data-eedit]').forEach(el => el.addEventListener('click', () => {
