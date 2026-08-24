@@ -3,10 +3,9 @@
 // 依赖方向约束：本模块不得 import planner.js / injection.js / reactions.js（reactions.js
 // 反向依赖本模块拿材料，而 planner.js → injection.js → reactions.js 已成链，再回指会成环）。
 // 「路人反应」小节因此不在这里，由 planner.js 在外层插入（见 planner.materialSections）。
-import { collectPlanningContext, formatChatLog, characterSummary, chatMeta } from "./context.js";
+import { collectPlanningContext, formatChatLog, characterSummary, chatMeta, persistChat } from "./context.js";
 import { buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
-import { storageItemsInEffect } from "./store.js";
 import { settings } from "./settings.js";
 
 // 记忆表格小节标题：向模型说明这批行的用途与本次召回方式（规划查重 / 路人反应背景各有口径）
@@ -38,26 +37,27 @@ export function withPresets(base, custom) {
     return custom ? `${base}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n${custom}` : base;
 }
 
-// 向导第 1 步的「本次材料」勾选存对话记忆（chatMetadata.plotPlannerPicks，随聊天文件走）。
-// 这里把勾选还原成材料参数，默认与 tab-guidance 第 1 步完全一致：没存过勾选的对话 =
-// 记忆表格全部（开了召回的表）全量、游戏玩法取当前生效中、预设取启用中的。
-// 路人反应校准用同一批材料——先出反应卡、再带着它做规划，两步看到同一个世界
-export function picksMaterials() {
-    const p = chatMeta().plotPlannerPicks;
-    const memorySheets = Array.isArray(p?.memSheets) ? p.memSheets : null;
-    const memoryTags = p?.memMatch
-        ? (Array.isArray(p.memTags) && p.memTags.length ? p.memTags : false)   // 按标签但一个没勾 = 不附带
-        : [];                                                                    // 不按标签 = 所选表全量
-    const gpIds = Array.isArray(p?.gpIds) ? p.gpIds : storageItemsInEffect().map(i => i.id);
-    const presetIds = Array.isArray(p?.presetIds) ? p.presetIds : null;
+// 反应卡自己的材料勾选（chatMetadata.plotPlannerReactionPicks，按对话存聊天文件）——
+// 独立于向导第 1 步的勾选（plotPlannerPicks 管规划分析），两边互不影响：
+//   books     null = 沿用本对话「世界书」页的启用书单；数组 = 本批独立书单（String id）
+//   memSheets 勾选的记忆表 uid（空 = 不附带记忆；反应卡不做标签层，勾了全量）
+//   gpIds     null = 附带当前生效中的玩法条目；数组 = 本批勾选（空 = 不附带）
+//   presetIds null = 附带启用中的预设；数组 = 本批勾选（空 = 不附带）
+//   plan      是否附带进行中剧情（默认 true）
+export function reactionPicks() {
+    const p = chatMeta().plotPlannerReactionPicks;
     return {
-        memoryTags,
-        memorySheets,
-        storageItems: (settings.storageItems ?? []).filter(i => gpIds.includes(i.id)),
-        presets: presetIds == null
-            ? (settings.guidance?.presets ?? []).filter(x => x.enabled)
-            : (settings.guidance?.presets ?? []).filter(x => presetIds.includes(x.id)),
+        books: Array.isArray(p?.books) ? p.books.map(String) : null,
+        memSheets: Array.isArray(p?.memSheets) ? p.memSheets : [],
+        gpIds: Array.isArray(p?.gpIds) ? p.gpIds : null,
+        presetIds: Array.isArray(p?.presetIds) ? p.presetIds : null,
+        plan: p ? p.plan !== false : true,
     };
+}
+
+export function saveReactionPicks(picks) {
+    chatMeta().plotPlannerReactionPicks = { version: 1, ...picks };
+    persistChat();
 }
 
 /**
@@ -70,9 +70,10 @@ export function picksMaterials() {
  * @param {string} [options.activePlan]        进行中剧情全文
  * @param {string[]} [options.historySummaries] 历史剧情摘要（查重用）
  * @param {object} [options.headers]           小节标题覆写：{ memoryPurpose, gameplay, activePlan }
+ * @param {string[]} [options.enabledIds]      世界书书单覆盖（缺省 = 本对话启用的书单）
  */
-export function materialSections({ memoryTags = null, memorySheets = null, storageItems = [], activePlan = '', historySummaries = [], headers = {} } = {}) {
-    const { chatList, hits } = collectPlanningContext();
+export function materialSections({ memoryTags = null, memorySheets = null, storageItems = [], activePlan = '', historySummaries = [], headers = {}, enabledIds } = {}) {
+    const { chatList, hits } = collectPlanningContext({ enabledIds });
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets });
     const summaries = (historySummaries ?? []).filter(Boolean);

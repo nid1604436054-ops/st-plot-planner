@@ -1,15 +1,18 @@
 // 随机事件工具区（挂在剧情指导页下部）：路人反应校准 + 底部「事件库设置」「AI 建库」两个折叠区。
 // 掷骰入口只有分步规划向导第 2 步（随机事件闸口），这里不再放独立的掷骰按钮；
 // 「事件库设置」里调掷骰三板块（事件条目 / 维度随机 / AI 自主）的开关与权重，供向导第 2 步的掷骰用。
-// 路人反应卡：从最近对话认出引人注目的事（不手填，唯一输入框是指导意见；材料与向导第 1 步
-// 同一批勾选——预设拼进指令、世界书/记忆表格/玩法随材料，见 reactions.js）
+// 路人反应卡：从最近对话认出引人注目的事（不手填，唯一输入框是指导意见；材料在反应区自己的
+// 「材料勾选」折叠里勾——plotPlannerReactionPicks 随对话记忆，独立于向导第 1 步，见 reactions.js）
 // → 显著性/即时口径/余波口径/底线/楼层预算（一层 = 一条角色回复）→ 转自动到期注入
 // （生效期间规划与检查报告自动附带同一口径，见 planner.js）
 import { settings, save, newId } from "../../settings.js";
 import { defaultEventRules, generateEventEntries, dimNameOf } from "../../randomEvents.js";
 import { generateReactionCard, composeReactionText } from "../../reactions.js";
 import { addInjection } from "../../injection.js";
-import { currentFloor } from "../../context.js";
+import { currentFloor, chatEnabledBookIds } from "../../context.js";
+import { reactionPicks, saveReactionPicks } from "../../materials.js";
+import { storageItemsInEffect } from "../../store.js";
+import { memoryState } from "../../memoryTable.js";
 import { escapeHtml, clamp } from "../../utils.js";
 
 let editingDim = null, editingRule = null;                     // 展开编辑中的维度 / 条目 id
@@ -26,16 +29,71 @@ export function renderEventsTools(container) {
         save();
     }
     if (!lib.dimId) lib.dimId = settings.eventDimensions[0]?.id ?? '';
+
+    // 反应卡材料勾选：独立于向导第 1 步（plotPlannerReactionPicks，随对话记忆）。
+    // 世界书默认沿用本对话「世界书」页的书单（books = null），点任意一本即切为本批独立勾选
+    const picks = reactionPicks();
+    const chatBooks = chatEnabledBookIds() ?? settings.lorebooks.filter(b => b.enabled).map(b => String(b.id));
+    const bookOn = b => picks.books ? picks.books.includes(String(b.id)) : chatBooks.includes(String(b.id));
+    const mem = memoryState();
+    const recallSheets = mem.mirror.sheets.filter(s => (mem.sheetRecall[s.uid] ?? {}).enabled !== false);
+    const gpItems = settings.storageItems.filter(i => i.enabled);
+    const gpHit = new Set(storageItemsInEffect().map(i => i.id));
+    const gpOn = i => (picks.gpIds ?? [...gpHit]).includes(i.id);
+    const rxPresets = settings.guidance?.presets ?? [];
+    const preOn = p => picks.presetIds ? picks.presetIds.includes(p.id) : p.enabled;
+
     container.innerHTML = `
     <div class="pp-section">
         <b>路人反应校准</b>
-        <div class="pp-muted" title="与向导第 1 步同一批勾选（存对话记忆，换对话各用各的）：预设按勾选拼进指令，世界书按启用的书检索命中，记忆表格与游戏玩法按勾选附带，另带进行中剧情。短线剧情想省材料，去第 1 步少勾即可">材料 = 向导第 1 步的勾选（预设/世界书/记忆表格/玩法，随对话记忆）＋ 进行中剧情</div>
+        <details class="pp-fold" id="pp_rx_mats">
+            <summary title="生成反应卡用的材料在这里勾（存当前对话，换对话各用各的）；向导第 1 步的勾选只管规划分析，两边互不影响">材料勾选（只管反应卡，不跟向导第 1 步）</summary>
+            <label class="pp-label" title="附带进行中剧情全文，反应口径与规划方向一致；当前没有进行中剧情时勾了也无内容"><input type="checkbox" id="pp_rx_plan" ${picks.plan ? 'checked' : ''}/> 附带进行中剧情</label>
+            <label class="pp-label" title="按勾选的书检索关键词命中与常驻条目。长线剧情里角色的身世、名声在世界书里，路人认不认得出来就靠它">世界书（按勾选的书检索；<span id="pp_rx_books_mode">${picks.books == null ? '默认＝本对话「世界书」页的书单，点任意一本切为独立勾选' : '本批独立勾选'}</span>）</label>
+            <div class="pp-gd-selp">
+                ${settings.lorebooks.map(b => `<label><input type="checkbox" data-rxbook="${escapeHtml(String(b.id))}" ${bookOn(b) ? 'checked' : ''}/> ${escapeHtml(b.name)}</label>`).join('')
+                || '<span class="pp-muted">还没有导入世界书</span>'}
+            </div>
+            <label class="pp-label" title="勾选的表全量召回（不做标签过滤），全不勾＝不附带；长线剧情里角色的既往经历在这里">记忆表格（勾选的表全量；默认不附带）</label>
+            <div class="pp-gd-selp">
+                ${recallSheets.map(s => `<label><input type="checkbox" data-rxsheet="${escapeHtml(s.uid)}" ${picks.memSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)} · ${s.rows.length} 行</label>`).join('')
+                || '<span class="pp-muted">没有开启「参与召回」的记忆表</span>'}
+            </div>
+            <label class="pp-label" title="勾选的玩法规则作为材料发给反应模型（不影响它们注入主对话）">游戏玩法（<span id="pp_rx_gps_mode">${picks.gpIds == null ? '默认＝生效中的条目' : '本批独立勾选'}</span>）</label>
+            <div class="pp-gd-selp">
+                ${gpItems.map(i => `<label><input type="checkbox" data-rxgp="${escapeHtml(i.id)}" ${gpOn(i) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
+                || '<span class="pp-muted">还没有启用的玩法条目</span>'}
+            </div>
+            <label class="pp-label" title="勾选的预设拼进反应卡的系统指令（固定要求层）">预设（<span id="pp_rx_presets_mode">${picks.presetIds == null ? '默认＝启用中的' : '本批独立勾选'}</span>）</label>
+            <div class="pp-gd-selp">
+                ${rxPresets.map(p => `<label><input type="checkbox" data-rxpre="${escapeHtml(p.id)}" ${preOn(p) ? 'checked' : ''}/> ${escapeHtml(p.name)}</label>`).join('')
+                || '<span class="pp-muted">还没有预设（「设置」页维护）</span>'}
+            </div>
+        </details>
         <label class="pp-label">指导意见</label>
         <textarea id="pp_rx_note" class="text_pole textarea_compact" rows="2" placeholder="例：别闹大，控制在背后议论和转发的程度"></textarea>
         <div class="pp-btn-row"><span id="pp_rx_gen" class="menu_button">生成反应卡</span></div>
         <div id="pp_rx_card"></div>
     </div>
     <div id="pp_ev_settings_wrap"></div>`;
+
+    // 勾选即写回对话记忆。世界书/玩法/预设默认跟随各自的全局口径（本对话书单 / 生效中 / 启用中），
+    // 点过任意一本（条）即冻结为本批显式勾选，标签提示同步切换；想回到「全跟默认」的等价状态，
+    // 把默认勾着的那些全勾上即可
+    const matsEl = container.querySelector('#pp_rx_mats');
+    matsEl.querySelector('#pp_rx_plan').addEventListener('change', e => {
+        picks.plan = e.target.checked;
+        saveReactionPicks(picks);
+    });
+    const bindList = (attr, apply) => {
+        matsEl.querySelectorAll(`[data-${attr}]`).forEach(cb => cb.addEventListener('change', () => {
+            apply([...matsEl.querySelectorAll(`[data-${attr}]`)].filter(x => x.checked).map(x => x.dataset[attr]));
+        }));
+    };
+    bindList('rxbook', ids => { picks.books = ids.map(String); matsEl.querySelector('#pp_rx_books_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
+    bindList('rxsheet', ids => { picks.memSheets = ids; saveReactionPicks(picks); });
+    bindList('rxgp', ids => { picks.gpIds = ids; matsEl.querySelector('#pp_rx_gps_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
+    bindList('rxpre', ids => { picks.presetIds = ids; matsEl.querySelector('#pp_rx_presets_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
 
     const note = container.querySelector('#pp_rx_note');
     note.value = rx.note;

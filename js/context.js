@@ -52,10 +52,11 @@ export function formatChatLog(list) {
 // 规划 / 检查报告 / 反应卡 / 随机事件共用的上下文收集口径：
 // 最近对话取 contextLayers 层，世界书检索只扫其中最近 scanDepth 层（0 = 不限）。
 // 以后改检索口径只动这里，各调用方不再各写一遍。
-export function collectPlanningContext() {
+// enabledIds：调用方自带书单时用它覆盖本对话的启用书单（反应卡的独立勾选用；缺省 = 本对话书单）
+export function collectPlanningContext({ enabledIds } = {}) {
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
-    const hits = scanLorebooks(scanText, { enabledIds: chatEnabledBookIds() });
+    const hits = scanLorebooks(scanText, { enabledIds: enabledIds ?? chatEnabledBookIds() });
     return { chatList, scanText, hits };
 }
 
