@@ -30,7 +30,7 @@ export function renderEventsTools(container) {
     }
     if (!lib.dimId) lib.dimId = settings.eventDimensions[0]?.id ?? '';
 
-    // 反应卡材料勾选：独立于向导第 1 步（plotPlannerReactionPicks，随对话记忆）。
+    // 反应卡材料勾选：独立于向导第 1 步（chatdata.js 的 reaction 块，随对话记忆）。
     // 世界书默认沿用本对话「世界书」页的书单（books = null），点任意一本即切为本批独立勾选
     const picks = reactionPicks();
     const chatBooks = chatEnabledBookIds() ?? settings.lorebooks.filter(b => b.enabled).map(b => String(b.id));

@@ -1,11 +1,13 @@
 // 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数 + 预设（全局固定要求）管理 + 生效中注入的管理
+// + 数据备份与搬家（一键导出全部 / 导入备份 / 聊天数据过户）
 // 配置直接放在主面板里，魔法棒 → 剧情规划器 → 设置，无需再去扩展面板
 import { settings, save, newId } from "../../settings.js";
 import { testConnection, fetchModels, searchWeb } from "../../api.js";
 import { updateInjection, removeInjection } from "../../injection.js";
 import { guidanceSystemPrompt } from "../../planner.js";
 import { activeStory } from "../../story.js";
-import { escapeHtml, clamp, fingerprint } from "../../utils.js";
+import { chatDataKey, resetChatDataCache } from "../../chatdata.js";
+import { escapeHtml, clamp, fingerprint, readFileAsText } from "../../utils.js";
 
 // 拉取过的模型列表缓存：页签每次激活都会重渲染，缓存避免切换后下拉列表丢失
 let modelIds = [];
@@ -130,7 +132,8 @@ export const settingsTab = {
                 <summary><i class="fa-solid fa-eye-slash"></i> 生效中的隐身注入（查看 / 提前撤下）</summary>
                 <div id="pp_set_injlist"></div>
             </details>
-        </div>`;
+        </div>
+        <div class="pp-section" id="pp_set_backup"></div>`;
 
         const bind = (id, get, set) => {
             const el = container.querySelector(id);
@@ -243,8 +246,100 @@ export const settingsTab = {
 
         renderPreset(container);
         renderInjList(container);
+        renderBackup(container);
     },
 };
+
+// ---------------------------------------------------------------------------
+// 数据备份与搬家：插件数据不进聊天文件（见 chatdata.js），这里是它的保险丝——
+// 一键导出全部（全局设置 + 所有聊天各自的数据）成 JSON 文件存到任意位置；
+// 导入恢复；过户把别的聊天的数据整个搬给当前聊天（新聊天继承旧聊天 / 开分支 /
+// 聊天改名后找回数据都靠它）
+// ---------------------------------------------------------------------------
+
+function renderBackup(container) {
+    const el = container.querySelector('#pp_set_backup');
+    if (!el) return;
+    el.innerHTML = `
+    <div class="pp-item-main"><b>数据备份与搬家</b></div>
+    <div class="pp-btn-row">
+        <div id="pp_set_export" class="menu_button" title="把插件的全部数据导出成一个 JSON 文件，存到你选的位置：全局设置（连接/预设/世界书/事件库/玩法/注入）+ 每个聊天各自的数据（记忆表格镜像、剧情档案、各类勾选、书单）。换电脑、重装酒馆前的救命备份">一键导出全部数据</div>
+        <label class="menu_button" for="pp_set_import_file" title="选一个之前导出的备份文件恢复：全局设置整份覆盖，各聊天的数据按聊天身份合并回来；导入后建议刷新一次页面">导入备份</label>
+        <input id="pp_set_import_file" type="file" accept=".json,application/json" hidden />
+    </div>
+    <div class="pp-btn-row">
+        <select id="pp_set_transfer_from" class="text_pole" title="聊天身份 = 角色头像｜聊天文件名。开分支、改聊天名、换新聊天文件都会被认成新聊天（数据不自动跟过去）——从列表里选旧身份，点旁边按钮把它的数据整个搬过来"></select>
+        <div id="pp_set_transfer" class="menu_button" title="把左边选中的聊天的全部插件数据（记忆表格镜像、剧情档案、勾选、书单）复制给当前聊天；当前聊天已有的数据会被覆盖。适合：旧聊天太卡换了新的、开分支、改名后找回数据">过户到当前聊天</div>
+    </div>`;
+
+    el.querySelector('#pp_set_export').addEventListener('click', () => {
+        const { chatData, ...global } = settings;
+        const payload = {
+            app: 'st-plot-planner-backup',
+            version: 1,
+            at: new Date().toISOString(),
+            global,
+            chats: chatData ?? {},
+        };
+        const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        const t = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        a.download = `plot-planner-backup-${t.getFullYear()}${pad(t.getMonth() + 1)}${pad(t.getDate())}-${pad(t.getHours())}${pad(t.getMinutes())}${pad(t.getSeconds())}.json`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+        toastr.success('已导出全部数据（全局设置 + 所有聊天的插件数据）');
+    });
+
+    el.querySelector('#pp_set_import_file').addEventListener('change', async function () {
+        const f = this.files?.[0];
+        this.value = '';
+        if (!f) return;
+        try {
+            const data = JSON.parse(await readFileAsText(f));
+            if (data?.app !== 'st-plot-planner-backup' || typeof data.global !== 'object') {
+                throw new Error('不是本插件导出的备份文件');
+            }
+            Object.assign(settings, data.global);
+            settings.chatData = { ...(settings.chatData ?? {}), ...(data.chats ?? {}) };
+            // 以刚导入的冷层为准：作废会话缓存与浏览器热层，后续读取回落到冷层
+            resetChatDataCache();
+            save();
+            rebuildTransferList(container);
+            toastr.success('备份已导入：全局设置与各聊天数据已恢复，建议刷新一次页面');
+        } catch (err) {
+            toastr.error(`导入失败：${String(err.message ?? err)}`);
+        }
+    });
+
+    el.querySelector('#pp_set_transfer').addEventListener('click', () => {
+        const from = el.querySelector('#pp_set_transfer_from').value;
+        const src = from ? settings.chatData?.[from] : null;
+        if (!from || !src) { toastr.warning('请先在左边选择要搬来的聊天'); return; }
+        settings.chatData ??= {};
+        settings.chatData[chatDataKey()] = JSON.parse(JSON.stringify(src));
+        resetChatDataCache();
+        save();
+        rebuildTransferList(container);
+        toastr.success(`已把「${from}」的数据过户到当前聊天（记忆表格/剧情档案/勾选/书单），建议刷新一次页面`);
+    });
+
+    rebuildTransferList(container);
+}
+
+function rebuildTransferList(container) {
+    const sel = container.querySelector('#pp_set_transfer_from');
+    if (!sel) return;
+    const current = chatDataKey();
+    const keys = Object.keys(settings.chatData ?? {})
+        .filter(k => k !== current && Object.keys(settings.chatData[k] ?? {}).length);
+    sel.innerHTML = keys.length
+        ? keys.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('')
+        : '<option value="">（没有其他聊天的数据）</option>';
+    sel.disabled = !keys.length;
+    container.querySelector('#pp_set_transfer')?.classList.toggle('disabled', !keys.length);
+}
 
 // ---------------------------------------------------------------------------
 // 生效中的隐身注入：各功能确认后创建，这里只做查看 / 停用 / 删除

@@ -9,6 +9,7 @@ import { worldbookTab } from "./tabs/tab-worldbook.js";
 import { memoryTab } from "./tabs/tab-memory.js";
 import { guidanceTab } from "./tabs/tab-guidance.js";
 import { settingsTab } from "./tabs/tab-settings.js";
+import { flushChatData } from "../chatdata.js";
 
 const TABS = [worldbookTab, memoryTab, guidanceTab, settingsTab];
 let activeId = TABS[0].id;
@@ -105,6 +106,7 @@ export function closeDrawer() {
     el.style.height = '';
     lastApplied = 0;
     $(el).removeClass('pp-open');
+    flushChatData();   // 关面板 = 一次使用结束：把这轮热层里的脏数据冲写进设置文件留底
 }
 
 export function activateTab(id) {

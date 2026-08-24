@@ -7,6 +7,7 @@ import { initWandMenu } from "./js/ui/wandMenu.js";
 import { replayScopedInjections, tickInjectionExpiries } from "./js/injection.js";
 import { scanAndApplyStorage } from "./js/store.js";
 import { syncMemory, mergeMirrorFromSource, persistMemory } from "./js/memoryTable.js";
+import { flushChatData } from "./js/chatdata.js";
 import { resetGuidance } from "./js/ui/tabs/tab-guidance.js";
 import { resetWorldbook } from "./js/ui/tabs/tab-worldbook.js";
 
@@ -21,6 +22,7 @@ function autoSyncMemory() {
             toastr.warning('剧情规划器：检测到记忆表格疑似被清空，已保留原表库备份，可在「记忆表格」页恢复');
         } else if (r.changed) {
             mergeMirrorFromSource();
+            flushChatData();   // 原表真变了才走到这（低频）：顺手把热层数据冲写进设置文件留底
         }
     } catch (e) {
         console.warn('[PlotPlanner] 记忆表格自动同步失败', e);
@@ -31,10 +33,12 @@ jQuery(() => {
     initDrawer();
     initWandMenu();
 
-    // 聊天切换：按 scope 重放/清理 M4 注入，重算 M5 储存条目，同步记忆表格镜像，
-    // 清掉剧情向导的进行中进度（剧情数据本身存 chatMetadata，随聊天自动切换），
+    // 聊天切换：先把上一轮热层里的脏数据冲写进设置文件，再按 scope 重放/清理 M4 注入，
+    // 重算 M5 储存条目，同步记忆表格镜像，清掉剧情向导的进行中进度
+    // （剧情数据本身按聊天身份存 chatdata，随聊天自动切换），
     // 世界书页开着时刷新——「启用」勾选按对话记忆，要显示新对话的书单
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        flushChatData();
         replayScopedInjections();
         scanAndApplyStorage();
         autoSyncMemory();

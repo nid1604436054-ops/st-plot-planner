@@ -46,6 +46,7 @@ const DEFAULTS = {
     },
     lorebooks: [],          // M1 世界书库
     lorebookTrash: [],      // 世界书回收站：删的书/条目先进这里，页面上可恢复或彻底删除
+    chatData: {},           // 每聊天数据的冷层留底（见 js/chatdata.js）：{ [聊天身份]: { memory/story/picks/reaction/books } }
     injections: [],         // M4 隐身注入项
     storageItems: [],       // M5 额外存储条目
     storageScanLayers: 20,  // M5 玩法触发词扫描窗口：触发词在最近几层对话里出现过才算命中；0 = 不限（扫全部对话）
@@ -77,6 +78,7 @@ function ensureDefaults() {
     store.guidance.inject ??= { depth: 4, role: 'system', expires: 'never', layers: 20 };
     store.storageScanLayers ??= 20;   // 老安装补玩法触发词扫描窗口（沿用此前写死的 20）
     store.lorebookTrash ??= [];       // 老安装补世界书回收站
+    store.chatData ??= {};            // 老安装补每聊天数据冷层
     // M3 三层化迁移：老安装补维度层与掷骰配置，已有条目挂上维度/轻重/关键词（不覆盖已写内容）
     if (!Array.isArray(store.eventDimensions) || !store.eventDimensions.length) {
         store.eventDimensions = JSON.parse(JSON.stringify(DEFAULTS.eventDimensions));

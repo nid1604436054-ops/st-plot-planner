@@ -3,9 +3,10 @@
 // 依赖方向约束：本模块不得 import planner.js / injection.js / reactions.js（reactions.js
 // 反向依赖本模块拿材料，而 planner.js → injection.js → reactions.js 已成链，再回指会成环）。
 // 「路人反应」小节因此不在这里，由 planner.js 在外层插入（见 planner.materialSections）。
-import { collectPlanningContext, formatChatLog, characterSummary, chatMeta, persistChat } from "./context.js";
+import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
 import { buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
+import { loadChatData, saveChatData } from "./chatdata.js";
 
 // 记忆表格小节标题：向模型说明这批行的用途与本次召回方式（规划查重 / 路人反应背景各有口径）
 export function memorySectionHeader(memoryTags, purpose = '已有剧情事件记录，用于检查新规划是否与之重复、并可作为推新发展方向的参考') {
@@ -26,15 +27,15 @@ export function gameplaySection(items, header) {
 // api.js（globalPresetBlock / withGlobalPresets，chatCompletion 出口自动附加），
 // 本模块与各调用方不再经手预设
 
-// 反应卡自己的材料勾选（chatMetadata.plotPlannerReactionPicks，按对话存聊天文件）——
-// 独立于向导第 1 步的勾选（plotPlannerPicks 管规划分析），两边互不影响：
+// 反应卡自己的材料勾选（chatdata.js 的 reaction 块，按对话存）——
+// 独立于向导第 1 步的勾选（picks 块管规划分析），两边互不影响：
 //   books     null = 沿用本对话「世界书」页的启用书单；数组 = 本批独立书单（String id）
 //   memSheets 勾选的记忆表 uid（空 = 不附带记忆；反应卡不做标签层，勾了全量）
 //   gpIds     null = 附带当前生效中的玩法条目；数组 = 本批勾选（空 = 不附带）
 //   plan      是否附带进行中剧情（默认 true）
 //   （历史数据里的 presetIds 字段已随预设全局化退役，读回时直接忽略）
 export function reactionPicks() {
-    const p = chatMeta().plotPlannerReactionPicks;
+    const p = loadChatData('reaction', () => ({ version: 1 }));
     return {
         books: Array.isArray(p?.books) ? p.books.map(String) : null,
         memSheets: Array.isArray(p?.memSheets) ? p.memSheets : [],
@@ -44,8 +45,7 @@ export function reactionPicks() {
 }
 
 export function saveReactionPicks(picks) {
-    chatMeta().plotPlannerReactionPicks = { version: 1, ...picks };
-    persistChat();
+    saveChatData('reaction', { version: 1, ...picks });
 }
 
 /**

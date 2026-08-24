@@ -18,7 +18,8 @@ import { renderEventsTools, resetEventsTools } from "./tab-events.js";
 import { renderStorageTools } from "./tab-storage.js";
 import { storageItemsInEffect } from "../../store.js";
 import { memoryState } from "../../memoryTable.js";
-import { getTavernContext, chatMeta, persistChat } from "../../context.js";
+import { getTavernContext } from "../../context.js";
+import { loadChatData, saveChatData } from "../../chatdata.js";
 import { escapeHtml, estimateTokens } from "../../utils.js";
 import { searchToolReady, withGlobalPresets } from "../../api.js";
 
@@ -44,14 +45,14 @@ let showActive = false, showHistory = false, viewHistId = null;
 let report = null;      // 最近一次检查报告（内存缓存，正式存档在 story 条目上）
 
 // ---------------------------------------------------------------------------
-// 第 1 步勾选按对话记忆（chatMetadata.plotPlannerPicks）：记忆表格的表范围/标签匹配/标签、
-// 游戏玩法的勾选都存聊天文件——同一对话做完一轮规划回来不用重勾，换对话各用各的。
+// 第 1 步勾选按对话记忆（chatdata.js 的 picks 块）：记忆表格的表范围/标签匹配/标签、
+// 游戏玩法的勾选都按对话各自记住——同一对话做完一轮规划回来不用重勾，换对话各用各的。
 // 预设不在这里：已全局化，「设置」页的启用开关是唯一开关。run 是工作副本，进第 1 步时
 // 从这里恢复；每次勾选变动立即写回（历史数据里的 presetIds 字段读回时忽略）
 // ---------------------------------------------------------------------------
 
 function applyPicks() {
-    const p = chatMeta().plotPlannerPicks;
+    const p = loadChatData('picks', null);
     if (!p) {
         run.memSheets = null;
         run.memMatch = false;
@@ -66,14 +67,13 @@ function applyPicks() {
 }
 
 function savePicks() {
-    chatMeta().plotPlannerPicks = {
+    saveChatData('picks', {
         version: 1,
         memSheets: run.memSheets,
         memMatch: run.memMatch,
         memTags: run.memTags,
         gpIds: run.gpIds,
-    };
-    persistChat();
+    });
 }
 
 // 分析/检查的流式显示：onDelta 累计文本 + 当前阶段。analyzeToken 让旧一轮在途的流式回调
@@ -111,7 +111,7 @@ export const guidanceTab = {
 };
 
 // 聊天切换时由 index.js 调用：清掉向导进度，避免 A 聊天的规划带到 B 聊天；
-// 剧情数据与第 1 步勾选本身存 chatMetadata，随聊天文件自动切换（勾选进第 1 步时恢复）
+// 剧情数据与第 1 步勾选本身存 chatdata.js（按聊天身份走），切换自动恢复各自的
 export function resetGuidance() {
     step = '';
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）

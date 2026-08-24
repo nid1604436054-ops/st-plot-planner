@@ -13,9 +13,9 @@ import { getTavernContext } from "./context.js";
 import { chatCompletion } from "./api.js";
 import { extractJson } from "./utils.js";
 import { newId, settings } from "./settings.js";
+import { loadChatData, saveChatData } from "./chatdata.js";
 
-const STATE_KEY = 'plotPlannerMemory';
-const MAX_BACKUPS = 20;
+const MAX_BACKUPS = 3;
 
 // ---------------------------------------------------------------------------
 // 指纹与工具
@@ -111,17 +111,17 @@ export function readMemorySheets() {
 }
 
 // ---------------------------------------------------------------------------
-// 状态：原表库 / 镜像 / 备份 / 墓碑 / 标签 / 召回配置，存在 chatMetadata，跟聊天走
+// 状态：原表库 / 镜像 / 备份 / 墓碑 / 标签 / 召回配置。
+// 经 chatdata.js 双层存储（localStorage 热层 + settings.json 冷层）按聊天走，
+// 不再写进聊天文件——见 chatdata.js 头注
 // ---------------------------------------------------------------------------
 
 export function memoryState() {
-    const ctx = getTavernContext();
-    const meta = (ctx.chatMetadata ??= {});
-    const state = (meta[STATE_KEY] ??= {
+    const state = loadChatData('memory', () => ({
         version: 2,
         source: { syncedAt: 0, sheets: [] },   // 原表库：自动同步的只读快照
         mirror: { sheets: [] },                 // 镜像：用户随意编辑的工作版
-        backups: [],                            // 原表库历史快照 [{ at, sheets }]
+        backups: [],                            // 原表库历史快照 [{ at, sheets }]，每个聊天各自留 3 份
         tombstones: {},                         // { [源指纹]: { at, sheetUid, sheetName, columns, cells } }
         tags: {},                               // { [rid]: ['战斗','背叛'] }
         sheetRecall: {},                        // { [sheetUid]: { enabled, columns:[原列下标] } }
@@ -131,10 +131,11 @@ export function memoryState() {
         seen: [],                               // 已看过的行 rid，用于「新」标
         tagStandard: '',                        // 旧「智能归类」的分类标准（功能已下线，数据保留）
         wipeAlert: null,
-    });
+    }));
     if (state.version !== 2) migrateV1(state);
     state.matchTags ??= [];
     state.matchSheets ??= [];
+    if (state.backups.length > MAX_BACKUPS) state.backups.length = MAX_BACKUPS;   // 备份上限 20→3 的一次性收紧
     return state;
 }
 
@@ -172,13 +173,10 @@ function migrateV1(state) {
     state.version = 2;
 }
 
-let saveTimer = null;
+// 写热层（localStorage，毫秒级）并标脏；冷层在低频时机由 flushChatData 冲写。
+// 高频调用零压力，这就是「点插件不再卡」的关键：完全不碰聊天文件
 export function persistMemory() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-        try { getTavernContext().saveChat?.(); }
-        catch (e) { console.warn('[PlotPlanner] 记忆表格状态保存失败', e); }
-    }, 800);
+    saveChatData('memory', memoryState());
 }
 
 // ---------------------------------------------------------------------------

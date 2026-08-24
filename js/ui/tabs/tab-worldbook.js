@@ -2,15 +2,16 @@
 // 条目级编辑（标题/关键词/内容/删除/添加）、检索测试、回收站（删除先进回收站可恢复）。
 // 条目状态用三段式选择器（停用/关键词/常驻），检索只靠关键词与常驻，不做标签
 // （标签的主场在记忆表格：召回的记忆行行尾自带标签，配合规划提示词防同类事件流程复刻）
-// 「启用」勾选按对话记忆（chatMetadata.plotPlannerBooks）：每个对话一套书单、
-// 随聊天文件保存，切换对话自动恢复各自的勾选，不用每次重勾
+// 「启用」勾选按对话记忆（chatdata.js 的 books 块）：每个对话一套书单、
+// 切换对话自动恢复各自的勾选，不用每次重勾
 import { settings, save } from "../../settings.js";
 import {
     importSillyTavernJson, createTextBook, addLorebook, removeLorebook,
     findEntry, addEntry, removeEntry, scanLorebooks, parseKeys,
     trashBook, trashEntry, restoreTrashItem, purgeTrashItem, clearTrash,
 } from "../../lorebook.js";
-import { chatMeta, persistChat, chatEnabledBookIds, collectRecentChat, formatChatLog } from "../../context.js";
+import { chatEnabledBookIds, collectRecentChat, formatChatLog } from "../../context.js";
+import { loadChatData, saveChatData } from "../../chatdata.js";
 import { escapeHtml, clamp, readFileAsText } from "../../utils.js";
 
 // 展开状态跨页签重渲染保持：展开条目列表的书 / 正在添加条目的书
@@ -25,22 +26,22 @@ function bookEnabledInChat(book) {
 
 // 勾选写进当前对话的书单（第一次勾选时先把各书现状快照成书单，再改这一本）
 function toggleBookInChat(id, on) {
-    const books = (chatMeta().plotPlannerBooks ??= {});
+    const books = loadChatData('books', () => ({}));
     if (!Array.isArray(books.enabledIds)) {
         books.enabledIds = settings.lorebooks.filter(b => b.enabled).map(b => String(b.id));
     }
     const ids = new Set(books.enabledIds.map(String));
     on ? ids.add(String(id)) : ids.delete(String(id));
     books.enabledIds = [...ids];
-    persistChat();
+    saveChatData('books', books);
 }
 
 // 新导入的书自动加进本对话书单：已绑定的对话里不在书单就是灭的，不自动加会像没导入成功
 function bindNewBook(book) {
-    const books = chatMeta().plotPlannerBooks;
+    const books = loadChatData('books', null);
     if (Array.isArray(books?.enabledIds) && book.enabled) {
         books.enabledIds.push(String(book.id));
-        persistChat();
+        saveChatData('books', books);
     }
 }
 

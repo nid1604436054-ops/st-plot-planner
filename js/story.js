@@ -1,19 +1,17 @@
-// 进行中剧情 + 历史归档：存 chatMetadata，跟聊天文件走（同记忆表格 plotPlannerMemory 的做法）
+// 进行中剧情 + 历史归档：经 chatdata.js 双层存储按聊天走（不再写聊天文件）
 // 条目结构：{ id, at, planText, summary, note, event:{mode,title,choice}, report, reportAt }
 // （历史条目里的 presetIds 字段已随预设全局化退役，读回时忽略）
-import { getTavernContext } from "./context.js";
 import { newId } from "./settings.js";
+import { loadChatData, saveChatData, flushChatData } from "./chatdata.js";
 
-const STATE_KEY = 'plotPlannerStory';
 const MAX_HISTORY = 20;
 
 export function storyState() {
-    const meta = (getTavernContext().chatMetadata ??= {});
-    const state = (meta[STATE_KEY] ??= {
+    const state = loadChatData('story', () => ({
         version: 1,
         activeId: null,   // 正在执行的剧情条目 id（指向 history 里一条）
         history: [],      // 每次确认采用的规划，最新在前
-    });
+    }));
     if (!Array.isArray(state.history)) state.history = [];
     return state;
 }
@@ -23,13 +21,10 @@ export function activeStory() {
     return s.history.find(h => h.id === s.activeId) ?? null;
 }
 
-let saveTimer = null;
+// 剧情操作都是低频的刻意动作（采用/完结/挂报告/删除）：写热层后立即冲写冷层留底
 export function persistStory() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-        try { getTavernContext().saveChat?.(); }
-        catch (e) { console.warn('[PlotPlanner] 剧情记录保存失败', e); }
-    }, 800);
+    saveChatData('story', storyState());
+    flushChatData();
 }
 
 // 确认采用一份新规划：置为进行中；原进行中的自动留在历史里
