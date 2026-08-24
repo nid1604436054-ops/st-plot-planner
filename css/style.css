@@ -597,12 +597,14 @@
     line-height: 1.55;
 }
 
-/* 第 4 步「剧情规划」编辑框：千字长文的阅读主场——配色完全交还主题原生
-   （text_pole：米黄底黑字，应用户口味，不再自定底色字色），只放大字号、放宽行高；
+/* 第 4 步「剧情规划」编辑框：千字长文的阅读主场——用户点名要固定浅底深字
+   （不跟主题走，任何主题下都是这一套），字号行高放大沿用；
    id 选择器稳赢 .text_pole/.textarea_compact/酒馆全局 textarea */
 .pp-drawer #pp_gd_plan {
     font-size: calc(var(--mainFontSize, 15px) * 1.1);
     line-height: 1.6;
+    background-color: #f4f1e9;
+    color: #211f1a;
 }
 
 /* 修改意见输入框：同步放开到主字号（textarea_compact 的 0.95 倍太局促） */
