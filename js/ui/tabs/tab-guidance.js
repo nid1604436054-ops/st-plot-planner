@@ -841,7 +841,7 @@ function renderResult(container, main) {
     </div>
     <div class="pp-section">
         <b title="可编辑；「确认采用」与「转为隐身注入」用的都是这份文本">剧情规划</b>
-        <textarea id="pp_gd_plan" class="text_pole textarea_compact" rows="10"></textarea>
+        <textarea id="pp_gd_plan" class="text_pole textarea_compact" rows="14"></textarea>
         <label class="pp-label">修改意见</label>
         <textarea id="pp_gd_revise_note" class="text_pole textarea_compact" rows="2" placeholder="填给模型的修改要求，点「打回重新生成」生效"></textarea>
         <label class="pp-label" title="默认沿用上次；「确认采用」的剧情注入也按这里的深度与角色注入（剧情注入永不过期，完结时自动撤下）">注入参数</label>

@@ -116,8 +116,8 @@
     background: rgba(0, 0, 0, 0.15);
 }
 
-.pp-label { font-size: 0.85em; opacity: 0.8; }
-.pp-muted { font-size: 0.85em; opacity: 0.6; overflow-wrap: anywhere; }
+.pp-label { font-size: 0.95em; opacity: 0.85; }
+.pp-muted { font-size: 0.9em; opacity: 0.7; overflow-wrap: anywhere; }
 
 .pp-btn-row {
     display: flex;
@@ -275,7 +275,7 @@
     border-left: 3px solid var(--SmartThemeBorderColor, #666);
     padding: 4px 8px;
     margin-top: 6px;
-    font-size: 0.92em;
+    font-size: 1em;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -510,7 +510,7 @@
     overflow-y: auto;
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 0.95em;
+    font-size: 1em;
     margin: 6px 0 0;
 }
 
@@ -575,23 +575,41 @@
     padding: 8px;
     border: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
     border-radius: 6px;
-    font-size: 12px;
+    font-size: calc(var(--mainFontSize, 15px) * 0.95);
+    line-height: 1.5;
     opacity: 0.85;
 }
 
 /* ---------- 剧情指导：分步向导 + 进行中剧情 ---------- */
 
-/* 进行中/历史剧情的全文展示框（含挂载的最近检查报告） */
+/* 进行中/历史剧情的全文展示框（含挂载的最近检查报告）：
+   跟主字号走（不再写死 12px）、放宽行高，千字长文不费眼 */
 .pp-gd-planview {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    max-height: 280px;
+    max-height: 340px;
     overflow-y: auto;
     margin-top: 4px;
     padding: 8px 10px;
     border: 1px dashed var(--SmartThemeBorderColor, #3a3a3a);
     border-radius: 6px;
-    font-size: 12px;
+    font-size: calc(var(--mainFontSize, 15px) * 1.02);
+    line-height: 1.55;
+}
+
+/* 第 4 步「剧情规划」编辑框：千字长文的阅读主场——固定深底浅字（不随主题翻车：
+   酒馆 textarea 的字色跟主题走，浅色主题下就是黑字叠半透明灰底）、大一号字、
+   放宽行高；id 选择器稳赢 .text_pole/.textarea_compact/酒馆全局 textarea */
+.pp-drawer #pp_gd_plan {
+    font-size: calc(var(--mainFontSize, 15px) * 1.1);
+    line-height: 1.6;
+    background: var(--black70a, rgba(0, 0, 0, 0.7));
+    color: #ececec;
+}
+
+/* 修改意见输入框：同步放开到主字号（textarea_compact 的 0.95 倍太局促） */
+.pp-drawer #pp_gd_revise_note {
+    font-size: var(--mainFontSize, 15px);
 }
 
 /* 第 4 步检查项行：左侧竖线 + 标题 + 内容 */
@@ -601,12 +619,12 @@
     gap: 2px;
     padding: 4px 8px;
     border-left: 3px solid var(--SmartThemeBorderColor, #666);
-    font-size: 0.92em;
+    font-size: 1em;
 }
 
 .pp-gd-check > b {
-    font-size: 0.9em;
-    opacity: 0.85;
+    font-size: 1.02em;
+    opacity: 0.9;
 }
 
 /* 检查报告卡：固定字段逐行排布 */
@@ -618,7 +636,7 @@
     padding: 8px 10px;
     border: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
     border-radius: 6px;
-    font-size: 0.92em;
+    font-size: 1em;
 }
 
 .pp-gd-rrow {
@@ -629,8 +647,8 @@
 
 .pp-gd-rk {
     font-weight: bold;
-    opacity: 0.85;
-    font-size: 0.9em;
+    opacity: 0.9;
+    font-size: 1em;
 }
 
 .pp-gd-rv { overflow-wrap: anywhere; }
