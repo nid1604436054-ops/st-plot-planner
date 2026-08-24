@@ -353,6 +353,11 @@
     flex-wrap: wrap;
 }
 
+/* 行状态徽标变体：新=绿 / 已改=黄 / 原表已更新=橙 / 原表已删=灰 */
+.pp-mem-badge.pp-mem-badge-edit { color: #e0c97f; }
+.pp-mem-badge.pp-mem-badge-src { color: #e0a06a; }
+.pp-mem-badge.pp-mem-badge-gone { color: #9a9a9a; }
+
 /* 清空事故警告横幅 */
 .pp-mem-wipe {
     border: 1px solid #b35b5b;
@@ -365,6 +370,15 @@
     font-size: 0.92em;
 }
 
+.pp-mem-badge {
+    display: inline-block;
+    font-size: 0.72em;
+    color: #7fd18a;
+    border: 1px solid #7fd18a;
+    border-radius: 8px;
+    padding: 0 6px;
+    margin: 1px;
+}
 
 .pp-mem-fresh { color: #7fd18a; }
 
@@ -420,7 +434,7 @@
     padding: 1px 4px;
 }
 
-.pp-grid .pp-grid-tagscell { max-width: 120px; }
+.pp-grid .pp-grid-statecell { max-width: 96px; }
 
 /* 操作列按钮：小号，编辑态时放 保存/取消/采纳 */
 .pp-grid .pp-grid-opscell .menu_button {
