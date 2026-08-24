@@ -343,16 +343,6 @@ function gridCellHtml(value) {
     return `<td class="pp-grid-cell" title="${escapeHtml(value)}">${escapeHtml(clamp(value, 80))}</td>`;
 }
 
-function badgesOf(state, row) {
-    const seen = new Set(state.seen);
-    const out = [];
-    if (!seen.has(row.rid)) out.push('<span class="pp-mem-badge" title="原表新增或被修改后重新出现的行">新</span>');
-    if (row.edited && row.srcUpdated) out.push('<span class="pp-mem-badge pp-mem-badge-src" title="你改过这行，原表那行也有了新版本；编辑时可「采纳原表版本」">原表已更新</span>');
-    else if (row.edited) out.push('<span class="pp-mem-badge pp-mem-badge-edit" title="你手动编辑过这行，合并时不会被原表覆盖">已改</span>');
-    if (row.srcGone) out.push('<span class="pp-mem-badge pp-mem-badge-gone" title="原表里这行已被删除，镜像里为你保留">原表已删</span>');
-    return out.join('');
-}
-
 // 镜像里的一行：编辑态时内容格就地变成输入框（不整页重渲染，保住滚动位置）
 function mirrorRowHtml(state, sheet, row, idx) {
     const editing = editingRow === row.rid;
@@ -365,7 +355,7 @@ function mirrorRowHtml(state, sheet, row, idx) {
         ? `
         <span class="menu_button" data-msave>保存</span>
         <span class="menu_button" data-mcancel>取消</span>
-        ${row.srcUpdated ? '<span class="menu_button" data-maccept>采纳原表</span>' : ''}`
+        ${row.srcUpdated ? '<span class="menu_button" data-maccept title="原表那行有了新版本，点此用原表内容覆盖你的编辑">采纳原表</span>' : ''}`
         : `
         <span class="menu_button fa-solid fa-pen" data-medit="${row.rid}" title="编辑这行内容"></span>
         <span class="menu_button fa-solid fa-trash" data-mdel="${row.rid}" title="删除：进「已删除内容」页；原表内容不变就不再出现，原表改动后重新出现"></span>`;
@@ -374,7 +364,6 @@ function mirrorRowHtml(state, sheet, row, idx) {
         <td class="pp-grid-idx">${idx}</td>
         ${cells}
         <td class="pp-grid-tagscell"><input type="text" class="text_pole pp-grid-tags" data-mtags="${row.rid}" value="${escapeHtml((state.tags[row.rid] ?? []).join(','))}" placeholder="标签" title="标签，逗号分隔" /></td>
-        <td class="pp-grid-statecell">${badgesOf(state, row)}</td>
         <td class="pp-grid-opscell">${ops}</td>
     </tr>`;
 }
@@ -386,7 +375,6 @@ function newRowEditorHtml(sheet) {
         <td class="pp-grid-idx">＋</td>
         ${sheet.columns.map((c, i) => `<td class="pp-grid-editcell"><textarea class="text_pole textarea_compact" rows="2" data-mcell="${i}" placeholder="${escapeHtml(c)}"></textarea></td>`).join('')}
         <td class="pp-grid-tagscell"></td>
-        <td class="pp-grid-statecell"></td>
         <td class="pp-grid-opscell">
             <span class="menu_button" data-msave data-mode="add">添加</span>
             <span class="menu_button" data-mcancel>取消</span>
@@ -427,10 +415,10 @@ function renderSheets(container) {
                 </div>
                 <div class="pp-mem-gridwrap">
                     <table class="pp-grid">
-                        ${gridHeadHtml(sheet.columns, '<th>标签</th><th>状态</th><th>操作</th>')}
+                        ${gridHeadHtml(sheet.columns, '<th>标签</th><th>操作</th>')}
                         <tbody>
                             ${sheet.rows.map((r, i) => mirrorRowHtml(state, sheet, r, i)).join('')
-        || `<tr><td colspan="${sheet.columns.length + 4}" class="pp-muted">没有行，点下方「添加行」</td></tr>`}
+        || `<tr><td colspan="${sheet.columns.length + 3}" class="pp-muted">没有行，点下方「添加行」</td></tr>`}
                         </tbody>
                     </table>
                 </div>
@@ -448,7 +436,7 @@ function collectEditorCells(scope) {
     return cells.map(v => v ?? '');
 }
 
-// 单行就地重渲染（编辑开/关、保存后刷徽标），不整页刷新避免滚动位置丢失；返回新的行元素
+// 单行就地重渲染（编辑开/关、保存后刷新行内容），不整页刷新避免滚动位置丢失；返回新的行元素
 function swapRow(container, uid, rid) {
     const s = memoryState();
     const sheet = s.mirror.sheets.find(x => x.uid === uid);
