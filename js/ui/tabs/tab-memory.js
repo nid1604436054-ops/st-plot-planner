@@ -180,9 +180,8 @@ function renderTagging(container) {
     const sheets = state.mirror.sheets;
 
     el.innerHTML = `
-    <b>打标签</b>
-    <span class="pp-muted">把镜像里还没标签的行分批交给「设置」页配置的 API，按下方的词表自动打标签（模型只能从词表里选，不能自拟）；之后「召回设置」和剧情指导第 1 步的「按标签匹配」用的就是这些标签。</span>
-    <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签">标签词表（一行一个，注释可选）</label>
+    <b title="把镜像里还没标签的行分批交给「设置」页配置的 API，按下方的词表自动打标签（模型只能从词表里选，不能自拟）；之后「召回设置」和剧情指导第 1 步的「按标签匹配」用的就是这些标签">打标签</b>
+    <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签；「防重复」＝事件类型标记——带这个标签的记忆行在每次剧情规划时自动附带，要求新剧情避免复刻同类事件的流程">标签词表（一行一个，注释可选）</label>
     <div id="pp_mem_vocab"></div>
     <div class="pp-btn-row">
         <span id="pp_mem_vocab_add" class="menu_button"><i class="fa-solid fa-plus"></i> 加一个标签</span>
@@ -203,6 +202,7 @@ function renderTagging(container) {
         <div class="pp-tag-vocab">
             <input type="text" class="text_pole textarea_compact" data-vname="${i}" placeholder="标签名（如：背叛）" value="${escapeHtml(v.name ?? '')}" />
             <input type="text" class="text_pole textarea_compact" data-vnote="${i}" placeholder="注释（可选：什么内容算这个标签）" value="${escapeHtml(v.note ?? '')}" />
+            <span class="menu_button pp-vocab-guard${v.repeat ? ' on' : ''}" data-vrep="${i}" title="防重复标签（事件类型标记）：带这个标签的记忆行在每次剧情规划时自动作为「已发生的同类事件」附带，要求新规划别复刻同类事件的流程——适合给约会、冲突这类容易流程雷同的事件类型">防重复</span>
             <span class="menu_button fa-solid fa-trash" data-vdel="${i}" title="删除该标签"></span>
         </div>`).join('') || '<span class="pp-muted">（词表为空，先加几个标签再打标）</span>';
         vocabBox.querySelectorAll('[data-vname]').forEach(inp => inp.addEventListener('input', () => {
@@ -212,6 +212,12 @@ function renderTagging(container) {
         vocabBox.querySelectorAll('[data-vnote]').forEach(inp => inp.addEventListener('input', () => {
             state.matchTags[Number(inp.dataset.vnote)].note = inp.value;
             persistMemory();
+        }));
+        vocabBox.querySelectorAll('[data-vrep]').forEach(btn => btn.addEventListener('click', () => {
+            const v = state.matchTags[Number(btn.dataset.vrep)];
+            v.repeat = !v.repeat;
+            persistMemory();
+            renderVocab();
         }));
         vocabBox.querySelectorAll('[data-vdel]').forEach(btn => btn.addEventListener('click', () => {
             state.matchTags.splice(Number(btn.dataset.vdel), 1);
@@ -275,8 +281,7 @@ function renderBackups(container) {
         </span>
     </div>`;
     el.innerHTML = `
-    <b>备份与恢复</b>
-    <span class="pp-muted">原表库每次内容变化归档上一版（最多 20 份）。恢复 = 把该版本里缺失的行插回原表，只增不改。</span>
+    <b title="原表库每次内容变化归档上一版（最多 20 份）。恢复 = 把该版本里缺失的行插回原表，只增不改">备份与恢复</b>
     ${item(`当前原表库（${fmtTime(state.source.syncedAt)} · ${rowsOf(state.source.sheets)} 行）`, state.source.sheets, 'live')}
     ${state.backups.map(b => item(`${fmtTime(b.at)} · ${rowsOf(b.sheets)} 行`, b.sheets, String(b.at))).join('')}`;
 
@@ -304,8 +309,7 @@ function renderRecall(container) {
     const el = container.querySelector('#pp_mem_recall');
     const tags = allTags(state);
     el.innerHTML = `
-    <b>召回设置</b>
-    <span class="pp-muted">剧情规划注入时使用镜像里未删除的行。不勾任何标签 = 全部行；勾选后只注入带这些标签的行。</span>
+    <b title="剧情规划注入时使用镜像里未删除的行。不勾任何标签 = 全部行；勾选后只注入带这些标签的行">召回设置</b>
     <div class="pp-mem-tagbar">
         ${tags.length ? tags.map(([t, n]) => `
         <label class="pp-mem-chip"><input type="checkbox" data-rtag="${escapeHtml(t)}" ${state.recallTags.includes(t) ? 'checked' : ''} /> ${escapeHtml(t)} (${n})</label>
@@ -629,8 +633,7 @@ function renderDeleted(container) {
             <span id="pp_mem_del_back" class="menu_button"><i class="fa-solid fa-arrow-left"></i> 返回镜像</span>
             <span id="pp_mem_del_purge" class="menu_button" title="删除记录里，原表已经不存在对应行的（整表没了或那行在原表里也删了）——这种记录永远不会再用到，点这里把它们永久清掉，不影响其他记录">清理无效记录</span>
         </div>
-        <b>已删除内容（${total} 条）</b>
-        <span class="pp-muted">在镜像里删掉的行都在这里，不参与召回，也不会堆在工作区。「恢复」= 放回镜像；「清除」= 永久删除记录。原表新增或修改的行不受影响，会照常出现在镜像里等你复审。</span>
+        <b title="在镜像里删掉的行都在这里，不参与召回，也不会堆在工作区。「恢复」= 放回镜像；「清除」= 永久删除记录。原表新增或修改的行不受影响，会照常出现在镜像里等你复审">已删除内容（${total} 条）</b>
     </div>
     ${listHtml || '<div class="pp-muted">还没有删除过任何内容</div>'}`;
 

@@ -96,7 +96,7 @@
     padding: 10px 12px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     background: rgba(0, 0, 0, 0.15);
 }
 
@@ -106,7 +106,7 @@
 .pp-btn-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 10px;
     align-items: center;
 }
 
@@ -230,12 +230,6 @@
     min-width: 120px;
 }
 
-/* 条目标签输入：比关键词窄一档，放不下随整行换行 */
-.pp-entry-tags {
-    flex: 1 1 150px;
-    min-width: 110px;
-}
-
 /* 条目内容编辑框：就地展开在该条目下方 */
 .pp-entry-edit {
     margin: 2px 0 8px 26px;
@@ -286,10 +280,12 @@
 .pp-option { margin-top: 6px; text-align: left; width: 100%; }
 
 /* 修复：酒馆 .menu_button 是 width:min-content，中文没有空格会被挤成单字竖排 */
+/* 应用户反馈「按键太挤、空间够、页面宁长勿挤」：抽屉内按钮统一放宽内边距，行距交给 pp-btn-row 的 gap */
 .pp-drawer .menu_button {
     width: auto;
     white-space: nowrap;
     flex: 0 0 auto;
+    padding: 6px 12px;
 }
 
 /* 事件走向选项：占满整行的卡片，走向与幕后提示上下分行显示
@@ -716,12 +712,27 @@
     flex: 0 0 auto;
 }
 
-/* 记忆表格「打标签」区：词表行（标签名 + 注释 + 删除），两个输入框均分宽度，行距放宽 */
+/* 记忆表格「打标签」区：词表行（标签名 + 注释 + 防重复开关 + 删除），两个输入框均分宽度 */
 .pp-tag-vocab {
     display: flex;
     gap: 8px;
     align-items: center;
-    margin: 2px 0;
+    margin: 4px 0;
+}
+
+/* 词表行的「防重复」开关（事件类型标记）：灭＝淡色、亮＝绿色描边。
+   padding 覆盖要带 .pp-drawer 与全量 menu_button 放宽规则同权重、靠后生效 */
+.pp-drawer .pp-vocab-guard {
+    font-size: 0.85em;
+    opacity: 0.55;
+    padding: 3px 10px;
+    flex: 0 0 auto;
+}
+
+.pp-drawer .pp-vocab-guard.on {
+    opacity: 1;
+    color: #7fd18a;
+    border: 1px solid #7fd18a;
 }
 
 .pp-tag-vocab input[type="text"] {

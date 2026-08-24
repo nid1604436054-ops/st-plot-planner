@@ -449,8 +449,9 @@ function renderCollect(container, main) {
         const memSeg = !recallSheets.length ? '记忆表格 不附带'
             : `记忆表格 ${st.memChars} 字（${sheetDesc} · ${memModeDesc()}）`;
         const gpDesc = gpItems.length ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
+        const guardDesc = st.guardRows ? ` · 防重复 ${st.guardRows} 行` : '';
         main.querySelector('#pp_gd_c1_stat').textContent =
-            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}`;
+            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${guardDesc}${gpDesc}`;
         const chipsEl = main.querySelector('#pp_gd_c1_chips');
         if (chipsEl) chipsEl.style.display = run.memMatch ? '' : 'none';
         const tipEl = main.querySelector('#pp_gd_c1_memtip');
@@ -532,8 +533,8 @@ function renderCollect(container, main) {
             const usrTok = estimateTokens(user);
             const totalChars = sections.reduce((n, s) => n + s.chars, 0);
             const secLine = sections.map(s => `${s.title} ${s.chars.toLocaleString()} 字`).join(' · ');
-            view.innerHTML = `<div class="pp-muted" style="margin-bottom:6px" title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考">材料共 ${totalChars.toLocaleString()} 字，粗估约 ${(sysTok + usrTok).toLocaleString()} tokens（实际分词通常更省：中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：分析前先轻量判断是否需要现实信息（只发剧情简报，纯虚构默认不检索），判需要才检索，纪要追加为附加小节，不在此预览内' : ''}</div>`
-                + `<div class="pp-muted" style="margin-bottom:6px" title="逐小节的精确字符数（非估算）。世界书一节只含关键词命中或勾了「常驻」的条目，不是全部词条——想让重要词条每次都带上，到「世界书」页勾「常驻」">材料构成：${escapeHtml(secLine)}</div>`
+        view.innerHTML = `<div class="pp-muted" style="margin-bottom:6px" title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考；实际分词通常更省（中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：分析前先轻量判断是否需要现实信息（只发剧情简报，纯虚构默认不检索），判需要才检索，纪要追加为附加小节，不在此预览内' : ''}">材料共 ${totalChars.toLocaleString()} 字 · 粗估约 ${(sysTok + usrTok).toLocaleString()} tokens</div>`
+            + `<div class="pp-muted" style="margin-bottom:6px" title="逐小节的精确字符数（非估算）。世界书一节只含关键词命中或状态为「常驻」的条目，不是全部词条——想让重要词条每次都带上，到「世界书」页把状态切到「常驻」">材料构成：${escapeHtml(secLine)}</div>`
                 + escapeHtml(`【系统提示词】\n${system}\n\n【用户消息】\n${user}`);
             view.style.display = '';
         } catch (err) {
@@ -564,7 +565,7 @@ function renderReady(container, main) {
     <div class="pp-section">
         <b>分析前确认</b>
         <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${(run.presetIds ?? []).length}/${presets.length} 启用 · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}</div>
-        <div class="pp-gd-stat pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（先轻量判断，需要才检索）' : ''}</div>
+        <div class="pp-gd-stat pp-muted" title="防重复行：词表里标了「防重复」的标签命中的记忆行，分析时自动附带并要求新剧情避免复刻同类事件流程（「记忆表格」页词表里开关）">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${stat.guardRows ? ` · 防重复 ${stat.guardRows} 行` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（先轻量判断，需要才检索）' : ''}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">确认，开始分析</span>
             <span id="pp_gd_ready_back" class="menu_button">返回</span>

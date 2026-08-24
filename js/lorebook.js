@@ -1,14 +1,13 @@
 // M1 世界书：导入（酒馆原生 JSON / 纯文本单条）+ 关键词检索
 // 检索结果只喂给插件自己的规划调用，不影响主对话的提示词（开发方案 §M1）
-// 条目支持「常驻」（对齐酒馆原生 constant）：勾了常驻不看关键词、每次检索恒带出；
-// 条目可带「标签」（世界书页条目旁编辑）：检索时可按标签先筛一遍再走关键词（反应卡在用）
+// 条目支持「常驻」（对齐酒馆原生 constant）：勾了常驻不看关键词、每次检索恒带出
 import { settings, newId } from "./settings.js";
 
 // 数据结构：
 // Lorebook  { id, name, enabled, source, entries: LoreEntry[] }
-// LoreEntry { uid, comment, keys[], tags[], content, disabled, constant }
-// 命中规则：所在书被启用（或在本对话的启用书单里），条目已启用、
-// （给了 tagFilter 时带其中任一标签），且
+// LoreEntry { uid, comment, keys[], content, disabled, constant }
+// （tags 字段在历史数据里可能还在，标签筛选功能已下线，不再参与任何检索）
+// 命中规则：所在书被启用（或在本对话的启用书单里），条目已启用，且
 // （勾了常驻，或任一关键词出现在扫描文本里，大小写不敏感）
 
 export function normalizeEntry(raw = {}, index = 0) {
@@ -16,7 +15,6 @@ export function normalizeEntry(raw = {}, index = 0) {
         uid: raw.uid ?? index,
         comment: raw.comment || `条目 ${index + 1}`,
         keys: (Array.isArray(raw.key) ? raw.key : (raw.keys ?? [])).filter(Boolean).map(String),
-        tags: (Array.isArray(raw.tags) ? raw.tags : []).filter(Boolean).map(String),
         content: String(raw.content ?? ''),
         disabled: Boolean(raw.disable ?? raw.disabled),
         constant: Boolean(raw.constant),
@@ -169,28 +167,21 @@ export function parseKeys(text) {
  * 检索：扫描 scanText，返回命中条目。
  * 命中规则：所在书被启用（enabledIds 传入时以该对话书单为准），条目启用、内容非空，
  * 且（勾了常驻，或任一关键词（子串，大小写不敏感）出现在扫描文本里）。
- * tagFilter：数组 = 先按标签筛——只有带其中任一标签的条目参与命中（常驻同样受筛），
- * 空数组 = 一条都带不出；缺省 = 不按标签筛。[] 与 undefined 语义不同，别混用默认值。
  * 常驻条目恒带出：排在最前、不占 maxEntries 名额（多条常驻不挤掉关键词命中），
  * 但仍与命中条目共用 maxChars 字符预算、优先消耗——常驻是每次都在的底料。
  * maxEntries / maxChars 为 0 表示不限制（命中多少带多少 / 不截断）。
  */
-export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds, tagFilter } = {}) {
+export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds } = {}) {
     const opts = settings.retrieval;
     const maxE = maxEntries ?? opts.maxEntries;
     const maxC = maxChars ?? opts.maxChars;
     const haystack = String(scanText ?? '').toLowerCase();
-    const tagSet = Array.isArray(tagFilter) ? new Set(tagFilter.map(t => String(t).trim()).filter(Boolean)) : null;
     const constants = [];
     const keyed = [];
 
     for (const book of enabledBooks(enabledIds)) {
         for (const entry of book.entries) {
             if (entry.disabled || !entry.content) continue;
-            if (tagSet) {
-                const tags = (Array.isArray(entry.tags) ? entry.tags : []).map(t => String(t).trim());
-                if (!tags.some(t => tagSet.has(t))) continue;
-            }
             if (entry.constant) {
                 constants.push({ book, entry });
                 continue;

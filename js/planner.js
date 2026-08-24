@@ -3,7 +3,7 @@
 import { chatCompletion, searchWeb, searchToolReady } from "./api.js";
 import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
 import { buildLoreContext } from "./lorebook.js";
-import { buildMemoryContext } from "./memoryTable.js";
+import { buildMemoryContext, buildRepeatGuardContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
 import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
@@ -267,10 +267,12 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
 // 本地检索统计（向导第 1 步展示用；纯本地，不调模型）
 // memoryTags 语义与 buildGuidanceMessages 相同：null 默认召回 / [] 全量 / 数组按标签 / false 不附带
 // memorySheets：null = 全部（开了召回的表）；数组 = 只算勾选的表（空数组 = 一张都不带）
+// guardRows：防重复标签命中的记忆行数（词表里标了「防重复」的标签→带这些标签的行，分析时自动附带）
 export function collectStats({ memoryTags = null, memorySheets = null } = {}) {
     const { chatList, hits } = collectPlanningContext();
     const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets }).length;
-    return { layers: chatList.length, hits: hits.length, memChars };
+    const guardRows = buildRepeatGuardContext().rows;
+    return { layers: chatList.length, hits: hits.length, memChars, guardRows };
 }
 
 // 记忆表格 / 游戏玩法小节的构建在 materials.js（与路人反应校准共用同一批口径）
@@ -301,11 +303,12 @@ function reactionSection(header) {
  *                                               「游戏玩法」小节发给模型，规划须在其约束内设计
  */
 // 供规划分析与随机事件生成共用的材料小节（两处口径完全一致）：
-// 角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要。
+// 角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 已发生的同类事件 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要。
 // 随机事件是向导第 2 步，材料必须与第 1 步预览同一批——各算一份必然对不上账。
+// 防重复小节在这里统一开（planner 这条链 = 规划 + 事件生成；反应卡走 materials.js 底层不带）
 // 小节本体在 materials.js（reactions.js 也直接用它出反应卡）；「路人反应」小节在这里插入
 export function materialSections(opts = {}) {
-    const { parts, hits } = baseMaterialSections(opts);
+    const { parts, hits } = baseMaterialSections({ repeatGuard: true, ...opts });
     const idx = parts.findIndex(p => p.startsWith('## 进行中剧情'));
     parts.splice(idx === -1 ? parts.length : idx, 0,
         ...reactionSection('## 路人反应（当前生效的反应卡，后续剧情安排与其余波、收束口径一致）'));

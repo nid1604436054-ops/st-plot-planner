@@ -31,8 +31,7 @@ export function renderEventsTools(container) {
     if (!lib.dimId) lib.dimId = settings.eventDimensions[0]?.id ?? '';
 
     // 反应卡材料勾选：独立于向导第 1 步（plotPlannerReactionPicks，随对话记忆）。
-    // 世界书默认沿用本对话「世界书」页的书单（books = null），点任意一本即切为本批独立勾选；
-    // 书单之下可再按条目标签筛一层（标签在「世界书」页条目旁编辑）
+    // 世界书默认沿用本对话「世界书」页的书单（books = null），点任意一本即切为本批独立勾选
     const picks = reactionPicks();
     const chatBooks = chatEnabledBookIds() ?? settings.lorebooks.filter(b => b.enabled).map(b => String(b.id));
     const bookOn = b => picks.books ? picks.books.includes(String(b.id)) : chatBooks.includes(String(b.id));
@@ -50,15 +49,11 @@ export function renderEventsTools(container) {
         <details class="pp-fold" id="pp_rx_mats">
             <summary title="生成反应卡用的材料在这里勾（存当前对话，换对话各用各的）；向导第 1 步的勾选只管规划分析，两边互不影响">材料勾选（只管反应卡，不跟向导第 1 步）</summary>
             <label class="pp-label" title="附带进行中剧情全文，反应口径与规划方向一致；当前没有进行中剧情时勾了也无内容"><input type="checkbox" id="pp_rx_plan" ${picks.plan ? 'checked' : ''}/> 附带进行中剧情</label>
-            <label class="pp-label" title="按勾选的书检索关键词命中与常驻条目，可再按条目标签筛一层（见下）。长线剧情里角色的身世、名声在世界书里，路人认不认得出来就靠它">世界书（按勾选的书检索；<span id="pp_rx_books_mode">${picks.books == null ? '默认＝本对话「世界书」页的书单，点任意一本切为独立勾选' : '本批独立勾选'}</span>）</label>
+            <label class="pp-label" title="按勾选的书检索关键词命中与常驻条目。长线剧情里角色的身世、名声在世界书里，路人认不认得出来就靠它">世界书（按勾选的书检索；<span id="pp_rx_books_mode">${picks.books == null ? '默认＝本对话「世界书」页的书单，点任意一本切为独立勾选' : '本批独立勾选'}</span>）</label>
             <div class="pp-gd-selp">
                 ${settings.lorebooks.map(b => `<label><input type="checkbox" data-rxbook="${escapeHtml(String(b.id))}" ${bookOn(b) ? 'checked' : ''}/> ${escapeHtml(b.name)}</label>`).join('')
                 || '<span class="pp-muted">还没有导入世界书</span>'}
             </div>
-            ${settings.lorebooks.length ? `
-            <label class="pp-label" title="标签在「世界书」页条目旁编辑（如：身世、名声、公开情报），全局共享；开了之后只带出勾选标签的条目——常驻条目同样受筛，书里无关的设定进不来"><input type="checkbox" id="pp_rx_lorematch" ${picks.loreMatch ? 'checked' : ''}/> 按标签筛选条目</label>
-            <div class="pp-gd-selp" id="pp_rx_loretags" ${picks.loreMatch ? '' : 'style="display:none"'}></div>
-            <span class="pp-muted" id="pp_rx_loretip"></span>` : ''}
             <label class="pp-label" title="勾选的表全量召回（不做标签过滤），全不勾＝不附带；长线剧情里角色的既往经历在这里">记忆表格（勾选的表全量；默认不附带）</label>
             <div class="pp-gd-selp">
                 ${recallSheets.map(s => `<label><input type="checkbox" data-rxsheet="${escapeHtml(s.uid)}" ${picks.memSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)} · ${s.rows.length} 行</label>`).join('')
@@ -83,7 +78,7 @@ export function renderEventsTools(container) {
     <div id="pp_ev_settings_wrap"></div>`;
 
     // 勾选即写回对话记忆。世界书/玩法/预设默认跟随各自的全局口径（本对话书单 / 生效中 / 启用中），
-    // 点过任意一本（条）即冻结为本批显式勾选，标签提示同步切换；想回到「全跟默认」的等价状态，
+    // 点过任意一本（条）即冻结为本批显式勾选；想回到「全跟默认」的等价状态，
     // 把默认勾着的那些全勾上即可
     const matsEl = container.querySelector('#pp_rx_mats');
     matsEl.querySelector('#pp_rx_plan').addEventListener('change', e => {
@@ -91,50 +86,12 @@ export function renderEventsTools(container) {
         saveReactionPicks(picks);
     });
 
-    // 世界书条目标签层：chips 只统计当前书单内启用条目的标签，换书范围就地重建
-    // （计数含常驻条目——它们也受筛；没有书时整个标签层不渲染，loreChipsEl 为空直接跳过）
-    const loreChipsEl = matsEl.querySelector('#pp_rx_loretags');
-    const refreshLoreTip = () => {
-        const tip = matsEl.querySelector('#pp_rx_loretip');
-        if (tip) tip.textContent = picks.loreMatch && !picks.loreTags.length ? '未勾选任何标签，世界书条目将一条都带不出' : '';
-    };
-    const renderLoreChips = () => {
-        if (!loreChipsEl) return;
-        const scope = new Set(picks.books ?? chatBooks);
-        const counts = new Map();
-        for (const b of settings.lorebooks) {
-            if (!scope.has(String(b.id))) continue;
-            for (const e of b.entries) {
-                if (e.disabled) continue;
-                for (const t of (Array.isArray(e.tags) ? e.tags : []))
-                    counts.set(String(t), (counts.get(String(t)) ?? 0) + 1);
-            }
-        }
-        const tags = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-        loreChipsEl.innerHTML = tags.length
-            ? tags.map(([t, n]) => `<label class="pp-mem-chip" title="只带带这个标签的条目"><input type="checkbox" data-rxloretag="${escapeHtml(t)}" ${picks.loreTags.includes(t) ? 'checked' : ''}/> ${escapeHtml(t)} (${n})</label>`).join('')
-            : '<span class="pp-muted">所选书里还没有带标签的条目：到「世界书」页在条目旁补标签</span>';
-        loreChipsEl.querySelectorAll('[data-rxloretag]').forEach(cb => cb.addEventListener('change', () => {
-            picks.loreTags = [...loreChipsEl.querySelectorAll('[data-rxloretag]:checked')].map(x => x.dataset.rxloretag);
-            saveReactionPicks(picks);
-            refreshLoreTip();
-        }));
-    };
-    matsEl.querySelector('#pp_rx_lorematch')?.addEventListener('change', e => {
-        picks.loreMatch = e.target.checked;
-        saveReactionPicks(picks);
-        if (loreChipsEl) loreChipsEl.style.display = picks.loreMatch ? '' : 'none';
-        refreshLoreTip();
-    });
-    renderLoreChips();
-    refreshLoreTip();
-
     const bindList = (attr, apply) => {
         matsEl.querySelectorAll(`[data-${attr}]`).forEach(cb => cb.addEventListener('change', () => {
             apply([...matsEl.querySelectorAll(`[data-${attr}]`)].filter(x => x.checked).map(x => x.dataset[attr]));
         }));
     };
-    bindList('rxbook', ids => { picks.books = ids.map(String); matsEl.querySelector('#pp_rx_books_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); renderLoreChips(); });
+    bindList('rxbook', ids => { picks.books = ids.map(String); matsEl.querySelector('#pp_rx_books_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
     bindList('rxsheet', ids => { picks.memSheets = ids; saveReactionPicks(picks); });
     bindList('rxgp', ids => { picks.gpIds = ids; matsEl.querySelector('#pp_rx_gps_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
     bindList('rxpre', ids => { picks.presetIds = ids; matsEl.querySelector('#pp_rx_presets_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
@@ -511,7 +468,6 @@ function renderLibPreview(container) {
         return;
     }
     box.innerHTML = `
-        <div class="pp-muted">草稿（勾选后导入，轻重可改，导入后再调概率/冷却）</div>
         ${lib.preview.map((e, i) => `
         <div class="pp-lib-row">
             <input type="checkbox" data-libck="${i}" ${e.checked ? 'checked' : ''} />
@@ -522,7 +478,7 @@ function renderLibPreview(container) {
             <span class="pp-lib-txt">${escapeHtml(e.name)}：${escapeHtml(e.promptHint)}</span>
         </div>`).join('')}
         <div class="pp-btn-row">
-            <span id="pp_ev_libimp" class="menu_button">导入勾选项</span>
+            <span id="pp_ev_libimp" class="menu_button" title="只导入勾选的条目；轻重这里改或导入后在条目上改，概率/冷却导入后再调">导入勾选项</span>
             <span id="pp_ev_libclr" class="menu_button">清空草稿</span>
         </div>`;
     box.querySelectorAll('[data-libck]').forEach(cb => cb.addEventListener('change', () => {

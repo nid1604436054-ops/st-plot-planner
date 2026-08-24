@@ -54,7 +54,6 @@ export async function generateReactionCard({ note = '' } = {}) {
         storageItems: (settings.storageItems ?? []).filter(i => gpIds.includes(i.id)),
         activePlan,
         enabledIds: picks.books ?? undefined, // null = 沿用本对话「世界书」页的启用书单
-        loreTags: picks.loreMatch ? picks.loreTags : null, // 按标签筛条目；开了没勾 = 一条不带
         headers: {
             memoryPurpose: '既往剧情事件记录，是路人与世界已有认知的背景',
             gameplay: '## 游戏玩法（当前生效的玩法规则，路人与世界的反应须遵守其约束）',
