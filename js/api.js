@@ -186,7 +186,7 @@ export async function fetchModels() {
 
 // ---------------------------------------------------------------------------
 // 联网搜索（Tavily）：独立于大模型通道，浏览器直连 api.tavily.com
-// 用途：设置页「测试搜索」直接调；剧情分析/检查报告时作为 web_search 工具交给模型自主调用
+// 用途：设置页「测试搜索」直接调；剧情分析/检查前由 planner.js 的判断调用给关键词、本地直查
 // ---------------------------------------------------------------------------
 
 /**
@@ -228,141 +228,8 @@ export async function searchWeb(query, { maxResults } = {}) {
     }));
 }
 
-// web_search 工具定义（OpenAI tools 协议）：只让模型在「需要现实世界真实信息」时用
-const WEB_SEARCH_TOOL = {
-    type: 'function',
-    function: {
-        name: 'web_search',
-        description: '联网搜索现实世界的信息。当任务涉及真实事实、时效性信息（近期事件、最新数据）或你不确定的现实细节时调用；纯虚构设定不要调用。',
-        parameters: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: '搜索关键词，简洁明确' },
-            },
-            required: ['query'],
-        },
-    },
-};
-
 /** 搜索工具是否已配置可用（设置页填了密钥即算） */
 export function searchToolReady() {
     return Boolean(settings.search?.apiKey);
 }
 
-/** 非流式请求内核：工具循环专用，不碰 chatCompletion 的流式逻辑 */
-async function postCompletion(body, signal) {
-    requireConfig();
-    const { baseUrl, apiKey } = settings.api;
-    const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
-    const doFetch = extra => fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-        },
-        body: JSON.stringify({ ...body, ...extra }),
-        signal,
-    });
-    let res;
-    try {
-        const extra = thinkingOffParams();
-        res = await doFetch(extra);
-        if (extra && (res.status === 400 || res.status === 422)) {
-            res = await doFetch({});   // 端点不认关闭思考的参数：去掉重发一次
-        }
-    } catch (err) {
-        if (err.name === 'AbortError') throw err;
-        throw new ApiError(`请求失败（检查地址是否正确、服务商是否支持浏览器跨域）：${err.message}`);
-    }
-    if (!res.ok) {
-        const raw = await res.text().catch(() => '');
-        throw new ApiError(`API 返回 ${res.status}：${raw.slice(0, 300)}`, { status: res.status, body: raw });
-    }
-    return res.json();
-}
-
-/**
- * 带工具的对话补全：模型可自主调用 web_search，工具结果回填后继续，直到给出最终文本。
- * 兼容性：逆向/中转端点可能不认 tools 参数——首轮遇到 4xx（鉴权与限流除外）自动去掉工具重发，
- * 退化为普通调用；模型全程不调工具时与普通调用等价。
- * @param {object} options 同 chatCompletion 的非流式部分，另加 maxToolRounds（缺省 3）
- * @returns {Promise<{content:string, searchLogs:string[]}>} 最终文本与模型实际搜索过的关键词
- */
-export async function chatCompletionWithTools({ messages, temperature, maxTokens, signal, maxToolRounds = 3 } = {}) {
-    const msgs = messages.map(m => ({ ...m }));
-    const searchLogs = [];
-    // 真实账单（服务商返回的 usage 累计，非估算）：工具每往返一轮就把全部材料原样重发一遍，
-    // 输入按请求次数累加——后台看到的总输入是 N 倍单次规模，这里记下来供界面汇报
-    const usage = { requests: 0, promptTokens: 0, completionTokens: 0 };
-    let withTools = true;
-
-    for (let round = 0; ; round++) {
-        let data;
-        try {
-            data = await postCompletion({
-                model: settings.api.model,
-                messages: msgs,
-                temperature: temperature ?? settings.api.temperature,
-                max_tokens: maxTokens ?? settings.api.maxTokens,
-                ...(withTools ? { tools: [WEB_SEARCH_TOOL] } : {}),
-            }, signal);
-        } catch (err) {
-            if (withTools && err instanceof ApiError && err.status >= 400 && err.status < 500
-                && err.status !== 401 && err.status !== 403 && err.status !== 429) {
-                withTools = false;   // 大概率是端点不认识 tools 参数：去掉工具重试一次
-                continue;
-            }
-            throw err;
-        }
-
-        usage.requests++;
-        usage.promptTokens += data?.usage?.prompt_tokens ?? 0;
-        usage.completionTokens += data?.usage?.completion_tokens ?? 0;
-
-        const message = data?.choices?.[0]?.message;
-        const calls = withTools && Array.isArray(message?.tool_calls) ? message.tool_calls : [];
-        if (!calls.length) {
-            try {
-                return {
-                    content: pickContent(message, { finishReason: data?.choices?.[0]?.finish_reason, completionTokens: data?.usage?.completion_tokens, promptTokens: data?.usage?.prompt_tokens }),
-                    searchLogs,
-                    usage,
-                };
-            } catch (err) {
-                err.usage = usage;        // 失败也把真实账单附上：上层 catch 里照常弹「实报输入/输出」
-                err.searchLogs = searchLogs;
-                throw err;
-            }
-        }
-        if (round >= maxToolRounds) {
-            // 到达轮次上限：撤掉工具并明确要求收尾，逼模型基于已有信息输出最终结果
-            msgs.push({ role: 'assistant', content: message.content ?? '', tool_calls: calls });
-            msgs.push({ role: 'user', content: '（系统提示：工具调用轮次已达上限，不要再调用工具，直接基于已有信息输出最终结果。）' });
-            withTools = false;
-            continue;
-        }
-
-        msgs.push({ role: 'assistant', content: message.content ?? '', tool_calls: calls });
-        for (const call of calls) {
-            let out;
-            if (call?.function?.name === 'web_search') {
-                let query = '';
-                try {
-                    query = String(JSON.parse(call.function?.arguments ?? '{}')?.query ?? '');
-                } catch {
-                    query = String(call.function?.arguments ?? '');   // 参数不是 JSON 就原样当关键词
-                }
-                try {
-                    const results = await searchWeb(query);
-                    searchLogs.push(query);
-                    out = JSON.stringify({ query, results });
-                } catch (err) {
-                    out = JSON.stringify({ query, error: String(err.message ?? err) });
-                }
-            } else {
-                out = JSON.stringify({ error: `未知工具：${call?.function?.name ?? ''}` });
-            }
-            msgs.push({ role: 'tool', tool_call_id: call?.id ?? '', name: call?.function?.name ?? '', content: out });
-        }
-    }
-}

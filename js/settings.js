@@ -18,7 +18,7 @@ const DEFAULTS = {
         provider: 'tavily',    // 联网搜索供应商（当前仅 Tavily，浏览器直连）
         apiKey: '',
         maxResults: 5,         // 单次搜索带回的结果条数
-        toolMode: true,        // 分析/检查前先由检索助手轻量联网查一轮（只发剧情简报），纪要附进材料
+        toolMode: true,        // 分析/检查前先轻量判断要不要联网（只发剧情简报），判需要才按关键词直查 Tavily
     },
     retrieval: {
         scanDepth: 20,      // 世界书检索扫描最近多少层消息；0 = 不限（扫全部对话）

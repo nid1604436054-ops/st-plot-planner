@@ -74,7 +74,7 @@ export const settingsTab = {
                     <input id="pp_set_smax" class="text_pole textarea_compact" type="number" min="1" max="10" />
                 </div>
                 <div>
-                    <label class="pp-label" title="勾上后：分析/检查前由检索助手先联网查一轮（只发剧情简报，按简报计费，不重发全部材料），纪要附进分析材料；取消则完全不联网，只保留下方的手动试搜">允许模型自主调用</label>
+                    <label class="pp-label" title="勾上后：分析/检查前先由一次轻量判断（只发剧情简报）决定要不要联网，纯虚构剧情默认不检索；判「需要」才按给出的关键词直查（搜索不耗模型 token），结果附进材料；取消则完全不联网，只保留下方的手动试搜">分析前联网判断</label>
                     <input id="pp_set_stool" type="checkbox" />
                 </div>
             </div>
