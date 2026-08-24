@@ -10,6 +10,7 @@ import { memoryTab } from "./tabs/tab-memory.js";
 import { guidanceTab } from "./tabs/tab-guidance.js";
 import { settingsTab } from "./tabs/tab-settings.js";
 import { flushChatData } from "../chatdata.js";
+import { settings, save } from "../settings.js";
 
 const TABS = [worldbookTab, memoryTab, guidanceTab, settingsTab];
 let activeId = TABS[0].id;
@@ -53,12 +54,44 @@ function fitHeight() {
     el.style.height = `${h}px`;
 }
 
+// ---------------------------------------------------------------------------
+// 面板内容等比缩放：只缩 #pp_tab_content（抽屉壳宽度不动，内容放大后页面变长、内部滚动；
+// 记忆表格默认 100% 尺寸不变）。zoom 之下 scrollHeight/clientHeight 等几何量均为视觉像素，
+// fitHeight 的各量纲保持一致，高度自适应公式不用改
+// ---------------------------------------------------------------------------
+const ZOOM_MIN = 80, ZOOM_MAX = 160;
+
+function zoomVal() {
+    const z = Number(settings.uiZoom);
+    return Number.isFinite(z) ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z))) : 100;
+}
+
+function applyZoom(v) {
+    settings.uiZoom = v;
+    contentEl().style.zoom = v / 100;
+    $('#pp_zoom_val').text(`${v}%`);
+}
+
+function changeZoom(by) {
+    applyZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoomVal() + by)));
+    save();
+    // 比例一换旧高度失去意义：清掉重新自适应（用户拖过的也重算）
+    drawerEl().style.height = '';
+    lastApplied = 0;
+    fitHeight();
+}
+
 export function initDrawer() {
     const html = `
     <div id="pp_drawer" class="pp-drawer">
         <div class="pp-drawer-head">
             <b>剧情规划器</b>
-            <div id="pp_close" class="menu_button fa-solid fa-xmark" title="关闭"></div>
+            <div class="pp-head-ops">
+                <span id="pp_zoom_out" class="menu_button fa-solid fa-minus" title="缩小面板内容（最低 80%）"></span>
+                <span id="pp_zoom_val" class="pp-zoom-val" title="当前缩放比例，点一下恢复 100%">100%</span>
+                <span id="pp_zoom_in" class="menu_button fa-solid fa-plus" title="放大面板内容：字与控件等比放大，页面相应变长（最高 160%）；记忆表格的表格放不下时，滚轮悬在表格上可左右翻看"></span>
+                <div id="pp_close" class="menu_button fa-solid fa-xmark" title="关闭"></div>
+            </div>
         </div>
         <div class="pp-tabs">
             ${TABS.map(t => `<div class="pp-tab" data-tab="${t.id}" title="${t.title}">${t.title}</div>`).join('')}
@@ -68,6 +101,10 @@ export function initDrawer() {
     $('body').append(html);
 
     $('#pp_close').on('click', closeDrawer);
+    applyZoom(zoomVal());   // 读回上次保存的缩放
+    $('#pp_zoom_in').on('click', () => changeZoom(10));
+    $('#pp_zoom_out').on('click', () => changeZoom(-10));
+    $('#pp_zoom_val').on('click', () => { if (zoomVal() !== 100) changeZoom(100 - zoomVal()); });
     $('.pp-tab').on('click', function () {
         activateTab(this.dataset.tab);
     });

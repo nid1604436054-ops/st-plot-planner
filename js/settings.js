@@ -47,6 +47,7 @@ const DEFAULTS = {
     lorebooks: [],          // M1 世界书库
     lorebookTrash: [],      // 世界书回收站：删的书/条目先进这里，页面上可恢复或彻底删除
     chatData: {},           // 每聊天数据的冷层留底（见 js/chatdata.js）：{ [聊天身份]: { memory/story/picks/reaction/books } }
+    uiZoom: 100,            // 面板内容缩放百分比（80–160，抽屉头部步进器调）：字与控件等比放大、页面相应变长
     injections: [],         // M4 隐身注入项
     storageItems: [],       // M5 额外存储条目
     storageScanLayers: 20,  // M5 玩法触发词扫描窗口：触发词在最近几层对话里出现过才算命中；0 = 不限（扫全部对话）

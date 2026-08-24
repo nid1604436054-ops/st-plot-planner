@@ -18,6 +18,23 @@ let showEmptySrc = false;          // 原表库是否显示空表
 let libOpen = false;               // 原表库整节是否展开（默认收起，只留摘要行）
 let editingRow = null;             // 正在编辑内容的行 rid（重渲染后保持编辑状态）
 let memView = 'main';              // 'main' 工作区 / 'deleted' 已删除内容页
+let tagQuery = '';                 // 标签检索词（只过滤镜像显示，不动数据；清空恢复全貌）
+
+// 表格横向滚动兜底：面板放大后表格超出容器时，滚轮悬在表格上直接左右翻；
+// 滚到头或表格没超出时不管，交还页面正常上下滚。挂一次（容器元素本身不随页签切换重建）
+let wheelBound = false;
+function bindGridWheel(container) {
+    if (wheelBound) return;
+    wheelBound = true;
+    container.addEventListener('wheel', e => {
+        const wrap = e.target.closest?.('.pp-mem-gridwrap');
+        if (!wrap || !e.deltaY || wrap.scrollWidth <= wrap.clientWidth + 1) return;
+        const max = wrap.scrollWidth - wrap.clientWidth;
+        if ((e.deltaY < 0 && wrap.scrollLeft <= 0) || (e.deltaY > 0 && wrap.scrollLeft >= max - 1)) return;
+        wrap.scrollLeft = Math.min(max, wrap.scrollLeft + e.deltaY);
+        e.preventDefault();
+    }, { passive: false });
+}
 
 function fmtTime(ts) {
     if (!ts) return '从未';
@@ -62,6 +79,10 @@ export const memoryTab = {
                 <b class="pp-group-title">镜像 · 剧情召回用（随意编辑，不影响原表）</b>
                 <span id="pp_mem_delbtn" class="menu_button" title="在镜像里删掉的行都在那一页：可恢复到镜像，或永久清除">已删除内容</span>
             </div>
+            <div class="pp-mem-search">
+                <input type="text" id="pp_mem_tagq" class="text_pole" placeholder="按标签检索镜像行" value="${escapeHtml(tagQuery)}" title="输入标签名（部分字样即可、不分大小写）：只列出打了含该字样标签的行，整表无命中先藏起来；清空恢复全貌" />
+                <span id="pp_mem_taghit" class="pp-muted"></span>
+            </div>
             <div id="pp_mem_list" class="pp-mem-list"></div>
             <div id="pp_mem_src" class="pp-mem-list"></div>
         </div>
@@ -94,6 +115,13 @@ export const memoryTab = {
             memView = 'deleted';
             renderAll(container);
         });
+        // 检索框在列表容器外，输入时只重渲染列表——焦点与光标不丢
+        const tagq = container.querySelector('#pp_mem_tagq');
+        tagq.addEventListener('input', () => {
+            tagQuery = tagq.value;
+            renderSheets(container);
+        });
+        bindGridWheel(container);
 
         // 打开页签即同步 + 合并一次（首次会建立原表库与镜像）
         const r = syncMemory();
@@ -401,13 +429,29 @@ function newRowEditorHtml(sheet) {
 function renderSheets(container) {
     const list = container.querySelector('#pp_mem_list');
     const state = memoryState();
+    const hitEl = container.querySelector('#pp_mem_taghit');
 
     if (!state.mirror.sheets.length) {
+        list.innerHTML = '';
+        if (hitEl) hitEl.textContent = '';
+        return;
+    }
+
+    // 标签检索：部分字样匹配（不分大小写），只留命中的行、整表无命中先藏起来；行号用原表序号，与全貌视图对得上
+    const q = tagQuery.trim().toLowerCase();
+    const rowHit = row => (state.tags[row.rid] ?? []).some(t => String(t).toLowerCase().includes(q));
+    const entries = state.mirror.sheets
+        .map(s => ({ sheet: s, pairs: s.rows.map((r, i) => [r, i]).filter(([r]) => !q || rowHit(r)) }))
+        .filter(x => !q || x.pairs.length);
+    if (hitEl) hitEl.textContent = q
+        ? (entries.length ? `命中 ${entries.reduce((n, x) => n + x.pairs.length, 0)} 行 · ${entries.length} 表` : '没有命中')
+        : '';
+    if (q && !entries.length) {
         list.innerHTML = '';
         return;
     }
 
-    list.innerHTML = state.mirror.sheets.map(sheet => {
+    list.innerHTML = entries.map(({ sheet, pairs }) => {
         const open = !closedSheets.has(sheet.uid);
         const recall = state.sheetRecall[sheet.uid] ?? {};
         const colOn = i => !Array.isArray(recall.columns) || recall.columns.includes(i);
@@ -429,8 +473,8 @@ function renderSheets(container) {
                     <table class="pp-grid">
                         ${gridHeadHtml(sheet.columns, '<th>标签</th><th>状态</th><th>操作</th>')}
                         <tbody>
-                            ${sheet.rows.map((r, i) => mirrorRowHtml(state, sheet, r, i)).join('')
-        || `<tr><td colspan="${sheet.columns.length + 4}" class="pp-muted">没有行，点下方「添加行」</td></tr>`}
+                            ${pairs.map(([r, i]) => mirrorRowHtml(state, sheet, r, i)).join('')
+        || (!q ? `<tr><td colspan="${sheet.columns.length + 4}" class="pp-muted">没有行，点下方「添加行」</td></tr>` : '')}
                         </tbody>
                     </table>
                 </div>
