@@ -68,7 +68,7 @@ export const REVIEW_SYSTEM_PROMPT = [
 
 // 用户预设（格式/文风等固定要求）拼装：显式传入列表时按传入的来（向导的本次勾选），
 // 缺省取设置里启用的；按列表顺序拼成带名小节。JSON 输出格式不能被预设改掉，否则解析会失败
-function assemblePresets(presets) {
+export function assemblePresets(presets) {
     const src = Array.isArray(presets) ? presets : (settings.guidance?.presets ?? []).filter(p => p.enabled);
     return src
         .filter(p => String(p?.content ?? '').trim())
