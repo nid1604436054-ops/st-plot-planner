@@ -835,10 +835,10 @@ function renderResult(container, main) {
         <textarea id="pp_gd_revise_note" class="text_pole textarea_compact" rows="2" placeholder="填给模型的修改要求，点「打回重新生成」生效"></textarea>
         <label class="pp-label" title="默认沿用上次；「确认采用」的剧情注入也按这里的深度与角色注入（剧情注入永不过期，完结时自动撤下）">注入参数</label>
         <div class="pp-gd-selp pp-gd-injrow">
-            <label>深度 <input type="number" id="pp_gd_inj_depth" min="0" max="100" step="1" title="0 = 紧贴上下文末尾；数字越大越靠前" /></label>
-            <label>角色 <select id="pp_gd_inj_role"><option value="system">system</option><option value="user">user</option></select></label>
-            <label>过期 <select id="pp_gd_inj_exp"><option value="never">永久</option><option value="layers">N 层后</option></select></label>
-            <label id="pp_gd_inj_layers_wrap" hidden>层数 <input type="number" id="pp_gd_inj_layers" min="1" step="1" /></label>
+            <label>深度 <input type="number" class="text_pole" id="pp_gd_inj_depth" min="0" max="100" step="1" title="0 = 紧贴上下文末尾；数字越大越靠前" /></label>
+            <label>角色 <select class="text_pole" id="pp_gd_inj_role"><option value="system">system</option><option value="user">user</option></select></label>
+            <label>过期 <select class="text_pole" id="pp_gd_inj_exp"><option value="never">永久</option><option value="layers">N 层后</option></select></label>
+            <label id="pp_gd_inj_layers_wrap" hidden>层数 <input type="number" class="text_pole" id="pp_gd_inj_layers" min="1" step="1" /></label>
         </div>
         <div class="pp-btn-row">
             <span id="pp_gd_adopt" class="menu_button">确认采用</span>
