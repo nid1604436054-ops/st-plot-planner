@@ -1,8 +1,10 @@
-// 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数 + 生效中注入的管理
+// 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数 + 规划预设（固定要求）管理 + 生效中注入的管理
 // 配置直接放在主面板里，魔法棒 → 剧情规划器 → 设置，无需再去扩展面板
-import { settings, save } from "../../settings.js";
+import { settings, save, newId } from "../../settings.js";
 import { testConnection, fetchModels, searchWeb } from "../../api.js";
 import { updateInjection, removeInjection } from "../../injection.js";
+import { guidanceSystemPrompt } from "../../planner.js";
+import { activeStory } from "../../story.js";
 import { escapeHtml, clamp, fingerprint } from "../../utils.js";
 
 // 拉取过的模型列表缓存：页签每次激活都会重渲染，缓存避免切换后下拉列表丢失
@@ -122,6 +124,7 @@ export const settingsTab = {
             <label class="pp-label" title="「剧情指导 / 随机事件」调用大模型时，附带最近几层对话当上下文（只影响本插件的规划请求，不影响主对话）；0 = 不限（有多少层带多少层）">规划时附带最近几层对话（0 = 不限）</label>
             <input id="pp_set_ctx" class="text_pole textarea_compact" type="number" min="0" max="200" />
         </div>
+        <div class="pp-section" id="pp_set_preset"></div>
         <div class="pp-section">
             <details class="pp-fold" id="pp_set_injfold">
                 <summary><i class="fa-solid fa-eye-slash"></i> 生效中的隐身注入（查看 / 提前撤下）</summary>
@@ -238,6 +241,7 @@ export const settingsTab = {
             }
         });
 
+        renderPreset(container);
         renderInjList(container);
     },
 };
@@ -288,4 +292,156 @@ function renderInjList(container) {
         removeInjection(el.dataset.injDel);
         renderInjList(container);
     }));
+}
+
+// ---------------------------------------------------------------------------
+// 规划预设（固定要求）：多条命名预设，默认折叠成一条摘要行（交互同记忆表格「原表库」）。
+// 勾选「启用」的预设按列表顺序拼接、随每次分析追加进系统提示词；所有改动即时保存。
+// 管理入口在本页（原挂剧情指导页底部，应用户要求挪到设置）；向导第 1 步的临时勾选
+// （按对话记忆）独立于这里的默认启用状态
+// ---------------------------------------------------------------------------
+
+let presetOpen = false;
+let editingPreset = null;   // 正在编辑内容的预设 id
+
+function findPreset(id) {
+    return (settings.guidance?.presets ?? []).find(p => p.id === id);
+}
+
+function presetSummary() {
+    const list = settings.guidance?.presets ?? [];
+    const n = list.filter(p => p.enabled).length;
+    return list.length ? `${list.length} 个预设 · ${n} 个启用` : '未设置';
+}
+
+function presetRow(p, i, total) {
+    const editing = editingPreset === p.id;
+    return `
+    <div class="pp-item" data-preset-item="${p.id}">
+        <div class="pp-item-main">
+            <label title="勾选后该预设默认随每次分析生效（向导第 1 步可对单次增删）"><input type="checkbox" data-pena="${p.id}" ${p.enabled ? 'checked' : ''} /> <b class="pp-gd-pname">${escapeHtml(p.name)}</b></label>
+        </div>
+        <div class="pp-item-ops">
+            <span class="pp-muted pp-gd-plen">${String(p.content ?? '').trim().length} 字</span>
+            <span class="menu_button fa-solid fa-arrow-up" data-pup="${p.id}" title="上移（越靠前越先拼进提示词）" ${i === 0 ? 'style="visibility:hidden"' : ''}></span>
+            <span class="menu_button fa-solid fa-arrow-down" data-pdown="${p.id}" title="下移" ${i === total - 1 ? 'style="visibility:hidden"' : ''}></span>
+            <span class="menu_button" data-pedit="${p.id}">${editing ? '收起' : '编辑'}</span>
+            <span class="menu_button fa-solid fa-trash" data-pdel="${p.id}" title="删除该预设"></span>
+        </div>
+    </div>
+    ${editing ? `
+    <div class="pp-gd-editor">
+        <label class="pp-label">预设名</label>
+        <input type="text" class="text_pole" data-pname="${p.id}" value="${escapeHtml(p.name)}" />
+        <label class="pp-label">内容（对规划的内容格式、文风、篇幅、侧重点的要求，改动即时保存）</label>
+        <textarea class="text_pole textarea_compact" rows="6" data-pcontent="${p.id}" placeholder="例：&#10;1. 用中文写，文风克制、不堆形容词；&#10;2. 每个阶段 content 至少两句话，写清幕后安排和动因；&#10;3. beats 按「铺垫→推进→转折→收束」组织。">${escapeHtml(p.content ?? '')}</textarea>
+    </div>` : ''}`;
+}
+
+function renderPreset(container) {
+    const el = container.querySelector('#pp_set_preset');
+    if (!el) return;
+    const presets = settings.guidance?.presets ?? [];
+    const head = `
+    <div class="pp-item" id="pp_set_preset_head" title="写一次、每次分析都默认生效的固定要求；勾选启用的按顺序拼进系统提示词，向导第 1 步可对单次增删">
+        <div class="pp-item-main"><b>规划预设（固定要求）</b></div>
+        <div class="pp-item-ops">
+            <span class="pp-muted">${presetSummary()}</span>
+            <span class="menu_button" id="pp_set_preset_toggle">${presetOpen ? '收起' : '编辑'} <i class="fa-solid fa-chevron-${presetOpen ? 'down' : 'right'}"></i></span>
+        </div>
+    </div>`;
+
+    if (!presetOpen) {
+        el.innerHTML = head;
+        el.querySelector('#pp_set_preset_toggle').addEventListener('click', () => {
+            presetOpen = true;
+            renderPreset(container);
+        });
+        return;
+    }
+
+    el.innerHTML = `
+    ${head}
+    <label class="pp-label">勾选「启用」的预设按列表顺序拼接（每条自带预设名做小标题），默认随每次分析追加进系统提示词，可多条同时启用做组合；向导第 1 步的勾选是对单次运行的增删（按对话记忆），不改动这里。输出须仍是 JSON 骨架（程序要解析），所以格式要求写在内容层面（写法、语言、详细程度），别要求改成纯正文。</label>
+    ${presets.map((p, i) => presetRow(p, i, presets.length)).join('') || '<div class="pp-muted">还没有预设，点下面「新建预设」加一条</div>'}
+    <div class="pp-btn-row">
+        <span id="pp_set_preset_new" class="menu_button"><i class="fa-solid fa-plus"></i> 新建预设</span>
+        <span id="pp_set_preset_builtin" class="menu_button" title="展开查看内置的系统指令和预设拼接的位置">查看内置指令</span>
+    </div>
+    <div id="pp_set_preset_view" class="pp-gd-builtin" style="display:none"></div>`;
+
+    const refreshHead = () => {
+        el.querySelector('#pp_set_preset_head .pp-muted').textContent = presetSummary();
+    };
+    const movePreset = (id, delta) => {
+        const list = settings.guidance.presets;
+        const i = list.findIndex(x => x.id === id);
+        const j = i + delta;
+        if (i < 0 || j < 0 || j >= list.length) return;
+        [list[i], list[j]] = [list[j], list[i]];
+        save();
+        renderPreset(container);
+    };
+
+    el.querySelector('#pp_set_preset_toggle').addEventListener('click', () => {
+        presetOpen = false;
+        editingPreset = null;
+        renderPreset(container);
+    });
+    el.querySelector('#pp_set_preset_new').addEventListener('click', () => {
+        const list = settings.guidance.presets;
+        const p = { id: newId('gd-'), name: `预设 ${list.length + 1}`, content: '', enabled: true };
+        list.push(p);
+        editingPreset = p.id;
+        save();
+        renderPreset(container);
+        el.querySelector(`[data-pcontent="${p.id}"]`)?.focus();
+    });
+    el.querySelectorAll('[data-pena]').forEach(cb => cb.addEventListener('change', () => {
+        const p = findPreset(cb.dataset.pena);
+        if (p) { p.enabled = cb.checked; save(); refreshHead(); }
+    }));
+    el.querySelectorAll('[data-pedit]').forEach(btn => btn.addEventListener('click', () => {
+        editingPreset = editingPreset === btn.dataset.pedit ? null : btn.dataset.pedit;
+        renderPreset(container);
+    }));
+    el.querySelectorAll('[data-pdel]').forEach(btn => btn.addEventListener('click', () => {
+        const list = settings.guidance.presets;
+        const idx = list.findIndex(x => x.id === btn.dataset.pdel);
+        if (idx >= 0) {
+            const [removed] = list.splice(idx, 1);
+            save();
+            toastr.success(`已删除预设「${removed.name}」`);
+        }
+        if (editingPreset === btn.dataset.pdel) editingPreset = null;
+        renderPreset(container);
+    }));
+    el.querySelectorAll('[data-pup]').forEach(btn => btn.addEventListener('click', () => movePreset(btn.dataset.pup, -1)));
+    el.querySelectorAll('[data-pdown]').forEach(btn => btn.addEventListener('click', () => movePreset(btn.dataset.pdown, 1)));
+    // 名字/内容编辑即时保存，只更新行内文字，不整块重渲染（避免打断输入）
+    el.querySelectorAll('[data-pname]').forEach(inp => inp.addEventListener('input', () => {
+        const p = findPreset(inp.dataset.pname);
+        if (!p) return;
+        p.name = inp.value;
+        save();
+        const row = el.querySelector(`[data-preset-item="${p.id}"]`);
+        row.querySelector('.pp-gd-pname').textContent = p.name || '（未命名）';
+    }));
+    el.querySelectorAll('[data-pcontent]').forEach(ta => ta.addEventListener('input', () => {
+        const p = findPreset(ta.dataset.pcontent);
+        if (!p) return;
+        p.content = ta.value;
+        save();
+        el.querySelector(`[data-preset-item="${p.id}"] .pp-gd-plen`).textContent = `${ta.value.trim().length} 字`;
+    }));
+    el.querySelector('#pp_set_preset_builtin').addEventListener('click', () => {
+        const view = el.querySelector('#pp_set_preset_view');
+        const show = view.style.display === 'none';
+        view.style.display = show ? '' : 'none';
+        if (show) {
+            const hasActive = Boolean((activeStory()?.planText ?? '').trim());
+            view.textContent = `${guidanceSystemPrompt(hasActive)}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n（勾选启用的预设按顺序追加在这里，每条带「### 预设名」小标题，随每次分析一起发给模型）`
+                + `\n（上面是「${hasActive ? '有' : '无'}进行中剧情」时的版本：progress 进度项只在该版本出现，第 4 步的「剧情进度」行同理）`;
+        }
+    });
 }
