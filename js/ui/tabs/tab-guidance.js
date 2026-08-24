@@ -5,6 +5,9 @@
 // → ② 随机事件闸口（可跳过）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
 // 确认采用的规划存为「进行中剧情」（story.js，跟聊天文件走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
 // 跳过随机事件的路径会先停在「分析前确认」页，点确认才真正调模型。
+// 向导进度留底 + 自由跳转（调试排版用）：进行中的向导状态实时快照存 chatdata 的 wizard 块
+// （按聊天身份走），刷新页面重开本页自动回到离开的那一步——已生成未处理的规划停在第 4 步等操作；
+// 页首常驻 ①②③④ 跳转条随时互跳（已填内容与生成结果保留），跳进没有生成结果的第 4 步可直接往规划框填字看排版。
 // 另有「检查当前剧情」：对照进行中剧情出执行报告（完成度/推进/文风/OOC/其他/建议）
 // 掷骰入口只有向导第 2 步；页面下部工具区（tab-events.js）只放路人反应与事件库配置；
 // 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列，生效条目由第 1 步勾选随分析发送，
@@ -45,6 +48,108 @@ let showActive = false, showHistory = false, viewHistId = null;
 let report = null;      // 最近一次检查报告（内存缓存，正式存档在 story 条目上）
 
 // ---------------------------------------------------------------------------
+// 向导进度快照（chatdata 的 wizard 块，按聊天身份走）：刷新页面后从离开的那一步继续，
+// 已生成未处理的规划停在第 4 步等操作。每次重渲染与输入改动都落一次快照（数据量 KB 级，
+// 只写 localStorage 热层，不碰聊天文件）；确认采用 / 取消向导时清空。检查报告流（reviewing/
+// report）不是向导状态，persistWizard 对非向导步骤直接跳过——第 4 步还没处理的生成结果
+// 不会被一次检查报告冲掉。research 持有 Promise、busy 是进行中标志，都不入快照：
+// 恢复后进「分析前确认」页会按需重新预跑。
+// ---------------------------------------------------------------------------
+
+const WIZARD_STEPS = ['collect', 'event', 'ready', 'running', 'result'];
+
+function persistWizard() {
+    if (!WIZARD_STEPS.includes(step)) return;
+    saveChatData('wizard', {
+        version: 1,
+        step,
+        run: { ...run, research: undefined },
+        ev: { ...ev, busy: undefined },
+    });
+}
+
+function clearWizard() {
+    saveChatData('wizard', null);
+}
+
+// 恢复入口：向导空闲（刚刷新 / 刚切聊天重置完）且本聊天存有快照时，把状态装回去。
+// 分析在途（running）碰上刷新没法续传，回「分析前确认」重新发起
+let restoring = false;   // 恢复渲染期间不触发联网判断预跑——刷新恢复不该无声花一次轻量调用
+
+function restoreWizard(container) {
+    if (step) return;   // 向导进行中：内存是权威，不用旧快照覆盖
+    const snap = loadChatData('wizard', null);
+    if (!snap || snap.version !== 1) return;
+    const r = snap.run ?? {}, e = snap.ev ?? {};
+    Object.assign(run, {
+        note: r.note ?? '',
+        gpIds: Array.isArray(r.gpIds) ? r.gpIds : null,
+        event: r.event ?? null,
+        eventText: r.eventText ?? '',
+        result: r.result ?? null,
+        raw: r.raw ?? '',
+        hits: r.hits ?? 0,
+        planText: r.planText ?? '',
+        reviseNote: r.reviseNote ?? '',
+        hadActive: Boolean(r.hadActive),
+        memSheets: Array.isArray(r.memSheets) ? r.memSheets : null,
+        memMatch: Boolean(r.memMatch),
+        memTags: Array.isArray(r.memTags) ? r.memTags : [],
+        readyFrom: r.readyFrom ?? 'event',
+        research: null,
+    });
+    Object.assign(ev, {
+        mode: e.mode ?? null,
+        event: e.event ?? null,
+        choiceIdx: typeof e.choiceIdx === 'number' ? e.choiceIdx : null,
+        opinion: e.opinion ?? '',
+        useLibrary: e.useLibrary !== false,
+        wantPreview: Boolean(e.wantPreview),
+        injectLayers: e.injectLayers,
+        busy: false,
+    });
+    const target = snap.step === 'running' ? 'ready' : snap.step;
+    if (!WIZARD_STEPS.includes(target)) return;
+    step = target;
+    restoring = true;
+    renderMain(container);
+    restoring = false;
+    toastr.info('已恢复上次的向导进度');
+}
+
+// ---------------------------------------------------------------------------
+// 步骤跳转条：向导进行中页首常驻，①②③④随时互跳（已填内容与生成结果保留）。
+// 调试排版用——不跑流程也能进任意一步填字段看格式；正常流程照旧走各步自己的按钮
+// ---------------------------------------------------------------------------
+
+function stepNavHtml() {
+    const cur = step === 'ready' || step === 'running' ? 'ready' : step;
+    const items = [
+        ['collect', '① 收集', '第 1 步 · 收集确认：材料与勾选'],
+        ['event', '② 事件', '第 2 步 · 随机事件闸口'],
+        ['ready', '③ 分析', '第 3 步 · 分析前确认：进去后点「确认，开始分析」才调模型'],
+        ['result', '④ 二检', '第 4 步 · 人工二检：检查结果与规划文本；没有生成结果时进去是空白二检页，可直接往规划框里填字试排版'],
+    ];
+    return `<div class="pp-gd-stepnav">${items.map(([id, label, tip]) =>
+        `<span class="menu_button${cur === id ? ' pp-gd-navcur' : ''}" data-goto="${id}" title="${tip}。四步随时互跳，已填内容与生成结果保留，刷新页面后也从这一步继续">${label}</span>`).join('')}</div>`;
+}
+
+function gotoStep(container, target) {
+    if (target === step || !WIZARD_STEPS.includes(target)) return;
+    if (target === 'collect') return startCollect(container);   // 与正常入口同一套：勾选从对话记忆恢复、玩法补默认
+    if (target === 'ready') {
+        if (analyzeBusy) {   // 分析还在跑：点 ③ 回到的是实时输出页，不给再来一张确认页（防重复发起白花调用）
+            step = 'running';
+            renderMain(container);
+            return;
+        }
+        run.readyFrom = step === 'collect' ? 'collect' : 'event';   // 「返回」按钮落回合理位置
+    }
+    step = target;
+    renderMain(container);
+}
+
+// ---------------------------------------------------------------------------
 // 第 1 步勾选按对话记忆（chatdata.js 的 picks 块）：记忆表格的表范围/标签匹配/标签、
 // 游戏玩法的勾选都按对话各自记住——同一对话做完一轮规划回来不用重勾，换对话各用各的。
 // 预设不在这里：已全局化，「设置」页的启用开关是唯一开关。run 是工作副本，进第 1 步时
@@ -79,6 +184,8 @@ function savePicks() {
 // 分析/检查的流式显示：onDelta 累计文本 + 当前阶段。analyzeToken 让旧一轮在途的流式回调
 // 与结果不写进切换后的新聊天（resetGuidance 时递增作废）
 let analyzeToken = 0;
+// 一次分析在途：跳转条让人能离开「分析中」页面，这里防并发重入（期间任何入口再点都提示等待）
+let analyzeBusy = false;
 let streamText = '';
 let streamStage = '';
 
@@ -104,6 +211,7 @@ export const guidanceTab = {
         <div id="pp_gd_events"></div>`;
         renderStoryBar(container);
         renderMain(container);
+        restoreWizard(container);   // 刚刷新 / 刚切聊天：本聊天存有向导快照就回到离开的那一步
         renderEventsTools(container.querySelector('#pp_gd_events'));
         // 挂进事件工具区的折叠区容器：三个根折叠区同容器，边距合并、间距一致
         renderStorageTools(container.querySelector('#pp_ev_settings_wrap'));
@@ -111,7 +219,8 @@ export const guidanceTab = {
 };
 
 // 聊天切换时由 index.js 调用：清掉向导进度，避免 A 聊天的规划带到 B 聊天；
-// 剧情数据与第 1 步勾选本身存 chatdata.js（按聊天身份走），切换自动恢复各自的
+// 剧情数据、第 1 步勾选与向导快照本身存 chatdata.js（按聊天身份走），下面重新 render 时
+// restoreWizard 会自动恢复新聊天自己的快照——切回来，没处理完的向导还在
 export function resetGuidance() {
     step = '';
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
@@ -278,7 +387,16 @@ function syncStoryInjection(planText, summary) {
 
 function renderMain(container) {
     const main = container.querySelector('#pp_gd_main');
+    persistWizard();   // 重渲染即落快照：所有步骤切换都在这里过一遍（向导空闲 / 检查报告流不动快照）
+    renderStepPage(container, main);
+    // 步骤跳转条：向导进行中常驻；分析中也能跳走，结果落地后不抢页面、只提示到第 4 步看
+    if (WIZARD_STEPS.includes(step)) {
+        main.insertAdjacentHTML('afterbegin', stepNavHtml());
+        main.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click', () => gotoStep(container, b.dataset.goto)));
+    }
+}
 
+function renderStepPage(container, main) {
     if (step === 'collect') return renderCollect(container, main);
     if (step === 'event') return renderEvent(container, main);
     if (step === 'ready') return renderReady(container, main);
@@ -466,6 +584,7 @@ function renderCollect(container, main) {
         chipsBox.querySelectorAll('[data-mtag]').forEach(cb => cb.addEventListener('change', () => {
             run.memTags = [...chipsBox.querySelectorAll('[data-mtag]:checked')].map(x => x.dataset.mtag);
             savePicks();
+            persistWizard();
             refreshMem();
         }));
     };
@@ -475,6 +594,7 @@ function renderCollect(container, main) {
     main.querySelectorAll('#pp_gd_c1_sheets [data-msheet]').forEach(cb => cb.addEventListener('change', () => {
         run.memSheets = [...main.querySelectorAll('#pp_gd_c1_sheets [data-msheet]:checked')].map(x => x.dataset.msheet);
         savePicks();
+        persistWizard();
         renderChips();
         refreshMem();
     }));
@@ -483,17 +603,19 @@ function renderCollect(container, main) {
 
     const noteEl = main.querySelector('#pp_gd_note');
     noteEl.value = run.note;
-    noteEl.addEventListener('input', () => { run.note = noteEl.value; });
+    noteEl.addEventListener('input', () => { run.note = noteEl.value; persistWizard(); });
 
     main.querySelector('#pp_gd_c1_memmatch')?.addEventListener('change', e => {
         run.memMatch = e.target.checked;
         savePicks();
+        persistWizard();
         refreshMem();
     });
 
     main.querySelectorAll('[data-c1g]').forEach(cb => cb.addEventListener('change', () => {
         run.gpIds = [...main.querySelectorAll('[data-c1g]:checked')].map(x => x.dataset.c1g);
         savePicks();
+        persistWizard();
         refreshMem();
     }));
 
@@ -537,7 +659,11 @@ function renderCollect(container, main) {
         run.eventText = '';
         goReady(container, 'collect');
     });
-    main.querySelector('#pp_gd_c1_cancel').addEventListener('click', () => { step = ''; renderMain(container); });
+    main.querySelector('#pp_gd_c1_cancel').addEventListener('click', () => {
+        step = '';
+        clearWizard();   // 主动退出：快照一并清空，刷新不再回到向导
+        renderMain(container);
+    });
 }
 
 // 分析前确认：材料清单一目了然，点确认才真正调模型
@@ -561,8 +687,10 @@ function renderReady(container, main) {
         </div>
     </div>`;
     // 联网判断预跑：进这一页时材料与事件已定型，趁用户核对的几秒把判断跑完；
-    // 分析时指纹对不上（这之后输入又变了）会自动作废重判
-    run.research = searchToolActive()
+    // 分析时指纹对不上（这之后输入又变了）会自动作废重判。
+    // 刷新恢复进本页（restoring）不预跑——那不是用户动作，不该无声花一次调用；
+    // 点「确认，开始分析」时 prefetch 为空会照常内联判断，不漏
+    run.research = searchToolActive() && !restoring
         ? startResearchPrefetch(guidanceResearchInputs({
             userNote: run.note,
             eventText: run.eventText,
@@ -603,9 +731,9 @@ function renderEvent(container, main) {
 
     const manual = main.querySelector('#pp_gd_ev_manual');
     manual.value = ev.opinion;
-    manual.addEventListener('input', () => { ev.opinion = manual.value; });
-    main.querySelector('#pp_gd_ev_lib').addEventListener('change', e => { ev.useLibrary = e.target.checked; });
-    main.querySelector('#pp_gd_ev_prev').addEventListener('change', e => { ev.wantPreview = e.target.checked; });
+    manual.addEventListener('input', () => { ev.opinion = manual.value; persistWizard(); });
+    main.querySelector('#pp_gd_ev_lib').addEventListener('change', e => { ev.useLibrary = e.target.checked; persistWizard(); });
+    main.querySelector('#pp_gd_ev_prev').addEventListener('change', e => { ev.wantPreview = e.target.checked; persistWizard(); });
 
     const out = main.querySelector('#pp_gd_ev_out');
     const status = main.querySelector('#pp_gd_status');
@@ -723,17 +851,19 @@ function renderEvCard(out) {
     out.querySelectorAll('[data-evopt]').forEach(el => el.addEventListener('click', () => {
         const i = Number(el.dataset.evopt);
         ev.choiceIdx = ev.choiceIdx === i ? null : i;
+        persistWizard();
         renderEvCard(out);
     }));
     const layersEl = out.querySelector('#pp_gd_ev_layers');
     // 点选走向会整卡重渲染，input 事件实时回存，重渲染后数值不丢
     layersEl.addEventListener('input', () => {
         const v = Number(layersEl.value);
-        if (Number.isFinite(v)) ev.injectLayers = v;
+        if (Number.isFinite(v)) { ev.injectLayers = v; persistWizard(); }
     });
     layersEl.addEventListener('change', () => {
         const v = clampInjectLayers(Number(layersEl.value));
         ev.injectLayers = v;
+        persistWizard();
         layersEl.value = String(v);
     });
     out.querySelector('#pp_gd_ev_inject').addEventListener('click', () => {
@@ -774,7 +904,12 @@ function historySummaries() {
 }
 
 async function startAnalyze(container, { revise = false } = {}) {
+    if (analyzeBusy) {
+        toastr.warning('上一轮分析还在进行中，等它完成（可先去别的步骤看看，完成会提示）');
+        return;
+    }
     const token = ++analyzeToken;
+    analyzeBusy = true;
     streamText = '';
     streamStage = '';
     step = 'running';
@@ -802,14 +937,25 @@ async function startAnalyze(container, { revise = false } = {}) {
         run.raw = data.raw;
         run.hits = data.hits;
         run.planText = formatPlan(data.result.plan);
-        step = 'result';
-        renderMain(container);
+        persistWizard();
+        // 分析中用户跳去了别的步骤：结果照常入账（快照已更新），不抢当前页面
+        if (step === 'running' || step === 'result') {
+            step = 'result';
+            renderMain(container);
+        } else {
+            toastr.info('分析已完成，点上方「④ 二检」查看');
+        }
     } catch (err) {
         if (token !== analyzeToken) return;
         toastr.error(String(err.message ?? err));
-        // 打回重写失败回到结果页（旧结果还在）；首轮失败回到第 1 步改材料
-        step = revise ? 'result' : 'collect';
-        renderMain(container);
+        // 打回重写失败回到结果页（旧结果还在）；首轮失败回到第 1 步改材料；
+        // 用户已跳去别的步骤则只报错，不动他所在的页面
+        if (step === 'running') {
+            step = revise ? 'result' : 'collect';
+            renderMain(container);
+        }
+    } finally {
+        analyzeBusy = false;
     }
 }
 
@@ -861,10 +1007,10 @@ function renderResult(container, main) {
 
     const planEl = main.querySelector('#pp_gd_plan');
     planEl.value = run.planText;
-    planEl.addEventListener('input', () => { run.planText = planEl.value; });
+    planEl.addEventListener('input', () => { run.planText = planEl.value; persistWizard(); });
     const noteEl = main.querySelector('#pp_gd_revise_note');
     noteEl.value = run.reviseNote;
-    noteEl.addEventListener('input', () => { run.reviseNote = noteEl.value; });
+    noteEl.addEventListener('input', () => { run.reviseNote = noteEl.value; persistWizard(); });
 
     // 注入参数：记住上次选择；改动时同步已启用的剧情注入的深度/角色
     const depthEl = main.querySelector('#pp_gd_inj_depth');
@@ -928,6 +1074,7 @@ function renderResult(container, main) {
         // 第 2 步闸口状态一并清空：上一轮的事件卡/走向/意见不带进新一轮规划（「不保存，回到第 1 步」才保留）
         Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
         report = null;
+        clearWizard();   // 已采用：快照清空，刷新页面不再回到第 4 步
         renderStoryBar(container);
         renderMain(container);
     });
@@ -975,14 +1122,19 @@ async function reviewStory(container) {
         if (token !== analyzeToken) return;   // 期间切了聊天：报告丢弃
         attachReport(active.id, data.result);
         report = data.result;
-        step = 'report';
-        renderMain(container);
-        renderStoryBar(container);   // 刷新「最近检查」时间
+        renderStoryBar(container);   // 刷新「最近检查」时间（报告本体已挂到剧情条目上）
+        // 检查期间用户跳进向导其他步骤时不抢页面——回到剧情页签随时能看报告
+        if (step === 'reviewing') {
+            step = 'report';
+            renderMain(container);
+        }
     } catch (err) {
         if (token !== analyzeToken) return;
         toastr.error(String(err.message ?? err));
-        step = '';
-        renderMain(container);
+        if (step === 'reviewing') {
+            step = '';
+            renderMain(container);
+        }
     }
 }
 

@@ -710,6 +710,23 @@
     overflow-wrap: anywhere;
 }
 
+/* 向导步骤跳转条：①②③④随时互跳（调试排版——不跑流程也能进任意一步填字段看格式），
+   已填内容与生成结果保留；当前所在步加边框加粗高亮（同 .pp-gd-sel 的勾选态 idiom） */
+.pp-gd-stepnav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
+}
+
+.pp-gd-stepnav .pp-gd-navcur {
+    border: 1px solid currentColor;
+    opacity: 1;
+    font-weight: 700;
+}
+
 /* 向导子区块标题行：标题 + 右侧小动作（如「管理标签」） */
 .pp-gd-layhead {
     display: flex;
