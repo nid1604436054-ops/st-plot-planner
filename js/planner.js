@@ -7,7 +7,7 @@ import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
 import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
-import { extractJson } from "./utils.js";
+import { extractJson, fingerprint } from "./utils.js";
 
 const OUTPUT_SCHEMA = `{
   "checks": {
@@ -82,13 +82,15 @@ export function withPresets(base, custom) {
 
 // 真实账单提示（数字取服务商 usage 实报，非估算）：分析与检查调用结束就亮出来，
 // 方便和「查看完整提示词」的材料字数对账——中文实际约 1.4~1.6 字/token，比预览粗估省。
-// search：判断/检索阶段的信息（没开搜索时为 null，只报 token）
+// search：判断/检索阶段的信息（没开搜索时为 null，只报 token）；usage.streamNoUsage：
+// 分析走了流式但服务商没在末包回传 usage，如实说明没有实报数字
 function billToast(usage, search = null) {
     const parts = [];
     if (search) parts.push(search.searched
         ? `联网判断 1 次（轻量简报）+ Tavily 直查 ${search.queries} 个关键词（搜索不耗模型 token，全套材料只发 1 次）`
         : `联网判断 1 次（轻量简报）：本次不需要现实信息，未检索${search.reason ? `（${search.reason}）` : ''}`);
     if (usage?.promptTokens) parts.push(`合计输入 ${usage.promptTokens.toLocaleString()} · 输出 ${usage.completionTokens.toLocaleString()} tokens（服务商实报）`);
+    else if (usage?.streamNoUsage) parts.push('本次分析走流式且服务商未在末包回传 usage，无实报 token 数字');
     if (search?.logs.length) parts.push(`检索词：${search.logs.join('；')}`);
     if (parts.length) toastr.info(parts.join('；'));
 }
@@ -108,9 +110,10 @@ const GATE_SYSTEM_PROMPT = [
 
 /**
  * 检索简报：给判断员的浓缩版剧情背景（千字级），字段与 buildGuidanceMessages 同源但全部截短。
- * 判断要不要联网只看这份小简报——全套材料与分析调用一起只发一次，计费不随检索增加
+ * 判断要不要联网只看这份小简报——全套材料与分析调用一起只发一次，计费不随检索增加；
+ * 打回重写时把修改意见也带上，判断才知道要不要往新方向检索
  */
-export function buildResearchBrief({ topic = '', userNote = '', eventText = '', activePlan = '', historySummaries = [], planText = '' } = {}) {
+export function buildResearchBrief({ topic = '', userNote = '', eventText = '', activePlan = '', historySummaries = [], planText = '', revisionNote = '' } = {}) {
     const clip = (s, n) => String(s ?? '').trim().slice(0, n);
     const plan = clip(planText || activePlan, 500);
     const summaries = (historySummaries ?? []).filter(Boolean).join(' / ');
@@ -122,6 +125,7 @@ export function buildResearchBrief({ topic = '', userNote = '', eventText = '', 
         summaries ? `## 历史剧情摘要\n${clip(summaries, 300)}` : '',
         eventText ? `## 本次随机事件（节选）\n${clip(eventText, 200)}` : '',
         userNote ? `## 用户构思与要求\n${clip(userNote, 400)}` : '',
+        revisionNote ? `## 修改意见（打回重写，判断检索方向时结合它）\n${clip(revisionNote, 300)}` : '',
         chatTail ? `## 最近对话节选\n${chatTail}` : '',
     ].filter(Boolean).join('\n\n');
 }
@@ -176,12 +180,37 @@ export async function runWebResearch(research = {}) {
     return { notes: blocks.join('\n\n'), searchLogs, reason: String(verdict?.reason ?? '').slice(0, 40), usage };
 }
 
+/**
+ * 预跑联网判断：在「分析前确认」页渲染时就开跑，用户核对材料的几秒正好把它跑完。
+ * 返回 { fingerprint, promise }，采用条件是指纹（= 判断简报全文的哈希）仍与当时一致——
+ * 换了随机事件、改了构思/修改意见、对话推进了，指纹都会对不上而自动作废重判
+ */
+export function startResearchPrefetch(research = {}) {
+    const key = fingerprint(buildResearchBrief(research));
+    const promise = runWebResearch(research);
+    promise.catch(() => {});   // 没被采用就丢弃的预跑（取消向导/输入变了）不许弹「未处理的拒绝」
+    return { fingerprint: key, promise };
+}
+
+// 规划分析的检索判断输入：runPlotGuidance 与向导预跑共用同一份拼装，指纹才对得上
+export function guidanceResearchInputs(options = {}) {
+    return {
+        topic: '判断接下来的剧情规划是否需要现实世界的具体事实',
+        userNote: options.userNote ?? '',
+        eventText: options.eventText ?? '',
+        activePlan: options.activePlan ?? '',
+        historySummaries: options.historySummaries ?? [],
+        revisionNote: options.revisionNote ?? '',
+    };
+}
+
 // 剧情分析 / 检查报告的统一出口。搜索开着时在正式分析前多两小步：
 // ① 判断——只发千字简报的一次无工具调用，决定本次要不要联网（默认不要）；
 // ② 直查——判「要」才按它给的关键词调 Tavily（不耗模型 token），纪要附加进材料。
-// 全套材料只在正式分析发一次；判断/检索失败都不拦分析，警告一声继续
-async function guidanceCompletion(messages, research = {}) {
-    const total = { promptTokens: 0, completionTokens: 0 };
+// 全套材料只在正式分析发一次（onDelta 提供时走流式，界面实时收字）；判断/检索失败都不拦分析。
+// onStage('gate'|'analysis') 供界面标注当前等在哪一步；prefetch 指纹对得上就直接用预跑结果
+async function guidanceCompletion(messages, research = {}, { onDelta, onStage, prefetch } = {}) {
+    const total = { promptTokens: 0, completionTokens: 0, streamNoUsage: false };
     const add = u => {
         total.promptTokens += u?.promptTokens ?? u?.prompt_tokens ?? 0;
         total.completionTokens += u?.completionTokens ?? u?.completion_tokens ?? 0;
@@ -191,7 +220,11 @@ async function guidanceCompletion(messages, research = {}) {
 
     if (settings.search?.toolMode && searchToolReady()) {
         try {
-            const r = await runWebResearch(research);
+            onStage?.('gate');
+            const key = fingerprint(buildResearchBrief(research));
+            const r = prefetch && prefetch.fingerprint === key
+                ? await prefetch.promise            // 预跑时输入与现在完全一致：直接采用
+                : await runWebResearch(research);   // 输入变了（换事件/改构思/新修改意见）：重判
             add(r.usage);
             search = { searched: r.searchLogs.length > 0, queries: r.searchLogs.length, logs: r.searchLogs, reason: r.reason };
             notes = r.notes;
@@ -208,11 +241,19 @@ async function guidanceCompletion(messages, research = {}) {
             : m))
         : messages;
 
+    let analysisBilled = false;
     try {
-        const text = await chatCompletion({ messages: withNotes, onUsage: add });
+        onStage?.('analysis');
+        const text = await chatCompletion({
+            messages: withNotes,
+            onUsage: u => { add(u); analysisBilled = true; },
+            ...(onDelta ? { onDelta } : {}),
+        });
+        total.streamNoUsage = Boolean(onDelta) && !analysisBilled;
         billToast(total, search);
         return text;
     } catch (err) {
+        total.streamNoUsage = Boolean(onDelta) && !analysisBilled;
         billToast(total, search);   // 失败也要报真实账单：空内容报错时的输入/输出对账全靠它
         err.usage = { requests: (search ? 1 : 0) + 1, ...total };
         throw err;
@@ -333,13 +374,8 @@ export async function runPlotGuidance(options = {}) {
             { role: 'system', content: system },
             { role: 'user', content: user },
         ],
-        {
-            topic: '判断接下来的剧情规划是否需要现实世界的具体事实',
-            userNote: options.userNote ?? '',
-            eventText: options.eventText ?? '',
-            activePlan: options.activePlan ?? '',
-            historySummaries: options.historySummaries ?? [],
-        },
+        guidanceResearchInputs(options),
+        { onDelta: options.onDelta, onStage: options.onStage, prefetch: options.researchPrefetch },
     );
     try {
         return { result: extractJson(raw), raw, hits };
@@ -357,7 +393,7 @@ export async function runPlotGuidance(options = {}) {
  * @param {string} [options.userNote] 补充说明
  * @param {Array}  [options.presets]  本次启用的预设（缺省取设置里启用的）
  */
-export async function runStoryReview({ planText = '', userNote = '', presets } = {}) {
+export async function runStoryReview({ planText = '', userNote = '', presets, onDelta, onStage } = {}) {
     const { chatList, hits } = collectPlanningContext();
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
@@ -388,6 +424,7 @@ export async function runStoryReview({ planText = '', userNote = '', presets } =
             userNote,
             planText: String(planText || ''),
         },
+        { onDelta, onStage },
     );
     try {
         return { result: extractJson(raw), raw, hits: hits.length };

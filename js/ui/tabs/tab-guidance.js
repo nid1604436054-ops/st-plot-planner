@@ -7,7 +7,7 @@
 // 掷骰入口只有向导第 2 步；页面下部工具区（tab-events.js）只放路人反应与事件库配置；
 // 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列，生效条目由第 1 步勾选随分析发送，
 // 检查报告（runStoryReview）自动附带当前生效条目
-import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, GUIDANCE_SYSTEM_PROMPT } from "../../planner.js";
+import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, GUIDANCE_SYSTEM_PROMPT, startResearchPrefetch, guidanceResearchInputs } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
 import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
@@ -33,12 +33,31 @@ const run = {
     memMatch: false,     // 第 1 步第二层：是否按标签匹配召回记忆表格
     memTags: [],         // 按标签匹配时勾选的标签名
     readyFrom: 'event',  // 分析前确认页的「返回」回到哪一步
+    research: null,      // 「分析前确认」页预跑的联网判断 {fingerprint, promise}；分析时指纹对不上自动作废
 };
 // ② 随机事件闸口的界面状态
 const ev = { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false };
 // 进行中剧情全文 / 历史列表是否展开；历史里展开查看的条目 id（均只存内存）
 let showActive = false, showHistory = false, viewHistId = null;
 let report = null;      // 最近一次检查报告（内存缓存，正式存档在 story 条目上）
+
+// 分析/检查的流式显示：onDelta 累计文本 + 当前阶段。analyzeToken 让旧一轮在途的流式回调
+// 与结果不写进切换后的新聊天（resetGuidance 时递增作废）
+let analyzeToken = 0;
+let streamText = '';
+let streamStage = '';
+
+function updateStreamView(token) {
+    if (token !== analyzeToken) return;
+    const outEl = document.getElementById('pp_gd_run_stream');
+    if (!outEl) return;
+    const stageEl = document.getElementById('pp_gd_run_stage');
+    if (stageEl) stageEl.textContent = streamStage === 'gate'
+        ? '联网判断/检索中……'
+        : `模型输出中 · 已接收 ${streamText.length} 字`;
+    outEl.textContent = streamText || '等待模型输出……';
+    outEl.scrollTop = outEl.scrollHeight;
+}
 
 // 预设区折叠/编辑中状态（与向导无关，跨重渲染保持）
 let presetOpen = false;
@@ -66,9 +85,10 @@ export const guidanceTab = {
 // 剧情数据本身存 chatMetadata，随聊天文件自动切换
 export function resetGuidance() {
     step = '';
+    analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
     Object.assign(run, {
         note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
-        memSheets: null, memMatch: false, memTags: [], readyFrom: 'event',
+        memSheets: null, memMatch: false, memTags: [], readyFrom: 'event', research: null,
     });
     Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
     resetEventsTools();   // 底部工具区的反应卡也是当前聊天的内容
@@ -237,8 +257,10 @@ function renderMain(container) {
     if (step === 'running') {
         main.innerHTML = `
         <div class="pp-section">
-            <b>第 3 步 · 分析中……</b>
+            <div class="pp-gd-stephead"><b>第 3 步 · 分析中</b><span class="pp-muted" id="pp_gd_run_stage"></span></div>
+            <pre id="pp_gd_run_stream" class="pp-gd-stream pp-muted">等待模型输出……</pre>
         </div>`;
+        updateStreamView(analyzeToken);
         return;
     }
     if (step === 'result') return renderResult(container, main);
@@ -246,8 +268,10 @@ function renderMain(container) {
     if (step === 'reviewing') {
         main.innerHTML = `
         <div class="pp-section">
-            <b>检查当前剧情中……</b>
+            <div class="pp-gd-stephead"><b>检查当前剧情</b><span class="pp-muted" id="pp_gd_run_stage"></span></div>
+            <pre id="pp_gd_run_stream" class="pp-gd-stream pp-muted">等待模型输出……</pre>
         </div>`;
+        updateStreamView(analyzeToken);
         return;
     }
     if (step === 'report' && report) {
@@ -502,12 +526,22 @@ function renderReady(container, main) {
     <div class="pp-section">
         <b>分析前确认</b>
         <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${run.presetIds.length}/${presets.length} 启用 · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}</div>
-        <div class="pp-gd-stat pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（多轮往返会累加输入）' : ''}</div>
+        <div class="pp-gd-stat pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（先轻量判断，需要才检索）' : ''}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">确认，开始分析</span>
             <span id="pp_gd_ready_back" class="menu_button">返回</span>
         </div>
     </div>`;
+    // 联网判断预跑：进这一页时材料与事件已定型，趁用户核对的几秒把判断跑完；
+    // 分析时指纹对不上（这之后输入又变了）会自动作废重判
+    run.research = searchToolActive()
+        ? startResearchPrefetch(guidanceResearchInputs({
+            userNote: run.note,
+            eventText: run.eventText,
+            activePlan: activeStory()?.planText ?? '',
+            historySummaries: historySummaries(),
+        }))
+        : null;
     main.querySelector('#pp_gd_ready_go').addEventListener('click', () => startAnalyze(container));
     main.querySelector('#pp_gd_ready_back').addEventListener('click', () => {
         step = run.readyFrom;
@@ -690,6 +724,9 @@ function historySummaries() {
 }
 
 async function startAnalyze(container, { revise = false } = {}) {
+    const token = ++analyzeToken;
+    streamText = '';
+    streamStage = '';
     step = 'running';
     renderMain(container);
     try {
@@ -704,7 +741,12 @@ async function startAnalyze(container, { revise = false } = {}) {
             memoryTags: wizardMemoryTags(),
             memorySheets: wizardMemorySheets(),
             storageItems: wizardStorageItems(),
+            onDelta: t => { streamText = t; updateStreamView(token); },
+            onStage: s => { streamStage = s; updateStreamView(token); },
+            // 打回重写不吃预跑缓存：修改意见可能把检索方向带偏，重写一律重新判断
+            researchPrefetch: revise ? null : run.research,
         });
+        if (token !== analyzeToken) return;   // 期间切了聊天/重开向导：结果丢弃不落地
         run.result = data.result;
         run.raw = data.raw;
         run.hits = data.hits;
@@ -712,6 +754,7 @@ async function startAnalyze(container, { revise = false } = {}) {
         step = 'result';
         renderMain(container);
     } catch (err) {
+        if (token !== analyzeToken) return;
         toastr.error(String(err.message ?? err));
         // 打回重写失败回到结果页（旧结果还在）；首轮失败回到第 1 步改材料
         step = revise ? 'result' : 'collect';
@@ -807,7 +850,7 @@ function renderResult(container, main) {
 
     main.querySelector('#pp_gd_revise').addEventListener('click', () => startAnalyze(container, { revise: true }));
     main.querySelector('#pp_gd_discard').addEventListener('click', () => {
-        Object.assign(run, { result: null, raw: '', hits: 0, planText: '', reviseNote: '' });
+        Object.assign(run, { result: null, raw: '', hits: 0, planText: '', reviseNote: '', research: null });
         step = 'collect';
         toastr.info('已丢弃本次生成（构思、预设与事件选择保留）');
         renderMain(container);
@@ -829,7 +872,7 @@ function renderResult(container, main) {
         step = '';
         Object.assign(run, {
             note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
-            memSheets: null, memMatch: false, memTags: [], readyFrom: 'event',
+            memSheets: null, memMatch: false, memTags: [], readyFrom: 'event', research: null,
         });
         // 第 2 步闸口状态一并清空：上一轮的事件卡/走向/意见不带进新一轮规划（「不保存，回到第 1 步」才保留）
         Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
@@ -867,16 +910,25 @@ function renderResult(container, main) {
 async function reviewStory(container) {
     const active = activeStory();
     if (!active) return;
+    const token = ++analyzeToken;
+    streamText = '';
+    streamStage = '';
     step = 'reviewing';
     renderMain(container);
     try {
-        const data = await runStoryReview({ planText: active.planText });
+        const data = await runStoryReview({
+            planText: active.planText,
+            onDelta: t => { streamText = t; updateStreamView(token); },
+            onStage: s => { streamStage = s; updateStreamView(token); },
+        });
+        if (token !== analyzeToken) return;   // 期间切了聊天：报告丢弃
         attachReport(active.id, data.result);
         report = data.result;
         step = 'report';
         renderMain(container);
         renderStoryBar(container);   // 刷新「最近检查」时间
     } catch (err) {
+        if (token !== analyzeToken) return;
         toastr.error(String(err.message ?? err));
         step = '';
         renderMain(container);

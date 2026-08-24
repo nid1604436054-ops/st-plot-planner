@@ -62,7 +62,8 @@ function pickContent(message, { finishReason = '', completionTokens = null, prom
  * @param {number} [options.maxTokens]    缺省用设置里的值
  * @param {AbortSignal} [options.signal]
  * @param {(fullText:string)=>void} [options.onDelta]  提供时走 SSE 流式，逐步回调累计文本
- * @param {(usage:object)=>void} [options.onUsage]     非流式时回传服务商实报的 usage（对账用，非估算）
+ * @param {(usage:object)=>void} [options.onUsage]     回传服务商实报 usage：非流式必有；
+ *        流式时请求带 stream_options.include_usage、服务商在末包附上才回调（不附就不回调）
  * @returns {Promise<string>} 模型输出的文本
  */
 export async function chatCompletion({ messages, temperature, maxTokens, signal, onDelta, onUsage } = {}) {
@@ -90,10 +91,14 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
 
     let res;
     try {
-        const extra = thinkingOffParams();
+        // 流式且要对账时，请服务商在末包附 usage（OpenAI 兼容主流家都认；不认的走下面的去参重发）
+        const extra = {
+            ...thinkingOffParams(),
+            ...(stream && typeof onUsage === 'function' ? { stream_options: { include_usage: true } } : {}),
+        };
         res = await doFetch(extra);
         if (extra && (res.status === 400 || res.status === 422)) {
-            res = await doFetch({});   // 端点不认关闭思考的参数：去掉重发一次
+            res = await doFetch({});   // 端点不认这些附加参数（关闭思考/stream_options）：全部去掉重发一次
         }
     } catch (err) {
         if (err.name === 'AbortError') throw err;
@@ -114,11 +119,18 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
         return pickContent(choice.message, { finishReason: choice.finish_reason, completionTokens: data?.usage?.completion_tokens, promptTokens: data?.usage?.prompt_tokens });
     }
 
-    // SSE 流式：逐行解析 data: {...}，聚合增量并回调 onDelta
+    // SSE 流式：逐行解析 data: {...}，聚合增量并回调 onDelta；末包的 usage（若有）回传对账。
+    // 正文增量全空时兜底聚合思考字段增量——与非流式 pickContent 同一口径
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let full = '';
+    let reasoning = '';
+    let usage = null;
+    const finish = () => {
+        if (usage && typeof onUsage === 'function') onUsage(usage);
+        return full || reasoning;
+    };
     while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -129,19 +141,23 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
             const trimmed = line.trim();
             if (!trimmed.startsWith('data:')) continue;
             const data = trimmed.slice(5).trim();
-            if (data === '[DONE]') return full;
+            if (data === '[DONE]') return finish();
             try {
-                const delta = JSON.parse(data)?.choices?.[0]?.delta?.content;
-                if (delta) {
-                    full += delta;
+                const chunk = JSON.parse(data);
+                if (chunk?.usage && (chunk.usage.prompt_tokens || chunk.usage.completion_tokens)) usage = chunk.usage;
+                const delta = chunk?.choices?.[0]?.delta;
+                if (typeof delta?.content === 'string' && delta.content) {
+                    full += delta.content;
                     onDelta(full);
+                } else if (delta && (delta.reasoning_content || delta.reasoning)) {
+                    reasoning += String(delta.reasoning_content ?? delta.reasoning ?? '');
                 }
             } catch {
                 // 忽略无法解析的心跳/注释行
             }
         }
     }
-    return full;
+    return finish();   // 流没等到 [DONE] 就断了：按已收到的内容收尾
 }
 
 export async function testConnection() {

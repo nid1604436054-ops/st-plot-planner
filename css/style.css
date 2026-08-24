@@ -422,6 +422,16 @@
     font-size: 0.9em;
 }
 
+/* 分析/检查中的流式输出区：模型原始输出（JSON）逐字滚入，限高滚动、自动贴底 */
+.pp-gd-stream {
+    max-height: 280px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.95em;
+    margin: 6px 0 0;
+}
+
 .pp-mem-cols label,
 .pp-mem-tagbar label {
     display: inline-flex;
