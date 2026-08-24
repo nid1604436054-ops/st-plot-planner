@@ -267,10 +267,29 @@
     flex: 0 0 auto;
 }
 
-/* 事件走向选项保持占满整行、允许换行 */
+/* 事件走向选项：占满整行的卡片，走向与幕后提示上下分行显示
+   （应用户反馈：走向和提示挤在同一行糊成一块，宁可页面拉长、滚动没关系）。
+   位置须在上方 .pp-drawer .menu_button 的 nowrap 之后，同权重靠后者生效 */
 .pp-drawer .pp-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
     width: 100%;
     white-space: normal;
+    padding: 8px 12px;
+    margin-top: 8px;
+}
+
+.pp-option-label {
+    font-weight: bold;
+    overflow-wrap: anywhere;
+}
+
+.pp-option-hint {
+    font-size: 0.85em;
+    opacity: 0.65;
+    overflow-wrap: anywhere;
 }
 
 /* 模型输入行：输入框占满 + 拉取按钮不换行 */.pp-model-row {
@@ -564,6 +583,38 @@
 .pp-gd-evcard {
     flex-direction: column;
     align-items: stretch;
+    gap: 6px;
+}
+
+.pp-gd-evtitle {
+    font-weight: bold;
+    font-size: 1.05em;
+    overflow-wrap: anywhere;
+}
+
+.pp-gd-evdesc {
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+}
+
+.pp-gd-evoptlabel {
+    margin-top: 4px;
+}
+
+/* 「注入层数」输入框：保持小尺寸。选择器带 .pp-drawer 抬到 (0,3,1)，
+   防被文件末尾「抽屉内表单控件占满宽度」全局规则反杀（同 pp-gd-injrow 的教训） */
+.pp-drawer .pp-gd-evcard input[type="number"] {
+    width: 4.5em;
+    min-width: 0;
+    padding: 0 4px;
+    flex: 0 0 auto;
+}
+
+.pp-drawer .pp-gd-evcard .pp-gd-evops label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
 }
 
 .pp-gd-sel {

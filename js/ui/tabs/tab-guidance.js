@@ -708,29 +708,51 @@ function renderEvent(container, main) {
 function renderEvCard(out) {
     const e = ev.event;
     const options = Array.isArray(e.options) ? e.options : [];
+    const layers = clampInjectLayers(ev.injectLayers);
+    ev.injectLayers = layers;
     out.innerHTML = `
     <div class="pp-item pp-gd-evcard">
-        <b>${escapeHtml(e.title ?? '随机事件')}</b>
-        <div>${escapeHtml(e.description ?? '')}</div>
-        ${e.preview ? `<div class="pp-muted">预览走向：${escapeHtml(e.preview)}</div>` : ''}
+        <div class="pp-gd-evtitle">${escapeHtml(e.title ?? '随机事件')}</div>
+        <div class="pp-gd-evdesc">${escapeHtml(e.description ?? '')}</div>
+        ${e.preview ? `<div class="pp-gd-evpreview pp-muted">预览走向：${escapeHtml(e.preview)}</div>` : ''}
+        ${options.length ? `
+        <div class="pp-label pp-gd-evoptlabel">走向选项（点选一个定向，再点一次取消；都不选＝只作参考）</div>
         ${options.map((o, i) => `
             <div class="menu_button pp-option ${ev.choiceIdx === i ? 'pp-gd-sel' : ''}" data-evopt="${i}">
-                ${escapeHtml(o.label ?? '')}<span class="pp-muted"> —— ${escapeHtml(o.hint ?? '')}</span>
+                <span class="pp-option-label">${escapeHtml(o.label ?? '')}</span>
+                ${o.hint ? `<span class="pp-option-hint">幕后提示：${escapeHtml(o.hint ?? '')}</span>` : ''}
             </div>`).join('')}
-        <div class="pp-muted">${ev.choiceIdx == null ? '点选一个走向（再点取消）；都不选则只作参考' : `已选：${escapeHtml(options[ev.choiceIdx]?.label ?? '')}`}</div>
-        <div class="pp-btn-row"><span id="pp_gd_ev_inject" class="menu_button" title="把事件与已选走向转为隐身注入（模型可见、聊天界面不显示），20 层后自动撤下；不影响作为材料融入本次规划">转为隐身注入</span></div>
+        ${ev.choiceIdx == null ? '' : `<div class="pp-muted">已选：${escapeHtml(options[ev.choiceIdx]?.label ?? '')}</div>`}` : ''}
+        <div class="pp-btn-row pp-gd-evops">
+            <label title="隐身注入多少层后自动撤下；一层 = 一条角色回复（user 消息不计）">注入层数
+                <input type="number" class="text_pole" id="pp_gd_ev_layers" min="1" max="200" step="1" value="${layers}" />
+            </label>
+            <span id="pp_gd_ev_inject" class="menu_button" title="把事件与已选走向直接写成一条隐身注入（模型可见、聊天界面不显示），按所填层数到期自动撤下；不经过第 3 步分析，也不影响事件作为材料融入本次规划">转为隐身注入</span>
+        </div>
     </div>`;
     out.querySelectorAll('[data-evopt]').forEach(el => el.addEventListener('click', () => {
         const i = Number(el.dataset.evopt);
         ev.choiceIdx = ev.choiceIdx === i ? null : i;
         renderEvCard(out);
     }));
+    const layersEl = out.querySelector('#pp_gd_ev_layers');
+    // 点选走向会整卡重渲染，input 事件实时回存，重渲染后数值不丢
+    layersEl.addEventListener('input', () => {
+        const v = Number(layersEl.value);
+        if (Number.isFinite(v)) ev.injectLayers = v;
+    });
+    layersEl.addEventListener('change', () => {
+        const v = clampInjectLayers(Number(layersEl.value));
+        ev.injectLayers = v;
+        layersEl.value = String(v);
+    });
     out.querySelector('#pp_gd_ev_inject').addEventListener('click', () => {
         const opt = ev.choiceIdx != null ? options[ev.choiceIdx] : null;
         if (!opt) {
             toastr.warning('先点选一个走向再注入（都不选则只把事件当参考）');
             return;
         }
+        const injLayers = clampInjectLayers(ev.injectLayers);
         addInjection({
             id: newId('inj-'),
             label: `事件：${e.title ?? ''} · ${opt.label ?? ''}`,
@@ -742,10 +764,14 @@ function renderEvCard(out) {
             enabled: true,
             source: 'event',
             createdAt: Date.now(),
-            expires: { type: 'layers', layers: 20 },
+            expires: { type: 'layers', layers: injLayers },
         });
-        toastr.success('已注入，20 层后自动撤下（设置页底部可提前撤下）');
+        toastr.success(`已注入，${injLayers} 层后自动撤下（设置页底部可提前撤下）`);
     });
+}
+
+function clampInjectLayers(v) {
+    return Math.min(Math.max(Math.round(Number(v) || 20), 1), 200);
 }
 
 // ---------------------------------------------------------------------------
