@@ -9,7 +9,10 @@ import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
 import { extractJson, fingerprint } from "./utils.js";
 
-const OUTPUT_SCHEMA = `{
+// 输出 schema 两套变体：存在进行中剧情时才要求 progress（推进到哪个阶段 + 约百分比）。
+// 首次规划没有可对照执行的剧情，不问进度——问了模型也会编一个出来（第 4 步曾出现
+// 「还没采用的规划先有完成度」，根源就是 schema 无条件要这个字段）
+const OUTPUT_SCHEMA_BASE = `{
   "checks": {
     "ooc": {
       "found": false,
@@ -18,8 +21,7 @@ const OUTPUT_SCHEMA = `{
       ]
     },
     "plotRepeat": { "found": false, "note": "与进行中/历史剧情重复雷同之处；没有则空字符串" },
-    "styleRepeat": { "level": "无|轻微|明显", "note": "仅判 char 的自发重复：user 是否先重复、char 重复了什么" },
-    "progress": { "stage": "进行中剧情推进到哪个阶段（无进行中剧情写「无」）", "pct": "约x%或「无」", "note": "判断依据" }
+    "styleRepeat": { "level": "无|轻微|明显", "note": "仅判 char 的自发重复：user 是否先重复、char 重复了什么" }__PROGRESS__
   },
   "plan": {
     "summary": "一句话概括接下来的走向",
@@ -30,17 +32,26 @@ const OUTPUT_SCHEMA = `{
   }
 }`;
 
-// 内置指令：保证返回 JSON（程序要解析成检查项 + 规划），用户预设追加在其后，见 assemblePresets
-export const GUIDANCE_SYSTEM_PROMPT = [
-    '你是文字角色扮演的剧情顾问，负责两件事：',
-    '1) 检查：结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）、是否与已有剧情重复、文风是否重复、正在执行的剧情推进到什么程度；',
-    '2) 规划：为后续剧情设计「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
+const outputSchema = withProgress => OUTPUT_SCHEMA_BASE.replace(
+    '__PROGRESS__',
+    withProgress ? `,
+    "progress": { "stage": "进行中剧情推进到哪个阶段", "pct": "约x%", "note": "判断依据" }` : '',
+);
+
+// 内置指令：保证返回 JSON（程序要解析成检查项 + 规划），用户预设追加在其后，见 assemblePresets。
+// hasActivePlan 为真才要求 progress 字段，与 buildGuidanceMessages 是否附带「进行中剧情」小节同步
+export function guidanceSystemPrompt(hasActivePlan = false) {
+    return [
+        '你是文字角色扮演的剧情顾问，负责两件事：',
+        `1) 检查：结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）、是否与已有剧情重复、文风是否重复${hasActivePlan ? '、正在执行的剧情推进到什么程度' : ''}；`,
+        '2) 规划：为后续剧情设计「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
     '要求：判断必须引用对话依据；给出「进行中剧情」时对照它检查进度与重复；给了「随机事件」就将其自然融入规划；规划要具体、可执行、尊重既有设定；面向当前场景做预编排。',
     '文风重复的判定基准：只针对角色（char）的扮演文本——先检查用户（user）近期输入是否自己在重复动作、场景或指令；角色只是跟进用户发起的重复不算文风重复；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判「轻微/明显」，并在 note 里写明用户是否先重复、角色重复了什么。',
     '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
     '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
-    OUTPUT_SCHEMA,
+    outputSchema(hasActivePlan),
 ].join('\n');
+}
 
 const REVIEW_SCHEMA = `{
   "completion": "约x%（当前处于规划中的哪个阶段）",
@@ -356,7 +367,7 @@ export function buildGuidanceMessages(options = {}) {
     }
 
     return {
-        system: withPresets(GUIDANCE_SYSTEM_PROMPT, assemblePresets(presets)),
+        system: withPresets(guidanceSystemPrompt(Boolean(String(activePlan ?? '').trim())), assemblePresets(presets)),
         user: userContent,
         hits: hits.length,
         sections,

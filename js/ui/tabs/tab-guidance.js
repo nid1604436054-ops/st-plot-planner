@@ -7,7 +7,7 @@
 // 掷骰入口只有向导第 2 步；页面下部工具区（tab-events.js）只放路人反应与事件库配置；
 // 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列，生效条目由第 1 步勾选随分析发送，
 // 检查报告（runStoryReview）自动附带当前生效条目
-import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, GUIDANCE_SYSTEM_PROMPT, startResearchPrefetch, guidanceResearchInputs } from "../../planner.js";
+import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, guidanceSystemPrompt, startResearchPrefetch, guidanceResearchInputs } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
 import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
@@ -29,6 +29,7 @@ const run = {
     event: null,         // { mode:'llm'|'lib'|'manual', title, choice } 入库用
     eventText: '',       // 拼给模型的事件材料
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
+    hadActive: false,   // 本次分析发起时是否存在进行中剧情（第 4 步「剧情进度」行只在这种时候显示）
     memSheets: null,     // 第 1 步第一层：勾选的表 uid；null = 全部（开了召回的表），[] = 一张不带
     memMatch: false,     // 第 1 步第二层：是否按标签匹配召回记忆表格
     memTags: [],         // 按标签匹配时勾选的标签名
@@ -87,7 +88,7 @@ export function resetGuidance() {
     step = '';
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
     Object.assign(run, {
-        note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
+        note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
         memSheets: null, memMatch: false, memTags: [], readyFrom: 'event', research: null,
     });
     Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
@@ -728,6 +729,8 @@ async function startAnalyze(container, { revise = false } = {}) {
     streamText = '';
     streamStage = '';
     step = 'running';
+    const activePlan = activeStory()?.planText ?? '';
+    run.hadActive = Boolean(activePlan.trim());
     renderMain(container);
     try {
         const data = await runPlotGuidance({
@@ -735,7 +738,7 @@ async function startAnalyze(container, { revise = false } = {}) {
             previousPlan: revise ? run.planText : '',
             revisionNote: revise ? run.reviseNote : '',
             eventText: run.eventText,
-            activePlan: activeStory()?.planText ?? '',
+            activePlan,
             historySummaries: historySummaries(),
             presets: runPresets(),
             memoryTags: wizardMemoryTags(),
@@ -786,7 +789,7 @@ function renderResult(container, main) {
             ? `<div>${escapeHtml(checks.plotRepeat.note || '存在重复')}</div>`
             : '<span class="pp-muted">未发现重复</span>')}
         ${checkRow('文风重复', `<div>${escapeHtml(checks.styleRepeat?.level || '—')}${checks.styleRepeat?.note ? `：${escapeHtml(checks.styleRepeat.note)}` : ''}</div>`)}
-        ${checkRow('剧情进度', `<div>${escapeHtml(checks.progress?.stage || '—')}${checks.progress?.pct ? `（${escapeHtml(checks.progress.pct)}）` : ''}</div>${checks.progress?.note ? `<div class="pp-muted">${escapeHtml(checks.progress.note)}</div>` : ''}`)}
+        ${run.hadActive ? checkRow('剧情进度', `<div>${escapeHtml(checks.progress?.stage || '—')}${checks.progress?.pct ? `（${escapeHtml(checks.progress.pct)}）` : ''}</div>${checks.progress?.note ? `<div class="pp-muted">${escapeHtml(checks.progress.note)}</div>` : ''}`) : ''}
     </div>
     <div class="pp-section">
         <b title="可编辑；「确认采用」与「转为隐身注入」用的都是这份文本">剧情规划</b>
@@ -850,7 +853,7 @@ function renderResult(container, main) {
 
     main.querySelector('#pp_gd_revise').addEventListener('click', () => startAnalyze(container, { revise: true }));
     main.querySelector('#pp_gd_discard').addEventListener('click', () => {
-        Object.assign(run, { result: null, raw: '', hits: 0, planText: '', reviseNote: '', research: null });
+        Object.assign(run, { result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false, research: null });
         step = 'collect';
         toastr.info('已丢弃本次生成（构思、预设与事件选择保留）');
         renderMain(container);
@@ -871,7 +874,7 @@ function renderResult(container, main) {
         toastr.success('已存为进行中剧情并自动注入（原剧情自动归档，可在历史回看）');
         step = '';
         Object.assign(run, {
-            note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '',
+            note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
             memSheets: null, memMatch: false, memTags: [], readyFrom: 'event', research: null,
         });
         // 第 2 步闸口状态一并清空：上一轮的事件卡/走向/意见不带进新一轮规划（「不保存，回到第 1 步」才保留）
@@ -1107,7 +1110,9 @@ function renderPreset(container) {
         const show = view.style.display === 'none';
         view.style.display = show ? '' : 'none';
         if (show) {
-            view.textContent = `${GUIDANCE_SYSTEM_PROMPT}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n（勾选启用的预设按顺序追加在这里，每条带「### 预设名」小标题，随每次分析一起发给模型）`;
+            const hasActive = Boolean((activeStory()?.planText ?? '').trim());
+            view.textContent = `${guidanceSystemPrompt(hasActive)}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n（勾选启用的预设按顺序追加在这里，每条带「### 预设名」小标题，随每次分析一起发给模型）`
+                + `\n（上面是「${hasActive ? '有' : '无'}进行中剧情」时的版本：progress 进度项只在该版本出现，第 4 步的「剧情进度」行同理）`;
         }
     });
 }
