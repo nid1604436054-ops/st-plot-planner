@@ -4,10 +4,11 @@
 // 设计取向（吸收用户 NPC_Reaction 预设）：轻重有别（轻＝一根针，重＝一个局）、宁重不轻、
 // 危机可重但出口必须存在、密度受控（同维度连出两次暂停一轮、最近事件防重复）。
 import { chatCompletion } from "./api.js";
-import { collectRecentChat, collectPlanningContext, formatChatLog, characterSummary, currentFloor } from "./context.js";
-import { buildLoreContext } from "./lorebook.js";
+import { collectRecentChat, formatChatLog, currentFloor } from "./context.js";
 import { settings, save, newId } from "./settings.js";
 import { extractJson } from "./utils.js";
+import { materialSections, assemblePresets, withPresets } from "./planner.js";
+import { storyState, activeStory } from "./story.js";
 
 const EVENT_SYSTEM_PROMPT = '你是文字角色扮演的随机遭遇生成器。基于当前情境与给定的事件方向，'
     + '生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
@@ -129,17 +130,21 @@ export function recentEventTitles(limit = 8) {
     return (settings.events?.recent ?? []).slice(0, limit).map(r => r.title).filter(Boolean);
 }
 
-// 三类生成调用共享的上下文小节（含最近事件防重复）
-function contextSections() {
-    const { chatList, hits } = collectPlanningContext();
+// 三类生成调用共享的上下文小节。材料与向导第 1 步完全同一批（materialSections）：
+// 角色摘要 / 对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要，
+// 再追加事件专属小节（最近事件防重复 + 底线）。materials 由向导传入（记忆表范围/标签、
+// 玩法勾选、预设勾选都用第 1 步的本次选择），缺省回落到设置里的默认召回方式
+function contextSections(materials = {}) {
+    const s = storyState();
+    const { parts } = materialSections({
+        memoryTags: materials.memoryTags ?? null,
+        memorySheets: materials.memorySheets ?? null,
+        storageItems: materials.storageItems ?? [],
+        activePlan: activeStory()?.planText ?? '',
+        historySummaries: s.history.filter(h => h.id !== s.activeId).map(h => h.summary),
+    });
     const recent = recentEventTitles();
-    return [
-        '## 角色设定摘要',
-        characterSummary() || '（无角色卡）',
-        '## 最近对话',
-        formatChatLog(chatList),
-        '## 世界书命中',
-        buildLoreContext(hits),
+    return [...parts,
         '## 最近已出过的事件（不要重复相近情节）',
         recent.length ? recent.map(t => `- ${t}`).join('\n') : '（暂无记录）',
         '## 底线',
@@ -147,18 +152,21 @@ function contextSections() {
     ];
 }
 
+// 本次启用的预设拼进事件生成的系统提示词（与规划分析同一套拼法，带 JSON 格式保护语）
+const eventSystem = materials => withPresets(EVENT_SYSTEM_PROMPT, assemblePresets(materials?.presets));
+
 /**
- * 按事件库条目生成一次随机事件。
+ * 按事件库条目生成一次随机事件。materials 见 contextSections（第 1 步的本次材料选择）。
  * @returns {Promise<{title:string, description:string, options:Array<{label:string, hint:string}>}>}
  */
-export async function generateRandomEvent(rule) {
-    const sections = [...contextSections(), '## 事件方向',
+export async function generateRandomEvent(rule, materials = {}) {
+    const sections = [...contextSections(materials), '## 事件方向',
         `维度「${dimNameOf(rule.dimension)}」｜条目「${rule.name}」：${rule.promptHint ?? ''}`,
         SEVERITY_HINT[rule.severity] ?? SEVERITY_HINT.light].join('\n\n');
 
     const raw = await chatCompletion({
         messages: [
-            { role: 'system', content: EVENT_SYSTEM_PROMPT },
+            { role: 'system', content: eventSystem(materials) },
             { role: 'user', content: sections },
         ],
     });
@@ -172,7 +180,7 @@ export async function generateRandomEvent(rule) {
  * @param {boolean} [options.useLibrary]    true 时把事件库条目列给模型参考（可从中选方向也可另起）
  * @param {boolean} [options.wantPreview]   true 时附带一版预览剧情走向（仅供参考，正式规划仍走分析调用）
  */
-export async function generateFreeRandomEvent({ dimension = null, useLibrary = false, wantPreview = false } = {}) {
+export async function generateFreeRandomEvent({ dimension = null, useLibrary = false, wantPreview = false, materials = {} } = {}) {
     const schema = '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
         + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ]'
         + (wantPreview ? ', "preview": "若采纳该事件，后续剧情的一版预览走向（120 字内，仅供参考）"' : '')
@@ -187,7 +195,7 @@ export async function generateFreeRandomEvent({ dimension = null, useLibrary = f
         + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
         + schema + '\noptions 给 3 个左右。';
 
-    const sections = contextSections();
+    const sections = contextSections(materials);
     if (dimension) {
         sections.push('## 事件方向（维度自由生成）', `维度「${dimension.name}」：${dimension.prompt ?? ''}\n按这个维度的气质即兴出一次事件。`);
     }
@@ -200,7 +208,7 @@ export async function generateFreeRandomEvent({ dimension = null, useLibrary = f
 
     const raw = await chatCompletion({
         messages: [
-            { role: 'system', content: system },
+            { role: 'system', content: withPresets(system, assemblePresets(materials.presets)) },
             { role: 'user', content: sections.join('\n\n') },
         ],
     });
@@ -214,7 +222,7 @@ export async function generateFreeRandomEvent({ dimension = null, useLibrary = f
  * @param {object[]} [options.dimensions]  候选维度对象数组（密度暂停的维度已由管线剔除）
  * @returns {Promise<{title:string, description:string, dimension:string, options:Array<{label:string, hint:string}>}>}
  */
-export async function generateAiChoiceRandomEvent({ dimensions = [] } = {}) {
+export async function generateAiChoiceRandomEvent({ dimensions = [], materials = {} } = {}) {
     const system = '你是文字角色扮演的随机遭遇生成器。基于当前情境即兴生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
         + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'
         + '用户给出了维度清单：由你判断哪个维度最贴合当前剧情氛围，从中挑一个（只能挑清单里的），按它的气质展开。'
@@ -226,13 +234,13 @@ export async function generateAiChoiceRandomEvent({ dimensions = [] } = {}) {
         + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ] }\n'
         + 'options 给 3 个左右。';
 
-    const sections = contextSections();
+    const sections = contextSections(materials);
     sections.push('## 维度清单（从中挑最贴合当前剧情的一个）',
         dimensions.length ? dimensions.map(d => `- ${d.name}：${d.prompt ?? ''}`).join('\n') : '（清单为空，请即兴生成，dimension 填「即兴」）');
 
     const raw = await chatCompletion({
         messages: [
-            { role: 'system', content: system },
+            { role: 'system', content: withPresets(system, assemblePresets(materials.presets)) },
             { role: 'user', content: sections.join('\n\n') },
         ],
     });

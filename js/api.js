@@ -27,7 +27,7 @@ function thinkingOffParams() {
 // 取补全的最终文本，兼容三种正文形态：普通字符串 / 分段数组（content:[{type:'text'}]）/
 // 推理模型正文为空时把内容放进思考字段（reasoning_content / reasoning）。
 // 仍取不到时按证据报错：finish_reason 与 usage 能区分「长度耗尽 / 被过滤 / 字段不认识」
-function pickContent(message, { finishReason = '', completionTokens = null } = {}) {
+function pickContent(message, { finishReason = '', completionTokens = null, promptTokens = null } = {}) {
     const c = message?.content;
     let text = typeof c === 'string' ? c
         : (Array.isArray(c) ? c.map(p => (typeof p === 'string' ? p : String(p?.text ?? ''))).join('') : '');
@@ -38,7 +38,10 @@ function pickContent(message, { finishReason = '', completionTokens = null } = {
     if (text.trim()) return text;
 
     const raw = JSON.stringify(message) ?? '';
-    const evidence = `finish_reason=${finishReason || '（无）'}${completionTokens != null ? `，completion_tokens=${completionTokens}` : ''}，消息原文（前 150 字）：${raw.slice(0, 150)}`;
+    const evidence = `finish_reason=${finishReason || '（无）'}`
+        + `${completionTokens != null ? `，completion_tokens=${completionTokens}` : ''}`
+        + `${promptTokens != null ? `，输入实报 ${promptTokens.toLocaleString()} tokens` : ''}`
+        + `，消息原文（前 150 字）：${raw.slice(0, 150)}`;
     if (finishReason === 'length') {
         const offNote = settings.api.thinkingOff
             ? '。「关闭思考」已勾上仍如此：这个端点/中转多半没真正执行关闭参数（参数收下了、思考照做，或把思考扣下不回传但照样计费）'
@@ -108,7 +111,7 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
         const choice = data?.choices?.[0];
         if (!choice?.message) throw new ApiError('API 返回结构异常（缺少 choices[0].message）');
         if (typeof onUsage === 'function' && data?.usage) onUsage(data.usage);
-        return pickContent(choice.message, { finishReason: choice.finish_reason, completionTokens: data?.usage?.completion_tokens });
+        return pickContent(choice.message, { finishReason: choice.finish_reason, completionTokens: data?.usage?.completion_tokens, promptTokens: data?.usage?.prompt_tokens });
     }
 
     // SSE 流式：逐行解析 data: {...}，聚合增量并回调 onDelta
@@ -319,7 +322,17 @@ export async function chatCompletionWithTools({ messages, temperature, maxTokens
         const message = data?.choices?.[0]?.message;
         const calls = withTools && Array.isArray(message?.tool_calls) ? message.tool_calls : [];
         if (!calls.length) {
-            return { content: pickContent(message, { finishReason: data?.choices?.[0]?.finish_reason, completionTokens: data?.usage?.completion_tokens }), searchLogs, usage };
+            try {
+                return {
+                    content: pickContent(message, { finishReason: data?.choices?.[0]?.finish_reason, completionTokens: data?.usage?.completion_tokens, promptTokens: data?.usage?.prompt_tokens }),
+                    searchLogs,
+                    usage,
+                };
+            } catch (err) {
+                err.usage = usage;        // 失败也把真实账单附上：上层 catch 里照常弹「实报输入/输出」
+                err.searchLogs = searchLogs;
+                throw err;
+            }
         }
         if (round >= maxToolRounds) {
             // 到达轮次上限：撤掉工具并明确要求收尾，逼模型基于已有信息输出最终结果

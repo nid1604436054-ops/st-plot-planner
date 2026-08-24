@@ -161,7 +161,7 @@ function wireHistory(el, container) {
     });
     el.querySelector('#pp_gd_hist_clear')?.addEventListener('click', () => {
         clearHistory();
-        toastr.success('已清空历史归档（进行中剧情保留）');
+        toastr.success('已清空历史归档（进行中剧情不受影响；要让提示词不再附带它，请点状态条上的「结束剧情」）');
         renderStoryBar(container);
     });
     el.querySelectorAll('[data-hview]').forEach(b => b.addEventListener('click', () => {
@@ -302,6 +302,17 @@ function wizardStorageItems() {
 // 联网搜索工具是否会对本次分析生效：设置页开了「允许模型自主调用」且填了搜索密钥。
 // 生效时模型可能多轮检索，每轮把全部材料原样重发，后台总输入 = 单次规模 × 请求次数
 const searchToolActive = () => settings.search?.toolMode !== false && searchToolReady();
+
+// 第 2 步事件生成用的材料 = 第 1 步的本次选择（记忆表范围/标签、玩法勾选、预设勾选），
+// 与分析调用完全同一批——两步口径一致才能互相对账
+function wizardMaterials() {
+    return {
+        memoryTags: wizardMemoryTags(),
+        memorySheets: wizardMemorySheets(),
+        storageItems: wizardStorageItems(),
+        presets: runPresets(),
+    };
+}
 
 // 跳过类按钮先停在「分析前确认」页，不直接花一次模型调用
 function goReady(container, from) {
@@ -543,7 +554,7 @@ function renderEvent(container, main) {
         status.textContent = '大模型随机生成中……';
         try {
             ev.mode = 'llm';
-            ev.event = await generateFreeRandomEvent({ useLibrary: ev.useLibrary, wantPreview: ev.wantPreview });
+            ev.event = await generateFreeRandomEvent({ useLibrary: ev.useLibrary, wantPreview: ev.wantPreview, materials: wizardMaterials() });
             ev.choiceIdx = null;
             renderEvCard(out);
             status.textContent = '已生成（点选项选定走向，也可都不选只当参考）';
@@ -570,18 +581,18 @@ function renderEvent(container, main) {
         try {
             if (r.mode === 'library') {
                 ev.mode = 'lib';
-                ev.event = await generateRandomEvent(r.rule);
+                ev.event = await generateRandomEvent(r.rule, wizardMaterials());
                 commitRolledEvent({ rule: r.rule, dimension: r.dimension, title: ev.event.title, source: 'library' });
                 status.textContent = `来自事件库「${r.rule.name}」`;
             } else if (r.mode === 'ai') {
                 ev.mode = 'ai';
-                ev.event = await generateAiChoiceRandomEvent({ dimensions: r.dimensions });
+                ev.event = await generateAiChoiceRandomEvent({ dimensions: r.dimensions, materials: wizardMaterials() });
                 const dim = r.dimensions.find(d => d.name === ev.event?.dimension) ?? null;
                 commitRolledEvent({ dimension: dim, title: ev.event.title, source: 'ai' });
                 status.textContent = `来自 AI 自主${dim ? `·维度「${dim.name}」` : ''}`;
             } else {
                 ev.mode = 'free';
-                ev.event = await generateFreeRandomEvent({ dimension: r.dimension, useLibrary: ev.useLibrary, wantPreview: ev.wantPreview });
+                ev.event = await generateFreeRandomEvent({ dimension: r.dimension, useLibrary: ev.useLibrary, wantPreview: ev.wantPreview, materials: wizardMaterials() });
                 commitRolledEvent({ dimension: r.dimension, title: ev.event.title, source: 'free' });
                 status.textContent = `来自维度「${r.dimension.name}」自由生成`;
             }

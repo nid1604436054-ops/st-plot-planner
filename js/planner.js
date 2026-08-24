@@ -71,12 +71,12 @@ export const REVIEW_SYSTEM_PROMPT = [
 function assemblePresets(presets) {
     const src = Array.isArray(presets) ? presets : (settings.guidance?.presets ?? []).filter(p => p.enabled);
     return src
-        .filter(p => String(p.content ?? '').trim())
+        .filter(p => String(p?.content ?? '').trim())
         .map(p => `### ${p.name}\n${String(p.content).trim()}`)
         .join('\n\n');
 }
 
-function withPresets(base, custom) {
+export function withPresets(base, custom) {
     return custom ? `${base}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n${custom}` : base;
 }
 
@@ -95,21 +95,32 @@ function billToast(usage, searchLogs = []) {
 async function guidanceCompletion(messages) {
     if (!(settings.search?.toolMode && searchToolReady())) {
         const usage = { requests: 1, promptTokens: 0, completionTokens: 0 };
-        const text = await chatCompletion({
-            messages,
-            onUsage: u => { usage.promptTokens = u.prompt_tokens ?? 0; usage.completionTokens = u.completion_tokens ?? 0; },
-        });
-        billToast(usage);
-        return text;
+        try {
+            const text = await chatCompletion({
+                messages,
+                onUsage: u => { usage.promptTokens = u.prompt_tokens ?? 0; usage.completionTokens = u.completion_tokens ?? 0; },
+            });
+            billToast(usage);
+            return text;
+        } catch (err) {
+            billToast(usage);   // 失败也要报真实账单：空内容报错时的输入/输出对账全靠它
+            err.usage = usage;
+            throw err;
+        }
     }
     const SEARCH_HINT = '\n\n## 联网搜索\n你可以调用 web_search 工具检索现实世界的真实信息：'
         + '涉及现实事实、时效性内容（近期事件、数据、新闻）或你不确定的现实细节时，先搜索再下结论；纯虚构设定不要搜索。'
         + '搜索结果仅供参考，最终仍只输出上面规定的 JSON，不要输出 JSON 以外的任何文字。';
-    const { content, searchLogs, usage } = await chatCompletionWithTools({
-        messages: messages.map(m => (m.role === 'system' ? { ...m, content: m.content + SEARCH_HINT } : m)),
-    });
-    billToast(usage, searchLogs);
-    return content;
+    try {
+        const { content, searchLogs, usage } = await chatCompletionWithTools({
+            messages: messages.map(m => (m.role === 'system' ? { ...m, content: m.content + SEARCH_HINT } : { ...m })),
+        });
+        billToast(usage, searchLogs);
+        return content;
+    } catch (err) {
+        billToast(err.usage, err.searchLogs ?? []);   // usage/searchLogs 由 chatCompletionWithTools 附在错误上
+        throw err;
+    }
 }
 
 // 本地检索统计（向导第 1 步展示用；纯本地，不调模型）
@@ -161,13 +172,13 @@ function reactionSection(header) {
  * @param {Array}  [options.storageItems]        游戏玩法条目（{name, content}）：勾选后作为
  *                                               「游戏玩法」小节发给模型，规划须在其约束内设计
  */
-export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets, memoryTags = null, memorySheets = null, storageItems = [] } = options;
+// 供规划分析与随机事件生成共用的材料小节（两处口径完全一致）：
+// 角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要。
+// 随机事件是向导第 2 步，材料必须与第 1 步预览同一批——各算一份必然对不上账
+export function materialSections({ memoryTags = null, memorySheets = null, storageItems = [], activePlan = '', historySummaries = [] } = {}) {
     const { chatList, hits } = collectPlanningContext();
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
-
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets });
-
     const summaries = (historySummaries ?? []).filter(Boolean);
     const parts = [
         '## 角色设定摘要',
@@ -181,20 +192,29 @@ export function buildGuidanceMessages(options = {}) {
         ...reactionSection('## 路人反应（当前生效的反应卡，后续剧情安排与其扩散、收束口径一致）'),
         ...(activePlan ? ['## 进行中剧情（正在执行的规划，检查进度与重复时对照它）', activePlan] : []),
         ...(summaries.length ? ['## 历史剧情摘要（只用于查重）', summaries.map((s, i) => `${i + 1}. ${s}`).join('\n')] : []),
+    ];
+    return { parts, hits };
+}
+
+export function buildGuidanceMessages(options = {}) {
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets, memoryTags = null, memorySheets = null, storageItems = [] } = options;
+    const { parts, hits } = materialSections({ memoryTags, memorySheets, storageItems, activePlan, historySummaries });
+    const all = [
+        ...parts,
         ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),
         ...(previousPlan ? ['## 上一版规划（请按修改意见修订）', previousPlan] : []),
         ...(revisionNote ? ['## 修改意见', revisionNote] : []),
         ...(userNote ? ['## 用户剧情构思与补充说明', userNote] : []),
     ];
-    const userContent = parts.join('\n\n');
+    const userContent = all.join('\n\n');
 
     // 逐小节精确字数（「查看完整提示词」预览展示用）：数组按「标题、正文」交替排布。
     // 统计的是字符数不是 token 估算——世界书一节偏小，说明大部分词条没被关键词带出
     const sections = [];
-    for (let i = 0; i < parts.length; i += 2) {
+    for (let i = 0; i < all.length; i += 2) {
         sections.push({
-            title: parts[i].replace(/^## /, '').replace(/（.*$/, ''),
-            chars: parts[i].length + (parts[i + 1]?.length ?? 0),
+            title: all[i].replace(/^## /, '').replace(/（.*$/, ''),
+            chars: all[i].length + (all[i + 1]?.length ?? 0),
         });
     }
 
