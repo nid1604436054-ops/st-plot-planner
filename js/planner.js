@@ -81,44 +81,103 @@ export function withPresets(base, custom) {
 }
 
 // 真实账单提示（数字取服务商 usage 实报，非估算）：分析与检查调用结束就亮出来，
-// 方便和「查看完整提示词」的材料字数对账——中文实际约 1.4~1.6 字/token，比预览粗估省
-function billToast(usage, searchLogs = []) {
+// 方便和「查看完整提示词」的材料字数对账——中文实际约 1.4~1.6 字/token，比预览粗估省。
+// researchReqs：检索助手阶段发掉的轻量请求数（每份只有千字简报，不含全套材料）
+function billToast(usage, searchLogs = [], researchReqs = 0) {
     const parts = [];
-    if (usage?.requests > 1) parts.push(`联网搜索往返 ${usage.requests} 次请求（每次重发全部材料，输入按次数累加）`);
-    if (usage?.promptTokens) parts.push(`输入 ${usage.promptTokens.toLocaleString()} · 输出 ${usage.completionTokens.toLocaleString()} tokens（服务商实报）`);
-    if (searchLogs.length) parts.push(`模型自主联网检索了：${searchLogs.join('；')}`);
+    if (researchReqs > 0) parts.push(`联网检索 ${researchReqs} 次轻量请求（只发剧情简报，全套材料只发 1 次）`);
+    if (usage?.promptTokens) parts.push(`合计输入 ${usage.promptTokens.toLocaleString()} · 输出 ${usage.completionTokens.toLocaleString()} tokens（服务商实报）`);
+    if (searchLogs.length) parts.push(`模型检索了：${searchLogs.join('；')}`);
     if (parts.length) toastr.info(parts.join('；'));
 }
 
-// 剧情分析 / 检查报告的统一出口：搜索工具配置齐且开启时，把 web_search 交给模型自主调用
-// （并提示它什么情况该搜）；端点不支持 tools 参数时由 chatCompletionWithTools 自动降级为普通请求
-async function guidanceCompletion(messages) {
-    if (!(settings.search?.toolMode && searchToolReady())) {
-        const usage = { requests: 1, promptTokens: 0, completionTokens: 0 };
+// 检索助手的系统提示词：搜索是独立子调用，模型只在这一小份上下文里决定搜什么、汇总成纪要。
+// 全套材料不进入工具循环——tools 协议要求每轮把 messages 原样重发，材料进去就是按轮数翻倍计费
+const RESEARCH_SYSTEM_PROMPT = [
+    '你是联网检索助手。用户正在为一篇文字角色扮演作品做剧情规划/执行检查，会给你一份浓缩的剧情背景简报。',
+    '判断这份工作可能需要哪些现实世界的真实信息（时代背景、地域、行业、物品、机构、法规、近况、数据等），需要就调用 web_search 工具检索；纯虚构设定不要检索，与剧情无关的信息不要凑数。',
+    '检索完成后输出一份纪要供规划模型使用：Markdown 列表，每条一句话并附来源网址，总共不超过 300 字；没有值得检索的内容或检索无所得时只写「（无补充）」。',
+    '不要输出纪要以外的任何文字。',
+].join('\n');
+
+/**
+ * 检索简报：给检索助手的浓缩版剧情背景（千字级），字段与 buildGuidanceMessages 同源但全部截短。
+ * 工具循环每轮重发的是这份小简报而不是全套材料——搜索计费从「材料规模 × 请求次数」
+ * 降回「材料 1 次 + 简报 × 次数」全靠它
+ */
+export function buildResearchBrief({ topic = '', userNote = '', eventText = '', activePlan = '', historySummaries = [], planText = '' } = {}) {
+    const clip = (s, n) => String(s ?? '').trim().slice(0, n);
+    const plan = clip(planText || activePlan, 500);
+    const summaries = (historySummaries ?? []).filter(Boolean).join(' / ');
+    const chatTail = formatChatLog(collectPlanningContext().chatList.slice(-6)).slice(-800);
+    return [
+        `## 检索任务\n${clip(topic, 120) || '为接下来的剧情规划收集现实世界背景信息'}`,
+        `## 角色设定摘要\n${clip(characterSummary(200), 200) || '（无角色卡）'}`,
+        plan ? `## 进行中剧情（节选）\n${plan}` : '',
+        summaries ? `## 历史剧情摘要\n${clip(summaries, 300)}` : '',
+        eventText ? `## 本次随机事件（节选）\n${clip(eventText, 200)}` : '',
+        userNote ? `## 用户构思与要求\n${clip(userNote, 400)}` : '',
+        chatTail ? `## 最近对话节选\n${chatTail}` : '',
+    ].filter(Boolean).join('\n\n');
+}
+
+/**
+ * 联网检索子调用：千字简报 + web_search 工具循环，产出一份检索纪要。
+ * 检索轮次上限 2（含收尾至多 4 次轻量请求）；端点不支持 tools 参数时自动降级为不检索直接作答
+ * @returns {Promise<{notes:string, searchLogs:string[], usage:object}>}
+ */
+export async function runWebResearch(research = {}) {
+    const { content, searchLogs, usage } = await chatCompletionWithTools({
+        messages: [
+            { role: 'system', content: RESEARCH_SYSTEM_PROMPT },
+            { role: 'user', content: buildResearchBrief(research) },
+        ],
+        maxToolRounds: 2,
+    });
+    return { notes: String(content ?? '').trim(), searchLogs, usage };
+}
+
+// 剧情分析 / 检查报告的统一出口。搜索开着时拆成两段：
+// ① 检索助手——只有千字简报进工具循环，搜几轮重发的都是这份小简报；
+// ② 正式分析——全套材料只发这一次（不带工具），纪要作为附加小节带进去。
+// 检索失败不拦分析：警告一声继续（已产生的检索计费照实累计上报）
+async function guidanceCompletion(messages, research = {}) {
+    const total = { promptTokens: 0, completionTokens: 0 };
+    const add = u => {
+        total.promptTokens += u?.promptTokens ?? u?.prompt_tokens ?? 0;
+        total.completionTokens += u?.completionTokens ?? u?.completion_tokens ?? 0;
+    };
+    let searchLogs = [];
+    let researchReqs = 0;
+    let notes = '';
+
+    if (settings.search?.toolMode && searchToolReady()) {
         try {
-            const text = await chatCompletion({
-                messages,
-                onUsage: u => { usage.promptTokens = u.prompt_tokens ?? 0; usage.completionTokens = u.completion_tokens ?? 0; },
-            });
-            billToast(usage);
-            return text;
+            const r = await runWebResearch(research);
+            add(r.usage);
+            researchReqs = r.usage?.requests ?? 0;
+            searchLogs = r.searchLogs ?? [];
+            notes = r.notes;
         } catch (err) {
-            billToast(usage);   // 失败也要报真实账单：空内容报错时的输入/输出对账全靠它
-            err.usage = usage;
-            throw err;
+            if (err.name === 'AbortError') throw err;
+            add(err.usage);   // 检索阶段失败也可能已产生计费（如空内容报错），照实累计
+            toastr.warning(`联网检索失败，跳过检索继续分析：${err.message}`);
         }
     }
-    const SEARCH_HINT = '\n\n## 联网搜索\n你可以调用 web_search 工具检索现实世界的真实信息：'
-        + '涉及现实事实、时效性内容（近期事件、数据、新闻）或你不确定的现实细节时，先搜索再下结论；纯虚构设定不要搜索。'
-        + '搜索结果仅供参考，最终仍只输出上面规定的 JSON，不要输出 JSON 以外的任何文字。';
+
+    const withNotes = notes && !/^（无补充）/.test(notes)
+        ? messages.map(m => (m.role === 'user'
+            ? { ...m, content: `${m.content}\n\n## 联网检索纪要（检索助手联网查到的现实信息，仅供参考）\n${notes}` }
+            : m))
+        : messages;
+
     try {
-        const { content, searchLogs, usage } = await chatCompletionWithTools({
-            messages: messages.map(m => (m.role === 'system' ? { ...m, content: m.content + SEARCH_HINT } : { ...m })),
-        });
-        billToast(usage, searchLogs);
-        return content;
+        const text = await chatCompletion({ messages: withNotes, onUsage: add });
+        billToast(total, searchLogs, researchReqs);
+        return text;
     } catch (err) {
-        billToast(err.usage, err.searchLogs ?? []);   // usage/searchLogs 由 chatCompletionWithTools 附在错误上
+        billToast(total, searchLogs, researchReqs);   // 失败也要报真实账单：空内容报错时的输入/输出对账全靠它
+        err.usage = { requests: researchReqs + 1, ...total };
         throw err;
     }
 }
@@ -232,10 +291,19 @@ export function buildGuidanceMessages(options = {}) {
  */
 export async function runPlotGuidance(options = {}) {
     const { system, user, hits } = buildGuidanceMessages(options);
-    const raw = await guidanceCompletion([
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-    ]);
+    const raw = await guidanceCompletion(
+        [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+        ],
+        {
+            topic: '为接下来的剧情规划收集需要的现实世界背景信息',
+            userNote: options.userNote ?? '',
+            eventText: options.eventText ?? '',
+            activePlan: options.activePlan ?? '',
+            historySummaries: options.historySummaries ?? [],
+        },
+    );
     try {
         return { result: extractJson(raw), raw, hits };
     } catch (err) {
@@ -273,10 +341,17 @@ export async function runStoryReview({ planText = '', userNote = '', presets } =
         ...(userNote ? ['## 用户补充说明', userNote] : []),
     ].join('\n\n');
 
-    const raw = await guidanceCompletion([
-        { role: 'system', content: withPresets(REVIEW_SYSTEM_PROMPT, assemblePresets(presets)) },
-        { role: 'user', content: userContent },
-    ]);
+    const raw = await guidanceCompletion(
+        [
+            { role: 'system', content: withPresets(REVIEW_SYSTEM_PROMPT, assemblePresets(presets)) },
+            { role: 'user', content: userContent },
+        ],
+        {
+            topic: '检查剧情执行情况时，核对剧情涉及的现实世界信息',
+            userNote,
+            planText: String(planText || ''),
+        },
+    );
     try {
         return { result: extractJson(raw), raw, hits: hits.length };
     } catch (err) {

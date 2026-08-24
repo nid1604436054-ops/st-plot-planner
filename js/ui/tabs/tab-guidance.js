@@ -300,7 +300,7 @@ function wizardStorageItems() {
 }
 
 // 联网搜索工具是否会对本次分析生效：设置页开了「允许模型自主调用」且填了搜索密钥。
-// 生效时模型可能多轮检索，每轮把全部材料原样重发，后台总输入 = 单次规模 × 请求次数
+// 生效时分析前先跑一次轻量检索（只发剧情简报，不重发全部材料），纪要附加进分析材料
 const searchToolActive = () => settings.search?.toolMode !== false && searchToolReady();
 
 // 第 2 步事件生成用的材料 = 第 1 步的本次选择（记忆表范围/标签、玩法勾选、预设勾选），
@@ -469,7 +469,7 @@ function renderCollect(container, main) {
             const usrTok = estimateTokens(user);
             const totalChars = sections.reduce((n, s) => n + s.chars, 0);
             const secLine = sections.map(s => `${s.title} ${s.chars.toLocaleString()} 字`).join(' · ');
-            view.innerHTML = `<div class="pp-muted" style="margin-bottom:6px" title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考">材料共 ${totalChars.toLocaleString()} 字，粗估约 ${(sysTok + usrTok).toLocaleString()} tokens（实际分词通常更省：中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：模型多轮检索时每轮重发全部材料，实际输入按请求次数累加' : ''}</div>`
+            view.innerHTML = `<div class="pp-muted" style="margin-bottom:6px" title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考">材料共 ${totalChars.toLocaleString()} 字，粗估约 ${(sysTok + usrTok).toLocaleString()} tokens（实际分词通常更省：中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：分析前先做一次轻量检索（只发剧情简报），检索纪要会追加为附加小节，不在此预览内' : ''}</div>`
                 + `<div class="pp-muted" style="margin-bottom:6px" title="逐小节的精确字符数（非估算）。世界书一节只含关键词命中或勾了「常驻」的条目，不是全部词条——想让重要词条每次都带上，到「世界书」页勾「常驻」">材料构成：${escapeHtml(secLine)}</div>`
                 + escapeHtml(`【系统提示词】\n${system}\n\n【用户消息】\n${user}`);
             view.style.display = '';

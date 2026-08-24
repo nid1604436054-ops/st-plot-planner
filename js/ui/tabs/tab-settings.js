@@ -74,7 +74,7 @@ export const settingsTab = {
                     <input id="pp_set_smax" class="text_pole textarea_compact" type="number" min="1" max="10" />
                 </div>
                 <div>
-                    <label class="pp-label" title="取消后规划与检查不再带搜索工具，只保留下方的手动试搜">允许模型自主调用</label>
+                    <label class="pp-label" title="勾上后：分析/检查前由检索助手先联网查一轮（只发剧情简报，按简报计费，不重发全部材料），纪要附进分析材料；取消则完全不联网，只保留下方的手动试搜">允许模型自主调用</label>
                     <input id="pp_set_stool" type="checkbox" />
                 </div>
             </div>
