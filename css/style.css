@@ -192,13 +192,38 @@
     min-width: 90px;
 }
 
-/* 条目行「常驻」勾选：不参与伸缩，跟在启用框后面 */
-.pp-entry-const {
+/* 条目状态三段式选择器（停用/关键词/常驻），替代原来并排的两个勾（应用户反馈：两个勾丑）。
+   选中段加粗提亮：关键词淡蓝、常驻沿用绿色（与注入「开」徽章同色），停用用默认前景色 */
+.pp-seg {
+    display: inline-flex;
     flex: 0 0 auto;
-    white-space: nowrap;
-    cursor: pointer;
-    opacity: 0.85;
+    border: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
+    border-radius: 5px;
+    overflow: hidden;
 }
+
+.pp-seg-opt {
+    padding: 2px 8px;
+    font-size: 0.85em;
+    opacity: 0.45;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.pp-seg-opt + .pp-seg-opt {
+    border-left: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
+}
+
+.pp-seg-opt.on {
+    opacity: 1;
+    font-weight: bold;
+    background: rgba(128, 128, 128, 0.18);
+}
+
+.pp-seg-opt.on[data-state="kw"] { color: #7fb3ff; }
+
+.pp-seg-opt.on[data-state="const"] { color: #7fd18a; }
 
 .pp-entry-keys {
     flex: 1 1 200px;

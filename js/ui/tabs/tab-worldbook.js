@@ -1,5 +1,6 @@
 // 世界书页签：导入（酒馆 JSON / 纯文本单条粘贴）、书改名/启停/删除、
-// 条目级编辑（标题/关键词/标签/内容/删除/添加）、检索测试。
+// 条目级编辑（标题/关键词/标签/内容/删除/添加）、检索测试、回收站（删除先进回收站可恢复）。
+// 条目状态用三段式选择器（停用/关键词/常驻），替代原来的启用+常驻两个勾（应用户反馈：两个勾丑）。
 // 标签不参与关键词检索：只供「路人反应」的材料勾选按标签筛条目（全局共享，与按对话的书单是两回事）
 // 「启用」勾选按对话记忆（chatMetadata.plotPlannerBooks）：每个对话一套书单、
 // 随聊天文件保存，切换对话自动恢复各自的勾选，不用每次重勾
@@ -7,6 +8,7 @@ import { settings, save } from "../../settings.js";
 import {
     importSillyTavernJson, createTextBook, addLorebook, removeLorebook,
     findEntry, addEntry, removeEntry, scanLorebooks, parseKeys,
+    trashBook, trashEntry, restoreTrashItem, purgeTrashItem, clearTrash,
 } from "../../lorebook.js";
 import { chatMeta, persistChat, chatEnabledBookIds, collectRecentChat, formatChatLog } from "../../context.js";
 import { escapeHtml, clamp, readFileAsText } from "../../utils.js";
@@ -53,6 +55,7 @@ export const worldbookTab = {
                 <input id="pp_wb_import_json" type="file" accept=".json,application/json" hidden />
                 <div id="pp_wb_import_txt" class="menu_button">导入纯文本</div>
                 <div id="pp_wb_scan" class="menu_button">检索测试</div>
+                <div id="pp_wb_trash" class="menu_button" title="删除的书和条目先进回收站，可恢复或彻底删除">回收站</div>
             </div>
             <div id="pp_wb_txt_editor" style="display:none">
                 <label class="pp-label">书名</label>
@@ -66,18 +69,27 @@ export const worldbookTab = {
                     <div id="pp_wb_txt_cancel" class="menu_button">取消</div>
                 </div>
             </div>
-            <div class="pp-muted" title="勾选存在聊天文件里（chatMetadata），每个对话一套书单；条目的启停与常驻仍是全局的">「启用」按对话记忆：勾选只对当前对话生效、随聊天文件保存，切换对话自动恢复各自的勾选；还没动过勾选的对话沿用各书的默认启停</div>
+            <div class="pp-muted" title="勾选存在聊天文件里（chatMetadata），每个对话一套书单；条目的状态与常驻仍是全局的">「启用」按对话记忆：勾选只对当前对话生效、随聊天文件保存，切换对话自动恢复各自的勾选；还没动过勾选的对话沿用各书的默认启停</div>
+            <div class="pp-muted" title="关键词检索的扫描窗口在「设置」页的检索参数里调（默认最近 20 层）">这套世界书是插件自己的资料库：不接入酒馆原生世界书、不影响日常聊天，只在插件调模型（剧情规划/路人反应）时拿最近对话来检索。条目状态三选一：停用＝不带出 · 关键词＝对话里出现关键词才带出 · 常驻＝每次必带；「标签」不参与检索，是「路人反应」材料勾选里按标签圈条目的手动通道</div>
             <div id="pp_wb_list" style="margin-top:6px"></div>
         </div>
         <div id="pp_wb_scan_wrap" class="pp-section" style="display:none">
             <b>检索测试</b>
-            <span class="pp-muted">输入一段测试剧情，看会命中哪些条目；留空则用最近 ${settings.retrieval.scanDepth} 层对话来测。命中规则：条目已启用，且（勾了常驻，或任一关键词出现在这段文本里）。常驻条目没有关键词也会出现在结果里。</span>
+            <span class="pp-muted">输入一段测试剧情，看会命中哪些条目；留空则用最近 ${settings.retrieval.scanDepth} 层对话来测。命中规则：条目状态不是停用，且（状态为常驻，或任一关键词出现在这段文本里）。常驻条目没有关键词也会出现在结果里。</span>
             <textarea id="pp_wb_scan_text" class="text_pole textarea_compact" rows="3" placeholder="例如：她推开皇宫侧门，撞见了龙骑士团的队长"></textarea>
             <div class="pp-btn-row">
                 <div id="pp_wb_scan_run" class="menu_button">测试命中</div>
             </div>
             <div id="pp_wb_scanned_text" class="pp-muted"></div>
             <div id="pp_wb_hits"></div>
+        </div>
+        <div id="pp_wb_trash_wrap" class="pp-section" style="display:none">
+            <b>回收站</b>
+            <span class="pp-muted">删除的书和条目先进这里（最多 30 条，超出自动丢最旧）。恢复的书按原样放回，各对话里原来的启用勾选也随之恢复；恢复条目时若原书已不在，会提示先恢复那本书。「彻底删除」和「清空」才真的不可恢复。</span>
+            <div class="pp-btn-row">
+                <div id="pp_wb_trash_clear" class="menu_button" title="两次点击确认：点一次变成确认提示，再点一次才执行">清空回收站</div>
+            </div>
+            <div id="pp_wb_trash_list" style="margin-top:6px"></div>
         </div>`;
 
         container.querySelector('#pp_wb_import_json').addEventListener('change', async e => {
@@ -94,7 +106,7 @@ export const worldbookTab = {
                 // 仍要提醒的是既没关键词也没勾常驻的条目——它们永远不会被带进规划
                 const keyless = book.entries.filter(en => !en.disabled && !en.constant && !(en.keys ?? []).length).length;
                 if (keyless) {
-                    toastr.warning(`「${book.name}」有 ${keyless} 条既没有关键词也不是常驻：这些条目永远不会被带进规划。请到条目旁补关键词（如条目标题或剧情常提的词），或勾选「常驻」`);
+                    toastr.warning(`「${book.name}」有 ${keyless} 条既没有关键词也不是常驻：这些条目永远不会被带进规划。请到条目旁补关键词（如条目标题或剧情常提的词），或把状态切到「常驻」`);
                 }
                 renderBooks(container);
             } catch (err) {
@@ -138,6 +150,7 @@ export const worldbookTab = {
         container.querySelector('#pp_wb_scan').addEventListener('click', () => {
             scanWrap.style.display = scanWrap.style.display === 'none' ? '' : 'none';
         });
+
         container.querySelector('#pp_wb_scan_run').addEventListener('click', () => {
             const typed = container.querySelector('#pp_wb_scan_text').value.trim();
             const text = typed || formatChatLog(collectRecentChat(settings.retrieval.scanDepth));
@@ -152,9 +165,85 @@ export const worldbookTab = {
                 : '<div class="pp-muted">未命中任何条目</div>';
         });
 
+        const trashWrap = container.querySelector('#pp_wb_trash_wrap');
+        container.querySelector('#pp_wb_trash').addEventListener('click', () => {
+            const show = trashWrap.style.display === 'none';
+            trashWrap.style.display = show ? '' : 'none';
+            if (show) renderTrash(container);
+        });
+        container.querySelector('#pp_wb_trash_clear').addEventListener('click', () => {
+            if (!clearArmed) {
+                clearArmed = true;
+                container.querySelector('#pp_wb_trash_clear').textContent = '确认清空？（不可恢复）';
+                return;
+            }
+            clearTrash();
+            save();
+            toastr.success('回收站已清空');
+            renderTrash(container);
+            updateTrashLabel(container);
+        });
+        updateTrashLabel(container);
         renderBooks(container);
     },
 };
+
+// 回收站清空按钮的两次点击确认状态：点一次只变文案，再点才执行；每次重渲染回收站时复位
+let clearArmed = false;
+
+function updateTrashLabel(container) {
+    const btn = container.querySelector('#pp_wb_trash');
+    if (!btn) return;
+    const n = (settings.lorebookTrash ?? []).length;
+    btn.innerHTML = `回收站${n ? `（${n}）` : ''}`;
+}
+
+function renderTrash(container) {
+    clearArmed = false;
+    const wrap = container.querySelector('#pp_wb_trash_wrap');
+    if (!wrap) return;
+    const listEl = wrap.querySelector('#pp_wb_trash_list');
+    const clearBtn = wrap.querySelector('#pp_wb_trash_clear');
+    clearBtn.textContent = '清空回收站';
+    const trash = settings.lorebookTrash ?? [];
+    listEl.innerHTML = trash.length ? trash.map(t => {
+        const isBook = t.kind === 'book';
+        const title = isBook
+            ? `书「${t.book.name}」（${t.book.entries.length} 个条目）`
+            : `条目「${t.entry.comment}」（原属「${t.bookName}」）`;
+        return `
+        <div class="pp-item">
+            <div class="pp-item-main">
+                <div class="pp-item-title"><i class="fa-solid ${isBook ? 'fa-book' : 'fa-file-lines'}" style="margin-right:4px"></i>${escapeHtml(title)}</div>
+                <div class="pp-muted">删于 ${new Date(t.at).toLocaleString()}</div>
+            </div>
+            <div class="pp-item-ops">
+                <span class="menu_button" data-trestore="${t.id}" title="放回原来的位置（书按原样放回，条目回原书）">恢复</span>
+                <span class="menu_button fa-solid fa-trash" data-tpurge="${t.id}" title="彻底删除，不可恢复"></span>
+            </div>
+        </div>`;
+    }).join('') : '<div class="pp-muted">回收站是空的</div>';
+
+    listEl.querySelectorAll('[data-trestore]').forEach(el => el.addEventListener('click', () => {
+        const r = restoreTrashItem(el.dataset.trestore);
+        if (!r.ok) {
+            toastr.error(r.error);
+            return;
+        }
+        save();
+        openBooks.add(r.bookId);
+        toastr.success('已恢复');
+        renderTrash(container);
+        renderBooks(container);
+        updateTrashLabel(container);
+    }));
+    listEl.querySelectorAll('[data-tpurge]').forEach(el => el.addEventListener('click', () => {
+        purgeTrashItem(el.dataset.tpurge);
+        save();
+        renderTrash(container);
+        updateTrashLabel(container);
+    }));
+}
 
 function enabledCount(book) {
     return book.entries.filter(e => !e.disabled).length;
@@ -207,8 +296,11 @@ function renderBooks(container) {
                 ${b.entries.map(e => `
                 <div class="pp-entry">
                     <div class="pp-entry-row">
-                        <input type="checkbox" data-een="${b.id}:${e.uid}" ${e.disabled ? '' : 'checked'} title="启用/停用该条目" />
-                        <label class="pp-entry-const" title="常驻：不看关键词，每次检索恒带出（对齐酒馆原生的常驻条目），排在关键词命中前面"><input type="checkbox" data-econst="${b.id}:${e.uid}" ${e.constant ? 'checked' : ''} /> 常驻</label>
+                        <div class="pp-seg" data-eseg="${b.id}:${e.uid}" title="条目状态（替代原来的启用/常驻两个勾）：停用＝不参与检索；关键词＝最近对话里出现关键词才带出；常驻＝每次必带、不看关键词（对齐酒馆原生常驻），排在关键词命中前面">
+                            <span class="pp-seg-opt${e.disabled ? ' on' : ''}" data-state="off">停用</span>
+                            <span class="pp-seg-opt${!e.disabled && !e.constant ? ' on' : ''}" data-state="kw">关键词</span>
+                            <span class="pp-seg-opt${!e.disabled && e.constant ? ' on' : ''}" data-state="const">常驻</span>
+                        </div>
                         <input type="text" class="text_pole pp-entry-name" data-ename="${b.id}:${e.uid}" value="${escapeHtml(e.comment)}" placeholder="条目标题" title="条目标题，可直接修改" />
                         <input type="text" class="text_pole pp-entry-keys" data-ekeys="${b.id}:${e.uid}" value="${escapeHtml((e.keys ?? []).join(','))}" placeholder="关键词，逗号分隔" title="检索关键词，逗号分隔；留空则只有勾「常驻」才会带出" />
                         <input type="text" class="text_pole pp-entry-tags" data-etags="${b.id}:${e.uid}" value="${escapeHtml((e.tags ?? []).join(','))}" placeholder="标签，逗号分隔" title="条目标签，逗号分隔：全局共享，不参与关键词检索；「路人反应」的材料勾选里可按标签筛选只带这些条目" />
@@ -237,26 +329,28 @@ function renderBooks(container) {
         toggleBookInChat(el.dataset.en, el.checked);
     }));
     list.querySelectorAll('[data-del]').forEach(el => el.addEventListener('click', () => {
-        openBooks.delete(el.dataset.del);
+        const book = settings.lorebooks.find(b => b.id === el.dataset.del);
+        if (book) trashBook(book);
         removeLorebook(el.dataset.del);
+        openBooks.delete(el.dataset.del);
         save();
+        toastr.success(`已删除「${book?.name ?? ''}」，进了回收站，可恢复`);
         renderBooks(container);
+        updateTrashLabel(container);
+        if (container.querySelector('#pp_wb_trash_wrap')?.style.display !== 'none') renderTrash(container);
     }));
 
-    list.querySelectorAll('[data-een]').forEach(el => el.addEventListener('change', () => {
-        const [bookId, uid] = el.dataset.een.split(':');
+    list.querySelectorAll('.pp-seg-opt').forEach(el => el.addEventListener('click', () => {
+        if (el.classList.contains('on')) return;
+        const [bookId, uid] = el.closest('.pp-seg').dataset.eseg.split(':');
         const entry = findEntry(bookId, uid);
         if (!entry) return;
-        entry.disabled = !el.checked;
+        entry.disabled = el.dataset.state === 'off';
+        entry.constant = el.dataset.state === 'const';
         save();
+        // 就地翻高亮，不整列表重渲染（避免丢输入焦点和滚动位置）
+        el.closest('.pp-seg').querySelectorAll('.pp-seg-opt').forEach(o => o.classList.toggle('on', o === el));
         updateBookCount(list, bookId);
-    }));
-    list.querySelectorAll('[data-econst]').forEach(el => el.addEventListener('change', () => {
-        const [bookId, uid] = el.dataset.econst.split(':');
-        const entry = findEntry(bookId, uid);
-        if (!entry) return;
-        entry.constant = el.checked;
-        save();
     }));
     list.querySelectorAll('[data-ename]').forEach(el => el.addEventListener('change', () => {
         const [bookId, uid] = el.dataset.ename.split(':');
@@ -308,9 +402,15 @@ function renderBooks(container) {
     }));
     list.querySelectorAll('[data-edel]').forEach(el => el.addEventListener('click', () => {
         const [bookId, uid] = el.dataset.edel.split(':');
+        const book = settings.lorebooks.find(b => b.id === bookId);
+        const entry = findEntry(bookId, uid);
+        if (book && entry) trashEntry(book, entry);
         removeEntry(bookId, uid);
         save();
+        toastr.success('已删除条目，进了回收站，可恢复');
         renderBooks(container);
+        updateTrashLabel(container);
+        if (container.querySelector('#pp_wb_trash_wrap')?.style.display !== 'none') renderTrash(container);
     }));
 
     list.querySelectorAll('[data-add]').forEach(el => el.addEventListener('click', () => {

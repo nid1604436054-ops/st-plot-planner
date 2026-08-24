@@ -97,6 +97,61 @@ export function removeEntry(bookId, uid) {
     book.entries = book.entries.filter(e => String(e.uid) !== String(uid));
 }
 
+// ---------------------------------------------------------------------------
+// 回收站：删除的书/条目先进这里（上限 30 条，超出丢最旧），世界书页可恢复或彻底删除。
+// 删除不再是一锤子买卖——用户明确要过恢复功能
+// ---------------------------------------------------------------------------
+
+const TRASH_LIMIT = 30;
+
+function pushTrash(item) {
+    const trash = (settings.lorebookTrash ??= []);
+    trash.unshift({ id: newId('tr-'), at: Date.now(), ...item });
+    if (trash.length > TRASH_LIMIT) trash.length = TRASH_LIMIT;
+}
+
+export function trashBook(book) {
+    pushTrash({ kind: 'book', book });
+}
+
+export function trashEntry(book, entry) {
+    pushTrash({ kind: 'entry', bookId: book.id, bookName: book.name, entry });
+}
+
+// 恢复一条：书按原 id 放回（id 撞车换新 id），条目放回原书（原书没了按书名找，
+// 还没有就恢复失败留在回收站，让用户先恢复那本书）。
+// 返回 { ok:true, bookId } = 成功（bookId 供界面展开那本书）；{ ok:false, error } = 失败原因
+export function restoreTrashItem(id) {
+    const trash = settings.lorebookTrash ?? [];
+    const idx = trash.findIndex(t => t.id === id);
+    if (idx < 0) return { ok: false, error: '回收站里没有这一条' };
+    const item = trash[idx];
+    if (item.kind === 'book') {
+        if (settings.lorebooks.some(b => b.id === item.book.id)) item.book.id = newId('lb-');
+        settings.lorebooks.push(item.book);
+        trash.splice(idx, 1);
+        return { ok: true, bookId: item.book.id };
+    }
+    const book = settings.lorebooks.find(b => b.id === item.bookId)
+        ?? settings.lorebooks.find(b => b.name === item.bookName);
+    if (!book) return { ok: false, error: `原书「${item.bookName}」已不在：请先从回收站恢复那本书` };
+    // 条目删掉后 uid 可能被后来新增的条目占用，撞车就换新 uid
+    if (book.entries.some(e => String(e.uid) === String(item.entry.uid))) {
+        item.entry.uid = book.entries.reduce((m, e) => Math.max(m, Number(e.uid) || 0), -1) + 1;
+    }
+    book.entries.push(item.entry);
+    trash.splice(idx, 1);
+    return { ok: true, bookId: book.id };
+}
+
+export function purgeTrashItem(id) {
+    settings.lorebookTrash = (settings.lorebookTrash ?? []).filter(t => t.id !== id);
+}
+
+export function clearTrash() {
+    settings.lorebookTrash = [];
+}
+
 function enabledBooks(enabledIds = null) {
     // enabledIds：调用方传入的「按对话绑定」书单（null = 该对话没绑定，沿用书的全局 enabled）。
     // 书级开关是把别的世界挡在外面的闸门（常驻条目不看关键词恒带出，全靠它挡），
