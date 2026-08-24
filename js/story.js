@@ -1,5 +1,6 @@
 // 进行中剧情 + 历史归档：存 chatMetadata，跟聊天文件走（同记忆表格 plotPlannerMemory 的做法）
-// 条目结构：{ id, at, planText, summary, note, event:{mode,title,choice}, presetIds, report, reportAt }
+// 条目结构：{ id, at, planText, summary, note, event:{mode,title,choice}, report, reportAt }
+// （历史条目里的 presetIds 字段已随预设全局化退役，读回时忽略）
 import { getTavernContext } from "./context.js";
 import { newId } from "./settings.js";
 
@@ -32,7 +33,7 @@ export function persistStory() {
 }
 
 // 确认采用一份新规划：置为进行中；原进行中的自动留在历史里
-export function confirmPlot({ planText = '', summary = '', note = '', event = null, presetIds = [] } = {}) {
+export function confirmPlot({ planText = '', summary = '', note = '', event = null } = {}) {
     const s = storyState();
     const entry = {
         id: newId('st-'),
@@ -41,7 +42,6 @@ export function confirmPlot({ planText = '', summary = '', note = '', event = nu
         summary: String(summary ?? '').slice(0, 120),
         note: String(note ?? ''),
         event: event ?? null,
-        presetIds: Array.isArray(presetIds) ? [...presetIds] : [],
         report: null,
         reportAt: 0,
     };

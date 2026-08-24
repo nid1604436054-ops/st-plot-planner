@@ -7,7 +7,7 @@ import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
 import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
-import { materialSections as baseMaterialSections, gameplaySection, assemblePresets, withPresets } from "./materials.js";
+import { materialSections as baseMaterialSections, gameplaySection } from "./materials.js";
 import { extractJson, fingerprint } from "./utils.js";
 
 // 输出 schema 两套变体：存在进行中剧情时才要求 progress（推进到哪个阶段 + 约百分比）。
@@ -39,7 +39,8 @@ const outputSchema = withProgress => OUTPUT_SCHEMA_BASE.replace(
     "progress": { "stage": "进行中剧情推进到哪个阶段", "pct": "约x%", "note": "判断依据" }` : '',
 );
 
-// 内置指令：保证返回 JSON（程序要解析成检查项 + 规划），用户预设追加在其后，见 assemblePresets。
+// 内置指令：保证返回 JSON（程序要解析成检查项 + 规划）。用户预设已全局化——启用中的
+// 由 api.js 的 chatCompletion 出口统一拼进 system 末尾（见 globalPresetBlock），此处不再单独拼。
 // hasActivePlan 为真才要求 progress 字段，与 buildGuidanceMessages 是否附带「进行中剧情」小节同步
 export function guidanceSystemPrompt(hasActivePlan = false) {
     return [
@@ -80,10 +81,9 @@ export const REVIEW_SYSTEM_PROMPT = [
     REVIEW_SCHEMA,
 ].join('\n');
 
-// 用户预设拼装（assemblePresets/withPresets）与材料小节构建已抽到 materials.js（reactions.js
-// 也要用、又不能依赖本文件——planner → injection → reactions 已成链）；这里转发导出，
-// randomEvents.js 等既有引用方不用改
-export { assemblePresets, withPresets } from "./materials.js";
+// 材料小节构建已抽到 materials.js（reactions.js 也要用、又不能依赖本文件——
+// planner → injection → reactions 已成链）。预设拼装（assemblePresets/withPresets）
+// 已随全局化退役：启用中的预设由 api.js 出口统一附带，各调用方不再各自拼
 
 // 真实账单提示（数字取服务商 usage 实报，非估算）：分析与检查调用结束就亮出来，
 // 方便和「查看完整提示词」的材料字数对账——中文实际约 1.4~1.6 字/token，比预览粗估省。
@@ -293,7 +293,6 @@ function reactionSection(header) {
  * @param {string} [options.eventText]           随机事件闸口选定的事件/走向文本
  * @param {string} [options.activePlan]          进行中剧情全文（查重与进度对照）
  * @param {string[]} [options.historySummaries]  历史剧情摘要（查重用）
- * @param {Array}  [options.presets]             本次启用的预设数组（缺省取设置里启用的）
  * @param {*}      [options.memoryTags]          记忆表格召回方式：null/缺省=按记忆表格页召回标签，
  *                                               []=全量, ['a','b']=按标签, false=本次不附带
  * @param {*}      [options.memorySheets]        记忆表格表范围：null/缺省=全部（开了召回的表），
@@ -314,7 +313,7 @@ export function materialSections(opts = {}) {
 }
 
 export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], presets, memoryTags = null, memorySheets = null, storageItems = [] } = options;
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, storageItems = [] } = options;
     const { parts, hits } = materialSections({ memoryTags, memorySheets, storageItems, activePlan, historySummaries });
     const all = [
         ...parts,
@@ -336,7 +335,9 @@ export function buildGuidanceMessages(options = {}) {
     }
 
     return {
-        system: withPresets(guidanceSystemPrompt(Boolean(String(activePlan ?? '').trim())), assemblePresets(presets)),
+        // 预设不在这里拼：启用中的由 chatCompletion 出口统一附加（api.withGlobalPresets），
+        // 预览侧用同一个函数拼装，保证「看到的」与「发出的」一致
+        system: guidanceSystemPrompt(Boolean(String(activePlan ?? '').trim())),
         user: userContent,
         hits: hits.length,
         sections,
@@ -371,9 +372,8 @@ export async function runPlotGuidance(options = {}) {
  * @param {object} [options]
  * @param {string} options.planText   进行中剧情全文
  * @param {string} [options.userNote] 补充说明
- * @param {Array}  [options.presets]  本次启用的预设（缺省取设置里启用的）
  */
-export async function runStoryReview({ planText = '', userNote = '', presets, onDelta, onStage } = {}) {
+export async function runStoryReview({ planText = '', userNote = '', onDelta, onStage } = {}) {
     const { chatList, hits } = collectPlanningContext();
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
@@ -396,7 +396,7 @@ export async function runStoryReview({ planText = '', userNote = '', presets, on
 
     const raw = await guidanceCompletion(
         [
-            { role: 'system', content: withPresets(REVIEW_SYSTEM_PROMPT, assemblePresets(presets)) },
+            { role: 'system', content: REVIEW_SYSTEM_PROMPT },
             { role: 'user', content: userContent },
         ],
         {

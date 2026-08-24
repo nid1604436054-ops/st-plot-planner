@@ -6,7 +6,6 @@
 import { collectPlanningContext, formatChatLog, characterSummary, chatMeta, persistChat } from "./context.js";
 import { buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
-import { settings } from "./settings.js";
 
 // 记忆表格小节标题：向模型说明这批行的用途与本次召回方式（规划查重 / 路人反应背景各有口径）
 export function memorySectionHeader(memoryTags, purpose = '已有剧情事件记录，用于检查新规划是否与之重复、并可作为推新发展方向的参考') {
@@ -23,34 +22,23 @@ export function gameplaySection(items, header) {
     return [header, list.map(i => `### ${String(i.name ?? '未命名')}\n${String(i.content).trim()}`).join('\n\n')];
 }
 
-// 用户预设（格式/文风等固定要求）拼装：显式传入列表时按传入的来（向导/路人反应的本次勾选），
-// 缺省取设置里启用的；按列表顺序拼成带名小节。JSON 输出格式不能被预设改掉，否则解析会失败
-export function assemblePresets(presets) {
-    const src = Array.isArray(presets) ? presets : (settings.guidance?.presets ?? []).filter(p => p.enabled);
-    return src
-        .filter(p => String(p?.content ?? '').trim())
-        .map(p => `### ${p.name}\n${String(p.content).trim()}`)
-        .join('\n\n');
-}
-
-export function withPresets(base, custom) {
-    return custom ? `${base}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n${custom}` : base;
-}
+// 用户预设已全局化（应用户要求：发给大模型的任何调用都带上）：拼装与注入统一在
+// api.js（globalPresetBlock / withGlobalPresets，chatCompletion 出口自动附加），
+// 本模块与各调用方不再经手预设
 
 // 反应卡自己的材料勾选（chatMetadata.plotPlannerReactionPicks，按对话存聊天文件）——
 // 独立于向导第 1 步的勾选（plotPlannerPicks 管规划分析），两边互不影响：
 //   books     null = 沿用本对话「世界书」页的启用书单；数组 = 本批独立书单（String id）
 //   memSheets 勾选的记忆表 uid（空 = 不附带记忆；反应卡不做标签层，勾了全量）
 //   gpIds     null = 附带当前生效中的玩法条目；数组 = 本批勾选（空 = 不附带）
-//   presetIds null = 附带启用中的预设；数组 = 本批勾选（空 = 不附带）
 //   plan      是否附带进行中剧情（默认 true）
+//   （历史数据里的 presetIds 字段已随预设全局化退役，读回时直接忽略）
 export function reactionPicks() {
     const p = chatMeta().plotPlannerReactionPicks;
     return {
         books: Array.isArray(p?.books) ? p.books.map(String) : null,
         memSheets: Array.isArray(p?.memSheets) ? p.memSheets : [],
         gpIds: Array.isArray(p?.gpIds) ? p.gpIds : null,
-        presetIds: Array.isArray(p?.presetIds) ? p.presetIds : null,
         plan: p ? p.plan !== false : true,
     };
 }

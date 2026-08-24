@@ -422,12 +422,14 @@ export function allTags(state) {
 
 // ---------------------------------------------------------------------------
 // AI 打标签（记忆表格页「打标签」区）：闭集词表 + 打标区域，给镜像行打标签。
-// 标签只能从词表里选（不自拟），可限定只处理某些表
+// 标签只能从词表里选（不自拟），可限定只处理某些表；
+// 一行可同时命中多个标签——符合的全会打上（不设上限），是否符合由模型按词表注释自判
 // ---------------------------------------------------------------------------
 
 const VOCAB_TAGGER_SYSTEM = [
-    '你是角色扮演记忆条目的自动分类器。逐条阅读给出的记忆条目，从「标签词表」里为每条挑 1~3 个最贴切的标签。',
-    '只能使用词表中列出的标签名，禁止自拟新标签；某条实在没有贴切标签时给空数组。',
+    '你是角色扮演记忆条目的自动分类器。逐条阅读给出的记忆条目，从「标签词表」里选出该条目符合的所有标签。',
+    '一条条目可以同时命中多个标签：只要符合就全部选出，不设数量上限，是否符合由你按词表与注释自行判断；一条都不符合时给空数组。',
+    '只能使用词表中列出的标签名，禁止自拟新标签。',
     '只输出一个 JSON 对象，格式：{"rows":[{"id":"条目id","tags":["标签名"]}]}，不要输出任何其他文字。',
 ].join('\n');
 
@@ -480,7 +482,7 @@ export async function autoTagByVocabulary({ vocab = [], sheetUids = [], overwrit
             const validIds = new Set(batch.map(r => r.rid));
             for (const item of data?.rows ?? []) {
                 const rid = String(item?.id ?? '');
-                const tags = [...new Set((item?.tags ?? []).map(t => String(t).trim()).filter(t => validNames.has(t)))].slice(0, 3);
+                const tags = [...new Set((item?.tags ?? []).map(t => String(t).trim()).filter(t => validNames.has(t)))];
                 if (!rid || !validIds.has(rid) || !tags.length) continue;
                 state.tags[rid] = tags;
                 tagged++;

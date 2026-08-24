@@ -180,8 +180,8 @@ function renderTagging(container) {
     const sheets = state.mirror.sheets;
 
     el.innerHTML = `
-    <b title="把镜像里还没标签的行分批交给「设置」页配置的 API，按下方的词表自动打标签（模型只能从词表里选，不能自拟）；之后「召回设置」和剧情指导第 1 步的「按标签匹配」用的就是这些标签">打标签</b>
-    <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签">标签词表（一行一个，注释可选）</label>
+    <b title="把镜像里还没标签的行分批交给「设置」页配置的 API，按下方的词表自动打标签（模型只能从词表里选，不能自拟）；一行可以同时命中多个标签——只要符合词表就都会打上，符合与否由模型按注释自行判断。之后「召回设置」和剧情指导第 1 步的「按标签匹配」用的就是这些标签">打标签</b>
+    <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签——一行可同时命中多个标签，全都符合就全打上">标签词表（一行一个，注释可选）</label>
     <div id="pp_mem_vocab"></div>
     <div class="pp-btn-row">
         <span id="pp_mem_vocab_add" class="menu_button"><i class="fa-solid fa-plus"></i> 加一个标签</span>

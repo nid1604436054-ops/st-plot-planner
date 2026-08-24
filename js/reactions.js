@@ -5,11 +5,11 @@
 // user 消息不计，到期自动撤下）。旧版按楼层分段的「扩散链」卡片还存在旧注入里，
 // composeReactionText 走兼容分支继续逐层换段——3~4 层根本扩散不开，新卡不再产扩散链。
 // 材料用反应区自己的「材料勾选」（materials.reactionPicks，存对话记忆，独立于向导第 1 步）：
-// 预设拼进系统提示词，世界书（书单之外可再按条目标签筛一层）/记忆表格/游戏玩法/进行中剧情
-// 按勾选发送——长线剧情里角色的身世、名声在世界书与记忆里，不带就没法校准路人认知。
+// 世界书（按勾选的书检索）/记忆表格/游戏玩法/进行中剧情按勾选发送——长线剧情里角色的身世、
+// 名声在世界书与记忆里，不带就没法校准路人认知。预设已全局化，由 chatCompletion 出口自动附带
 import { chatCompletion } from "./api.js";
 import { activeStory } from "./story.js";
-import { materialSections, reactionPicks, assemblePresets, withPresets } from "./materials.js";
+import { materialSections, reactionPicks } from "./materials.js";
 import { storageItemsInEffect } from "./store.js";
 import { settings } from "./settings.js";
 import { extractJson } from "./utils.js";
@@ -36,7 +36,7 @@ const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器�
 /**
  * 生成一张路人反应卡（引人注目的事从最近对话里自动判定，不手填）。
  * 材料用反应区自己的「材料勾选」（存对话记忆，独立于向导第 1 步——在那里增删不影响规划分析）；
- * 预设按勾选拼进系统提示词。
+ * 预设走全局（chatCompletion 出口自动附带）。
  * @param {object} [options]
  * @param {string} [options.note]  指导意见（期望烈度、余波方向、要避开什么）
  * @returns {Promise<{salience:number, immediate:string, aftermath:string, boundaries:string, floors:number}>}
@@ -44,9 +44,6 @@ const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器�
 export async function generateReactionCard({ note = '' } = {}) {
     const picks = reactionPicks();
     const gpIds = picks.gpIds ?? storageItemsInEffect().map(i => i.id);
-    const presets = picks.presetIds == null
-        ? (settings.guidance?.presets ?? []).filter(x => x.enabled)
-        : (settings.guidance?.presets ?? []).filter(x => picks.presetIds.includes(x.id));
     const activePlan = picks.plan ? (activeStory()?.planText ?? '').trim() : '';
     const { parts } = materialSections({
         memoryTags: [],                       // 反应卡不做记忆标签层：勾了表就全量，全不勾 = 不附带
@@ -69,7 +66,7 @@ export async function generateReactionCard({ note = '' } = {}) {
 
     const raw = await chatCompletion({
         messages: [
-            { role: 'system', content: withPresets(CARD_SYSTEM_PROMPT, assemblePresets(presets)) },
+            { role: 'system', content: CARD_SYSTEM_PROMPT },
             { role: 'user', content: user },
         ],
     });

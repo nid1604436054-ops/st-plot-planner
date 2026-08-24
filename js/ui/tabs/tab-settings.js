@@ -1,4 +1,4 @@
-// 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数 + 规划预设（固定要求）管理 + 生效中注入的管理
+// 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数 + 预设（全局固定要求）管理 + 生效中注入的管理
 // 配置直接放在主面板里，魔法棒 → 剧情规划器 → 设置，无需再去扩展面板
 import { settings, save, newId } from "../../settings.js";
 import { testConnection, fetchModels, searchWeb } from "../../api.js";
@@ -295,10 +295,12 @@ function renderInjList(container) {
 }
 
 // ---------------------------------------------------------------------------
-// 规划预设（固定要求）：多条命名预设，默认折叠成一条摘要行（交互同记忆表格「原表库」）。
-// 勾选「启用」的预设按列表顺序拼接、随每次分析追加进系统提示词；所有改动即时保存。
-// 管理入口在本页（原挂剧情指导页底部，应用户要求挪到设置）；向导第 1 步的临时勾选
-// （按对话记忆）独立于这里的默认启用状态
+// 预设（全局固定要求）：多条命名预设，默认折叠成一条摘要行（交互同记忆表格「原表库」）。
+// 勾选「启用」即全局生效——插件发给大模型的每一次调用（规划分析/检查报告/随机事件/路人反应/
+// AI 打标/AI 建库/联网判断）都会把启用中的预设按列表顺序拼进系统提示词末尾（chatCompletion
+// 出口统一附加，见 api.globalPresetBlock）。所有改动即时保存。
+// 管理入口在本页（原挂剧情指导页底部，应用户要求挪到设置）；向导第 1 步与反应卡的
+// 逐次预设勾选已随全局化移除——这里的启用开关是唯一开关
 // ---------------------------------------------------------------------------
 
 let presetOpen = false;
@@ -311,7 +313,7 @@ function findPreset(id) {
 function presetSummary() {
     const list = settings.guidance?.presets ?? [];
     const n = list.filter(p => p.enabled).length;
-    return list.length ? `${list.length} 个预设 · ${n} 个启用` : '未设置';
+    return list.length ? `${list.length} 个预设 · ${n} 个全局生效` : '未设置';
 }
 
 function presetRow(p, i, total) {
@@ -319,7 +321,7 @@ function presetRow(p, i, total) {
     return `
     <div class="pp-item" data-preset-item="${p.id}">
         <div class="pp-item-main">
-            <label title="勾选后该预设默认随每次分析生效（向导第 1 步可对单次增删）"><input type="checkbox" data-pena="${p.id}" ${p.enabled ? 'checked' : ''} /> <b class="pp-gd-pname">${escapeHtml(p.name)}</b></label>
+            <label title="勾选后全局生效：插件发给大模型的任何调用都会附上这条预设"><input type="checkbox" data-pena="${p.id}" ${p.enabled ? 'checked' : ''} /> <b class="pp-gd-pname">${escapeHtml(p.name)}</b></label>
         </div>
         <div class="pp-item-ops">
             <span class="pp-muted pp-gd-plen">${String(p.content ?? '').trim().length} 字</span>
@@ -333,7 +335,7 @@ function presetRow(p, i, total) {
     <div class="pp-gd-editor">
         <label class="pp-label">预设名</label>
         <input type="text" class="text_pole" data-pname="${p.id}" value="${escapeHtml(p.name)}" />
-        <label class="pp-label">内容（对规划的内容格式、文风、篇幅、侧重点的要求，改动即时保存）</label>
+        <label class="pp-label">内容（固定要求：内容格式、文风、篇幅、侧重点等；全局生效，改动即时保存）</label>
         <textarea class="text_pole textarea_compact" rows="6" data-pcontent="${p.id}" placeholder="例：&#10;1. 用中文写，文风克制、不堆形容词；&#10;2. 每个阶段 content 至少两句话，写清幕后安排和动因；&#10;3. beats 按「铺垫→推进→转折→收束」组织。">${escapeHtml(p.content ?? '')}</textarea>
     </div>` : ''}`;
 }
@@ -343,8 +345,8 @@ function renderPreset(container) {
     if (!el) return;
     const presets = settings.guidance?.presets ?? [];
     const head = `
-    <div class="pp-item" id="pp_set_preset_head" title="写一次、每次分析都默认生效的固定要求；勾选启用的按顺序拼进系统提示词，向导第 1 步可对单次增删">
-        <div class="pp-item-main"><b>规划预设（固定要求）</b></div>
+    <div class="pp-item" id="pp_set_preset_head" title="写一次、处处生效的固定要求（格式/文风/篇幅/侧重点等）。勾选「启用」的按列表顺序拼接（每条自带预设名做小标题），拼进插件发给大模型的每一次调用的系统提示词末尾——规划分析、检查报告、随机事件、路人反应、AI 打标、AI 建库、联网判断全都带上，可多条同时启用做组合；开关只有这里这一处。注意：输出须仍是各任务的 JSON 骨架（程序要解析），格式要求写在内容层面（写法、语言、详细程度），别要求改成纯正文——预设头部自带格式保护语，但别刻意对抗">
+        <div class="pp-item-main"><b>预设（全局固定要求）</b></div>
         <div class="pp-item-ops">
             <span class="pp-muted">${presetSummary()}</span>
             <span class="menu_button" id="pp_set_preset_toggle">${presetOpen ? '收起' : '编辑'} <i class="fa-solid fa-chevron-${presetOpen ? 'down' : 'right'}"></i></span>
@@ -362,7 +364,6 @@ function renderPreset(container) {
 
     el.innerHTML = `
     ${head}
-    <label class="pp-label">勾选「启用」的预设按列表顺序拼接（每条自带预设名做小标题），默认随每次分析追加进系统提示词，可多条同时启用做组合；向导第 1 步的勾选是对单次运行的增删（按对话记忆），不改动这里。输出须仍是 JSON 骨架（程序要解析），所以格式要求写在内容层面（写法、语言、详细程度），别要求改成纯正文。</label>
     ${presets.map((p, i) => presetRow(p, i, presets.length)).join('') || '<div class="pp-muted">还没有预设，点下面「新建预设」加一条</div>'}
     <div class="pp-btn-row">
         <span id="pp_set_preset_new" class="menu_button"><i class="fa-solid fa-plus"></i> 新建预设</span>
@@ -440,7 +441,7 @@ function renderPreset(container) {
         view.style.display = show ? '' : 'none';
         if (show) {
             const hasActive = Boolean((activeStory()?.planText ?? '').trim());
-            view.textContent = `${guidanceSystemPrompt(hasActive)}\n\n## 用户固定要求（在不改变上述 JSON 输出格式的前提下遵照执行）\n（勾选启用的预设按顺序追加在这里，每条带「### 预设名」小标题，随每次分析一起发给模型）`
+            view.textContent = `${guidanceSystemPrompt(hasActive)}\n\n## 用户全局预设（启用中的预设按顺序追加在这里——所有模型调用共用这一拼法，规划分析/检查报告/随机事件/路人反应/AI 打标/AI 建库/联网判断都会带上，每条带「### 预设名」小标题）`
                 + `\n（上面是「${hasActive ? '有' : '无'}进行中剧情」时的版本：progress 进度项只在该版本出现，第 4 步的「剧情进度」行同理）`;
         }
     });

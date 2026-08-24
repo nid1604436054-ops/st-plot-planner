@@ -7,7 +7,7 @@ import { chatCompletion } from "./api.js";
 import { collectRecentChat, formatChatLog, currentFloor } from "./context.js";
 import { settings, save, newId } from "./settings.js";
 import { extractJson } from "./utils.js";
-import { materialSections, assemblePresets, withPresets } from "./planner.js";
+import { materialSections } from "./planner.js";
 import { storyState, activeStory } from "./story.js";
 
 const EVENT_SYSTEM_PROMPT = '你是文字角色扮演的随机遭遇生成器。基于当前情境与给定的事件方向，'
@@ -133,7 +133,7 @@ export function recentEventTitles(limit = 8) {
 // 三类生成调用共享的上下文小节。材料与向导第 1 步完全同一批（materialSections）：
 // 角色摘要 / 对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要，
 // 再追加事件专属小节（最近事件防重复 + 底线）。materials 由向导传入（记忆表范围/标签、
-// 玩法勾选、预设勾选都用第 1 步的本次选择），缺省回落到设置里的默认召回方式
+// 玩法勾选用第 1 步的本次选择）；预设已全局化，由 chatCompletion 出口自动附带
 function contextSections(materials = {}) {
     const s = storyState();
     const { parts } = materialSections({
@@ -152,8 +152,7 @@ function contextSections(materials = {}) {
     ];
 }
 
-// 本次启用的预设拼进事件生成的系统提示词（与规划分析同一套拼法，带 JSON 格式保护语）
-const eventSystem = materials => withPresets(EVENT_SYSTEM_PROMPT, assemblePresets(materials?.presets));
+// 预设不再在这里拼：启用中的由 chatCompletion 出口统一附加（api.withGlobalPresets）
 
 /**
  * 按事件库条目生成一次随机事件。materials 见 contextSections（第 1 步的本次材料选择）。
@@ -166,7 +165,7 @@ export async function generateRandomEvent(rule, materials = {}) {
 
     const raw = await chatCompletion({
         messages: [
-            { role: 'system', content: eventSystem(materials) },
+            { role: 'system', content: EVENT_SYSTEM_PROMPT },
             { role: 'user', content: sections },
         ],
     });
@@ -208,7 +207,7 @@ export async function generateFreeRandomEvent({ dimension = null, useLibrary = f
 
     const raw = await chatCompletion({
         messages: [
-            { role: 'system', content: withPresets(system, assemblePresets(materials.presets)) },
+            { role: 'system', content: system },
             { role: 'user', content: sections.join('\n\n') },
         ],
     });
@@ -240,7 +239,7 @@ export async function generateAiChoiceRandomEvent({ dimensions = [], materials =
 
     const raw = await chatCompletion({
         messages: [
-            { role: 'system', content: withPresets(system, assemblePresets(materials.presets)) },
+            { role: 'system', content: system },
             { role: 'user', content: sections.join('\n\n') },
         ],
     });

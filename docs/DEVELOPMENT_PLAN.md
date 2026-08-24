@@ -375,13 +375,13 @@ st-plot-planner/
 ├── css/style.css              # 抽屉与组件样式（尽量用酒馆主题变量）
 ├── js/
 │   ├── settings.js            # 设置单例：extension_settings['plot-planner'] 读写
-│   ├── api.js                 # M0 独立通道：OpenAI 兼容 chat/completions（含 SSE、web_search 工具）
+│   ├── api.js                 # M0 独立通道：OpenAI 兼容 chat/completions（含 SSE；全局预设在此出口统一附加）
 │   ├── context.js             # 兼容层：SillyTavern.getContext() 唯一依赖点
-│   ├── lorebook.js            # M1 世界书：导入（双格式）+ 关键词检索（条目可带标签，tagFilter 先按标签筛再走关键词）
+│   ├── lorebook.js            # M1 世界书：导入（双格式）+ 关键词检索（关键词 + 常驻；条目标签已退役）
 │   ├── planner.js             # M2 剧情指导：分析 + 检查报告提示词组装
-│   ├── materials.js           # 共用材料小节构建（materials.materialSections/picksMaterials/预设拼装）
+│   ├── materials.js           # 共用材料小节构建（materialSections/reactionPicks；预设拼装已随全局化退役，归 api.js）
 │   ├── randomEvents.js        # M3 随机事件：维度/条目/掷骰管线、生成
-│   ├── reactions.js           # 路人反应卡：口径式生成（材料随第 1 步勾选）+ 注入正文组装
+│   ├── reactions.js           # 路人反应卡：口径式生成（材料随反应区自己的勾选）+ 注入正文组装
 │   ├── injection.js           # M4 隐身注入：setExtensionPrompt 封装与生命周期
 │   ├── story.js               # 进行中剧情 + 历史归档（存 chatMetadata）
 │   ├── memoryTable.js         # 记忆表格：原表同步/镜像/打标/召回
@@ -410,7 +410,7 @@ st-plot-planner/
 5. 注入生效验证：开启酒馆的提示词查看（或观察 token 数变化）确认幕后内容已进主提示词、聊天界面无显示；继续对话主 AI 行为体现幕后走向。
 6. 生命周期：切换聊天后 scope=chat 的注入被清理；层数过期的注入自动停用；设置页可提前撤下。
 7. 游戏玩法：添加带触发词的规则条目 → 对话提到关键词后主 AI 行为变化；导入导出往返一致；向导第 1 步该条目默认勾选，「查看完整提示词」里含其内容，「检查当前剧情」的报告同样附带生效条目。
-8. 路人反应：不填任何事件描述直接「生成反应卡」→ 模型从最近对话认出事件并出卡（材料与向导第 1 步同一批勾选，预设拼进指令）；确认注入后到期自动撤下（一层 = 一条角色回复）；生效期间向导「查看完整提示词」与检查报告里出现「路人反应」小节，到期后不再附带。
+8. 路人反应：不填任何事件描述直接「生成反应卡」→ 模型从最近对话认出事件并出卡（材料在反应区自己的「材料勾选」里勾，预设全局自动附带）；确认注入后到期自动撤下（一层 = 一条角色回复）；生效期间向导「查看完整提示词」与检查报告里出现「路人反应」小节，到期后不再附带。
 
 ## 12. 变更记录
 
@@ -459,3 +459,4 @@ st-plot-planner/
 | 2026-08-24 | 世界书页三件事（应用户反馈：①删除想能恢复；②条目「启用+常驻」两个勾丑，要换别的表达；③问关键词检索与标签检索为何并存、关键词命中不就注入了）。① 回收站：删书/删条目从「直接过滤掉一锤子买卖」改为先进 settings.lorebookTrash（上限 30 条丢最旧，ensureDefaults ??= 迁移老安装），lorebook.js 新增 trashBook/trashEntry/restoreTrashItem/purgeTrashItem/clearTrash；页面顶部「回收站（N）」折叠区：恢复（书按原 id 放回、id 撞车换新，故各对话按对话记忆的启用勾选自动跟着回来；条目回原书、原书没了按书名找、uid 撞车换新；失败留在回收站 toast 提示先恢复原书；恢复顺手展开那本书）、单条彻底删除、清空（两次点击确认：点一次只变「确认清空？」文案再点才执行——库里无 confirm 先例、不用原生弹窗）；删除 toast 改「进了回收站，可恢复」。② 条目行两个勾（data-een/data-econst）合并成一个三段式状态选择器 .pp-seg：停用＝disabled / 关键词＝enabled+非常驻 / 常驻＝enabled+constant（底层字段不动，scanLorebooks、全选全不选、导入无关键词提醒全不受影响）；点击就地翻高亮不整列表重渲染（不丢输入焦点与滚动位置）并刷新书的条目计数；选中段加粗、关键词淡蓝 #7fb3ff、常驻沿用注入开徽章绿 #7fd18a、未选中段压 0.45 透明度。③ 页面顶部补说明行直接回答疑问：这套世界书是插件自己的资料库、不接入酒馆原生世界书、日常聊天不注入，只在插件调模型（规划/路人反应）时检索最近对话；停用/关键词/常驻/标签分工一句话讲清；检索测试命中规则、导入无关键词提醒同步改「状态」口径 |
 | 2026-08-24 | 世界书标签退役 + 记忆表格「防重复标签」上线 + UI 说明文字全面转悬浮（应用户反馈：①世界书有关键词就够、标签的主场在记忆表格，条目标签框和说明行看着乱，去掉；②还原最初构思——同区域多角色的公共事件（如约会）流程高度雷同，把这类事件打上类型标签，规划时自动读到并执行「不要重复」提示词，没有就加上；③功能下面经常挂几行甚至十几行小字说明太乱，改悬浮；按键太挤，空间够、页面宁长勿挤）。① 拆除：世界书条目「标签」输入框与 data-etags、反应区「按标签筛选条目」层（loreMatch/loreTags/chips/提示全下线，plotPlannerReactionPicks 里的旧字段自然失效不留）、scanLorebooks 的 tagFilter 与 normalizeEntry 的 tags 字段（存量数据里的 tags 键保留不动、不再参与任何检索）、context.collectPlanningContext/materials.reactionPicks 的 loreTags 贯通、世界书页两行说明字；关键词+常驻就是世界书检索的全部。② 防重复：记忆表格「打标签」词表每行加「防重复」开关（matchTags 条目 repeat 标记，随聊天存），memoryTable 新增 repeatGuardTags/buildRepeatGuardContext（带防重复标签的镜像行→「· [标签]（表名）列:值」行式文本，2000 字截断，不受召回开关/表范围限制——查重与背景召回是两条通道）；materials.materialSections 加 repeatGuard 开关在记忆小节后插「## 已发生的同类事件（防重复：这些同类事件已经写过，新规划不要再复刻其流程与桥段——可以再安排同类型事件，但过程、重点或走向必须有明显新意）」；planner.materialSections 统一开（规划分析+随机事件生成+完整提示词预览同批材料），反应卡走 materials 底层不带；collectStats 加 guardRows，向导第 1 步与分析前确认统计行显示「防重复 N 行」（悬浮讲口径）。③ UI 整改：世界书页两行说明、检索测试/回收站说明、记忆表格打标/备份/召回/已删除四段说明、事件库 AI 建库草稿说明、提示词预览页两行长说明——可见小字全部撤掉，内容并入就近 title 悬浮（统计行/空态提示保留）；.pp-btn-row 与 .pp-section gap 8→10px、.pp-drawer .menu_button 统一 padding 6px 12px、词表行 .pp-vocab-guard 开关（灭＝淡色、亮＝绿描边，padding 覆盖带 .pp-drawer 防层叠反杀）、废弃 .pp-entry-tags 规则删除 |
 | 2026-08-24 | 防重复开关整体拆除，改为「记忆行自带标签 + 规划提示词一句话」（应用户反馈：开关在词表行里根本没显示出来——两个 100% 宽输入框把行尾按钮顶出可视区；且方向错了，一句提示词就能解决的事不该做成功能，白增加用户与打标 AI 的工作量）。改动：buildMemoryContext 的每行行尾附带该行标签（`标签:约会/日常`，模型由此看见「同标签的同类事件已有多条」）；guidanceSystemPrompt 增加一句——记忆表格里若已有多条同标签或同类型的既有事件，视为这类事件已经写过：可以再安排同类事件，但不要复刻已有记录的流程与桥段，过程或走向须有新意；repeatGuardTags/buildRepeatGuardContext、materials.repeatGuard 参数与「已发生的同类事件」小节、planner 统一开与 collectStats.guardRows、向导两处统计段的「防重复 N 行」、词表行开关与 .pp-vocab-guard 样式全部移除；matchTags 里已写的 repeat 标记留在存档不清理、自然失效。零新增操作：标签照常打，防复刻自动生效 |
+| 2026-08-24 | ①AI 打标多标签（应用户要求：每一栏可同时获得多个标签，符合条件就打、是否符合模型自判）：打标系统提示词从「每条挑 1~3 个最贴切」改为「选出该条目符合的所有标签——可同时命中多个、不设数量上限、符合与否按词表与注释自判，全不符合给空数组」，解析侧 `.slice(0,3)` 截断移除，记忆页「打标签/标签词表」悬浮说明同步；②预设全局化（应用户要求：发送给大模型的任何文本都必须附上启用了的预设）：拼装与注入统一收进 api.js——`globalPresetBlock`/`withGlobalPresets` 在 `chatCompletion` 出口把启用中的预设按顺序拼进第一条 system 消息末尾（头部带「不改变本任务输出格式」保护语），规划分析、检查报告、联网判断、三种事件生成、AI 建库、路人反应、AI 打标全部自动带上（连通性测试例外，`skipPresets` 只验管道）；assemblePresets/withPresets 及 planner 转发导出、reactions 的 presetIds 勾选、randomEvents 的 eventSystem 拼装、向导第 1 步「本次启用的预设」勾选（run.presetIds / plotPlannerPicks.presetIds）、story 条目 presetIds、反应卡材料勾选的预设块全部退役（历史数据保留、读回忽略）；设置页启用开关成为唯一开关，标题改「预设（全局固定要求）」、原可见说明小字折进区块悬浮；向导「查看完整提示词」改用 withGlobalPresets 同口径拼装（看到的=发出的），两处统计行显示全局启用数 |

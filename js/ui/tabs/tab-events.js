@@ -40,8 +40,6 @@ export function renderEventsTools(container) {
     const gpItems = settings.storageItems.filter(i => i.enabled);
     const gpHit = new Set(storageItemsInEffect().map(i => i.id));
     const gpOn = i => (picks.gpIds ?? [...gpHit]).includes(i.id);
-    const rxPresets = settings.guidance?.presets ?? [];
-    const preOn = p => picks.presetIds ? picks.presetIds.includes(p.id) : p.enabled;
 
     container.innerHTML = `
     <div class="pp-section">
@@ -64,11 +62,6 @@ export function renderEventsTools(container) {
                 ${gpItems.map(i => `<label><input type="checkbox" data-rxgp="${escapeHtml(i.id)}" ${gpOn(i) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
                 || '<span class="pp-muted">还没有启用的玩法条目</span>'}
             </div>
-            <label class="pp-label" title="勾选的预设拼进反应卡的系统指令（固定要求层）">预设（<span id="pp_rx_presets_mode">${picks.presetIds == null ? '默认＝启用中的' : '本批独立勾选'}</span>）</label>
-            <div class="pp-gd-selp">
-                ${rxPresets.map(p => `<label><input type="checkbox" data-rxpre="${escapeHtml(p.id)}" ${preOn(p) ? 'checked' : ''}/> ${escapeHtml(p.name)}</label>`).join('')
-                || '<span class="pp-muted">还没有预设（「设置」页维护）</span>'}
-            </div>
         </details>
         <label class="pp-label">指导意见</label>
         <textarea id="pp_rx_note" class="text_pole textarea_compact" rows="2" placeholder="例：别闹大，控制在背后议论和转发的程度"></textarea>
@@ -77,9 +70,9 @@ export function renderEventsTools(container) {
     </div>
     <div id="pp_ev_settings_wrap"></div>`;
 
-    // 勾选即写回对话记忆。世界书/玩法/预设默认跟随各自的全局口径（本对话书单 / 生效中 / 启用中），
+    // 勾选即写回对话记忆。世界书/玩法默认跟随各自的全局口径（本对话书单 / 生效中），
     // 点过任意一本（条）即冻结为本批显式勾选；想回到「全跟默认」的等价状态，
-    // 把默认勾着的那些全勾上即可
+    // 把默认勾着的那些全勾上即可。预设已全局生效（「设置」页开关），不在材料里单勾
     const matsEl = container.querySelector('#pp_rx_mats');
     matsEl.querySelector('#pp_rx_plan').addEventListener('change', e => {
         picks.plan = e.target.checked;
@@ -94,7 +87,6 @@ export function renderEventsTools(container) {
     bindList('rxbook', ids => { picks.books = ids.map(String); matsEl.querySelector('#pp_rx_books_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
     bindList('rxsheet', ids => { picks.memSheets = ids; saveReactionPicks(picks); });
     bindList('rxgp', ids => { picks.gpIds = ids; matsEl.querySelector('#pp_rx_gps_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
-    bindList('rxpre', ids => { picks.presetIds = ids; matsEl.querySelector('#pp_rx_presets_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
 
     const note = container.querySelector('#pp_rx_note');
     note.value = rx.note;

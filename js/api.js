@@ -64,13 +64,38 @@ function pickContent(message, { finishReason = '', completionTokens = null, prom
  * @param {(fullText:string)=>void} [options.onDelta]  提供时走 SSE 流式，逐步回调累计文本
  * @param {(usage:object)=>void} [options.onUsage]     回传服务商实报 usage：非流式必有；
  *        流式时请求带 stream_options.include_usage、服务商在末包附上才回调（不附就不回调）
- * @returns {Promise<string>} 模型输出的文本
+ * @param {boolean} [options.skipPresets]  true 时跳过全局预设注入（仅连通性测试用）
+ * @returns {Promise<string>} 模型输出的文本（启用中的预设已随 system 消息附带）
  */
-export async function chatCompletion({ messages, temperature, maxTokens, signal, onDelta, onUsage } = {}) {
+// ---------------------------------------------------------------------------
+// 全局预设：设置页「预设」勾选启用后，插件发给大模型的每一次调用都自动附上
+// （规划分析 / 检查报告 / 随机事件 / 路人反应 / AI 打标 / AI 建库 / 联网判断）。
+// 在这里统一拼装、在 chatCompletion 出口统一注入——预览与真实调用走同一个函数，
+// 看到的与发出的完全一致；头部带输出格式保护语，预设改不掉各任务的 JSON 骨架
+// ---------------------------------------------------------------------------
+
+export function globalPresetBlock() {
+    const list = (settings.guidance?.presets ?? []).filter(p => p.enabled && String(p?.content ?? '').trim());
+    if (!list.length) return '';
+    return '## 用户全局预设（全局生效的固定要求；在不改变本任务要求的输出格式的前提下遵照执行，明显与本任务无关的可忽略）\n'
+        + list.map(p => `### ${p.name}\n${String(p.content).trim()}`).join('\n\n');
+}
+
+// 把全局预设块拼进第一条 system 消息（没有 system 消息时在最前插一条），不改动入参数组
+export function withGlobalPresets(messages) {
+    const block = globalPresetBlock();
+    if (!block) return messages;
+    const idx = messages.findIndex(m => m?.role === 'system');
+    if (idx === -1) return [{ role: 'system', content: block }, ...messages];
+    return messages.map((m, i) => i === idx ? { ...m, content: `${m.content}\n\n${block}` } : m);
+}
+
+export async function chatCompletion({ messages, temperature, maxTokens, signal, onDelta, onUsage, skipPresets = false } = {}) {
     requireConfig();
     const { baseUrl, apiKey, model } = settings.api;
     const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
     const stream = typeof onDelta === 'function';
+    const sent = skipPresets ? messages : withGlobalPresets(messages);
 
     const doFetch = extra => fetch(url, {
         method: 'POST',
@@ -80,7 +105,7 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
         },
         body: JSON.stringify({
             model,
-            messages,
+            messages: sent,
             temperature: temperature ?? settings.api.temperature,
             max_tokens: maxTokens ?? settings.api.maxTokens,
             stream,
@@ -168,6 +193,7 @@ export async function testConnection() {
         ],
         maxTokens: 10,
         temperature: 0,
+        skipPresets: true,   // 连通性测试只验管道：预设会挤占这 10 个 token 的回复预算
     });
 }
 
