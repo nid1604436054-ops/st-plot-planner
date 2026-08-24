@@ -40,11 +40,13 @@ export function renderStorageTools(container) {
         <textarea id="pp_st_content" class="text_pole textarea_compact" rows="5" placeholder="内容，如扑克规则、地下城地图……"></textarea>
         <div class="pp-btn-row">
             <div id="pp_st_add" class="menu_button">添加</div>
-            <div id="pp_st_replay" class="menu_button">按当前剧情重放</div>
+            <div id="pp_st_replay" class="menu_button" title="立刻按最近对话重查各条目的触发词：命中的注入、未命中的撤下。平时切对话/收到新消息会自动做；自己编辑或删除消息后用它手动对齐">立即重扫注入</div>
             <div id="pp_st_export" class="menu_button">导出</div>
             <label class="menu_button" for="pp_st_import">导入</label>
             <input id="pp_st_import" type="file" accept=".json,application/json" hidden />
         </div>
+        <label class="pp-label" title="玩法条目的触发词要在最近几层对话里出现过才算命中（常驻条目不受影响）；0 = 不限（扫全部对话）。改动立即保存并按新窗口重扫一次">触发词扫描楼层（0 = 不限）</label>
+        <input id="pp_st_scan" class="text_pole textarea_compact" type="number" min="0" max="200" step="1" />
         <label class="pp-label">条目列表</label>
         <div id="pp_st_list"></div>`;
     container.appendChild(fold);
@@ -77,7 +79,18 @@ export function renderStorageTools(container) {
 
     fold.querySelector('#pp_st_replay').addEventListener('click', () => {
         scanAndApplyStorage();
-        toastr.info('已按当前剧情重放玩法条目');
+        toastr.info('已重扫触发词：命中的注入、未命中的撤下');
+    });
+
+    // 触发词扫描楼层：全局窗口（对全部条目生效），改动即保存并立刻按新窗口重扫
+    const scanEl = fold.querySelector('#pp_st_scan');
+    scanEl.value = settings.storageScanLayers;
+    scanEl.addEventListener('change', () => {
+        const n = Number(scanEl.value);
+        settings.storageScanLayers = Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 0), 200) : 20;
+        scanEl.value = settings.storageScanLayers;
+        save();
+        scanAndApplyStorage();
     });
 
     fold.querySelector('#pp_st_export').addEventListener('click', () => {

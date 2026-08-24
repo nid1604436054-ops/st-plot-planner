@@ -47,6 +47,7 @@ const DEFAULTS = {
     lorebooks: [],          // M1 世界书库
     injections: [],         // M4 隐身注入项
     storageItems: [],       // M5 额外存储条目
+    storageScanLayers: 20,  // M5 玩法触发词扫描窗口：触发词在最近几层对话里出现过才算命中；0 = 不限（扫全部对话）
     eventRules: [],         // M3 随机事件条目（事件库）：{id, name, dimension, severity, keywords, probability, weight, cooldownLayers, promptHint, enabled, lastFloor}
     eventDimensions: [      // M3 维度层：库内条目的分组骨架，也是自由生成的方向池
         { id: 'dim-favor', name: '顺向', weight: 1, enabled: true, prompt: '对主角有利的小惊喜：意外之喜（中奖、多送、捡到东西）、被善意注视（被夸、被小孩盯着看、被陌生人帮忙）。以轻为主，让世界显得有温度，不扭转剧情走向。' },
@@ -73,6 +74,7 @@ function ensureDefaults() {
     // 顶层 ??= 只对新装用户生效，老安装的嵌套新字段在这里补
     store.retrieval.memChars ??= 4000;
     store.guidance.inject ??= { depth: 4, role: 'system', expires: 'never', layers: 20 };
+    store.storageScanLayers ??= 20;   // 老安装补玩法触发词扫描窗口（沿用此前写死的 20）
     // M3 三层化迁移：老安装补维度层与掷骰配置，已有条目挂上维度/轻重/关键词（不覆盖已写内容）
     if (!Array.isArray(store.eventDimensions) || !store.eventDimensions.length) {
         store.eventDimensions = JSON.parse(JSON.stringify(DEFAULTS.eventDimensions));

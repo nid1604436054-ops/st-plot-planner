@@ -24,10 +24,19 @@ export function removeItem(id) {
 }
 
 /**
+ * 触发词扫描窗口（最近几层对话算数）：默认取设置 storageScanLayers（游戏玩法区可改），
+ * 0 = 不限（扫全部对话）。显式传参的调用方不受影响。
+ */
+function storageWindow() {
+    const n = Number(settings.storageScanLayers);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 20;
+}
+
+/**
  * 当前生效中的条目（启用 且 常驻或触发词命中）：主对话注入与向导第 1 步默认勾选共用同一判定。
  */
-export function storageItemsInEffect(scanLayers = 20) {
-    const text = formatChatLog(collectRecentChat(scanLayers)).toLowerCase();
+export function storageItemsInEffect(scanLayers) {
+    const text = formatChatLog(collectRecentChat(scanLayers ?? storageWindow())).toLowerCase();
     return settings.storageItems.filter(item => item.enabled
         && (item.constant || (item.keys ?? []).some(k => k && text.includes(String(k).toLowerCase()))));
 }
@@ -36,7 +45,7 @@ export function storageItemsInEffect(scanLayers = 20) {
  * 按最近对话扫描命中情况：命中注入、未命中清空对应键；常驻条目恒注入。
  * 由 index.js 在 CHAT_CHANGED / MESSAGE_RECEIVED 时调用，也可手动触发。
  */
-export function scanAndApplyStorage(scanLayers = 20) {
+export function scanAndApplyStorage(scanLayers) {
     const inEffect = new Set(storageItemsInEffect(scanLayers).map(i => i.id));
     for (const item of settings.storageItems) {
         setExtensionPrompt(
