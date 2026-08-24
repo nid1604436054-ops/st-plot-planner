@@ -8,6 +8,30 @@ export function getTavernContext() {
     return SillyTavern.getContext();
 }
 
+// 聊天文件级键值存取（chatMetadata）：跟对话走、刷新不丢。
+// 剧情档案 / 向导第 1 步勾选 / 世界书按对话绑定都存在这里
+export function chatMeta() {
+    return (getTavernContext().chatMetadata ??= {});
+}
+
+// 聊天文件防抖保存（各处共用一个防抖，避免短时间连环 saveChat）
+let chatSaveTimer = null;
+export function persistChat() {
+    clearTimeout(chatSaveTimer);
+    chatSaveTimer = setTimeout(() => {
+        try { getTavernContext().saveChat?.(); }
+        catch (e) { console.warn('[PlotPlanner] 聊天文件保存失败', e); }
+    }, 800);
+}
+
+// 当前对话的世界书绑定（plotPlannerBooks.enabledIds）：
+// null = 该对话没动过世界书勾选，沿用每本书的全局 enabled 默认；
+// 数组 = 该对话自己的启用书单（空数组 = 全不启用），换对话自动换回各自的
+export function chatEnabledBookIds() {
+    const books = getTavernContext().chatMetadata?.plotPlannerBooks;
+    return Array.isArray(books?.enabledIds) ? books.enabledIds : null;
+}
+
 export function collectRecentChat(layers) {
     const chat = Array.isArray(getTavernContext().chat) ? getTavernContext().chat : [];
     return chat
@@ -31,7 +55,7 @@ export function formatChatLog(list) {
 export function collectPlanningContext() {
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
-    const hits = scanLorebooks(scanText);
+    const hits = scanLorebooks(scanText, { enabledIds: chatEnabledBookIds() });
     return { chatList, scanText, hits };
 }
 

@@ -1,16 +1,45 @@
 // 世界书页签：导入（酒馆 JSON / 纯文本单条粘贴）、书改名/启停/删除、
-// 条目级编辑（标题/关键词/内容/删除/添加）、检索测试
+// 条目级编辑（标题/关键词/内容/删除/添加）、检索测试。
+// 「启用」勾选按对话记忆（chatMetadata.plotPlannerBooks）：每个对话一套书单、
+// 随聊天文件保存，切换对话自动恢复各自的勾选，不用每次重勾
 import { settings, save } from "../../settings.js";
 import {
     importSillyTavernJson, createTextBook, addLorebook, removeLorebook,
     findEntry, addEntry, removeEntry, scanLorebooks, parseKeys,
 } from "../../lorebook.js";
-import { collectRecentChat, formatChatLog } from "../../context.js";
+import { chatMeta, persistChat, chatEnabledBookIds, collectRecentChat, formatChatLog } from "../../context.js";
 import { escapeHtml, clamp, readFileAsText } from "../../utils.js";
 
 // 展开状态跨页签重渲染保持：展开条目列表的书 / 正在添加条目的书
 const openBooks = new Set();
 let addingEntry = null;
+
+// 某本书在当前对话是否启用：有绑定书单看书单，没绑定沿用全局 enabled 默认
+function bookEnabledInChat(book) {
+    const ids = chatEnabledBookIds();
+    return ids ? ids.includes(String(book.id)) : Boolean(book.enabled);
+}
+
+// 勾选写进当前对话的书单（第一次勾选时先把各书现状快照成书单，再改这一本）
+function toggleBookInChat(id, on) {
+    const books = (chatMeta().plotPlannerBooks ??= {});
+    if (!Array.isArray(books.enabledIds)) {
+        books.enabledIds = settings.lorebooks.filter(b => b.enabled).map(b => String(b.id));
+    }
+    const ids = new Set(books.enabledIds.map(String));
+    on ? ids.add(String(id)) : ids.delete(String(id));
+    books.enabledIds = [...ids];
+    persistChat();
+}
+
+// 新导入的书自动加进本对话书单：已绑定的对话里不在书单就是灭的，不自动加会像没导入成功
+function bindNewBook(book) {
+    const books = chatMeta().plotPlannerBooks;
+    if (Array.isArray(books?.enabledIds) && book.enabled) {
+        books.enabledIds.push(String(book.id));
+        persistChat();
+    }
+}
 
 export const worldbookTab = {
     id: 'worldbook',
@@ -36,7 +65,8 @@ export const worldbookTab = {
                     <div id="pp_wb_txt_cancel" class="menu_button">取消</div>
                 </div>
             </div>
-            <div id="pp_wb_list"></div>
+            <div class="pp-muted" title="勾选存在聊天文件里（chatMetadata），每个对话一套书单；条目的启停与常驻仍是全局的">「启用」按对话记忆：勾选只对当前对话生效、随聊天文件保存，切换对话自动恢复各自的勾选；还没动过勾选的对话沿用各书的默认启停</div>
+            <div id="pp_wb_list" style="margin-top:6px"></div>
         </div>
         <div id="pp_wb_scan_wrap" class="pp-section" style="display:none">
             <b>检索测试</b>
@@ -57,6 +87,7 @@ export const worldbookTab = {
                 addLorebook(book);
                 openBooks.add(book.id);
                 save();
+                bindNewBook(book);
                 toastr.success(`已导入「${book.name}」：${book.entries.length} 个条目`);
                 // 酒馆原生常驻条目不写关键词：现在导入时会带上常驻标记（恒带出），无需提醒；
                 // 仍要提醒的是既没关键词也没勾常驻的条目——它们永远不会被带进规划
@@ -96,6 +127,7 @@ export const worldbookTab = {
             addLorebook(book);
             openBooks.add(book.id);
             save();
+            bindNewBook(book);
             toastr.success(`已导入「${book.name}」，可在条目旁补充关键词`);
             container.querySelector('#pp_wb_txt_cancel').click();
             renderBooks(container);
@@ -108,7 +140,7 @@ export const worldbookTab = {
         container.querySelector('#pp_wb_scan_run').addEventListener('click', () => {
             const typed = container.querySelector('#pp_wb_scan_text').value.trim();
             const text = typed || formatChatLog(collectRecentChat(settings.retrieval.scanDepth));
-            const hits = scanLorebooks(text);
+            const hits = scanLorebooks(text, { enabledIds: chatEnabledBookIds() });
             container.querySelector('#pp_wb_scanned_text').textContent = `扫描文本：${clamp(text.replace(/\s+/g, ' '), 160)}`;
             container.querySelector('#pp_wb_hits').innerHTML = hits.length
                 ? hits.map(h => `
@@ -151,7 +183,7 @@ function renderBooks(container) {
                 </div>
                 <div class="pp-item-ops">
                     <span class="menu_button" data-toggle="${b.id}">条目 ${enabledCount(b)}/${b.entries.length} <i class="fa-solid fa-chevron-${open ? 'down' : 'right'}"></i></span>
-                    <label><input type="checkbox" data-en="${b.id}" ${b.enabled ? 'checked' : ''} /> 启用</label>
+                    <label title="按对话记忆：勾选随当前聊天文件保存，切换对话自动恢复各自的勾选"><input type="checkbox" data-en="${b.id}" ${bookEnabledInChat(b) ? 'checked' : ''} /> 启用</label>
                     <span class="menu_button fa-solid fa-trash" data-del="${b.id}" title="删除整本"></span>
                 </div>
             </div>
@@ -200,10 +232,7 @@ function renderBooks(container) {
         renderBooks(container);
     }));
     list.querySelectorAll('[data-en]').forEach(el => el.addEventListener('change', () => {
-        const book = settings.lorebooks.find(b => b.id === el.dataset.en);
-        if (!book) return;
-        book.enabled = el.checked;
-        save();
+        toggleBookInChat(el.dataset.en, el.checked);
     }));
     list.querySelectorAll('[data-del]').forEach(el => el.addEventListener('click', () => {
         openBooks.delete(el.dataset.del);
@@ -315,4 +344,10 @@ function setAllEntries(bookId, disabled, container) {
     book.entries.forEach(e => { e.disabled = disabled; });
     save();
     renderBooks(container);
+}
+
+// 聊天切换时由 index.js 调用：「启用」按对话记忆，列表要刷成新对话的勾选
+export function resetWorldbook() {
+    const container = document.getElementById('pp_tab_content');
+    if (container?.querySelector('#pp_wb_list')) worldbookTab.render(container);
 }

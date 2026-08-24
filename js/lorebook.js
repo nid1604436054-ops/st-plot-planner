@@ -6,7 +6,8 @@ import { settings, newId } from "./settings.js";
 // 数据结构：
 // Lorebook  { id, name, enabled, source, entries: LoreEntry[] }
 // LoreEntry { uid, comment, keys[], content, disabled, constant }
-// 命中规则：条目已启用且（勾了常驻，或任一关键词出现在扫描文本里，大小写不敏感）
+// 命中规则：所在书被启用（或在本对话的启用书单里），条目已启用且
+// （勾了常驻，或任一关键词出现在扫描文本里，大小写不敏感）
 
 export function normalizeEntry(raw = {}, index = 0) {
     return {
@@ -92,8 +93,13 @@ export function removeEntry(bookId, uid) {
     book.entries = book.entries.filter(e => String(e.uid) !== String(uid));
 }
 
-function enabledBooks() {
-    return settings.lorebooks.filter(b => b.enabled);
+function enabledBooks(enabledIds = null) {
+    // enabledIds：调用方传入的「按对话绑定」书单（null = 该对话没绑定，沿用书的全局 enabled）。
+    // 书级开关是把别的世界挡在外面的闸门（常驻条目不看关键词恒带出，全靠它挡），
+    // 按对话各记一套后，多世界多对话不用来回重勾
+    if (enabledIds == null) return settings.lorebooks.filter(b => b.enabled);
+    const wanted = new Set(enabledIds.map(String));
+    return settings.lorebooks.filter(b => wanted.has(String(b.id)));
 }
 
 export function parseKeys(text) {
@@ -101,13 +107,14 @@ export function parseKeys(text) {
 }
 
 /**
- * 检索：扫描 scanText，返回跨所有启用书籍的命中条目。
- * 命中规则：条目启用、内容非空，且（勾了常驻，或任一关键词（子串，大小写不敏感）出现在扫描文本里）。
+ * 检索：扫描 scanText，返回命中条目。
+ * 命中规则：所在书被启用（enabledIds 传入时以该对话书单为准），条目启用、内容非空，
+ * 且（勾了常驻，或任一关键词（子串，大小写不敏感）出现在扫描文本里）。
  * 常驻条目恒带出：排在最前、不占 maxEntries 名额（多条常驻不挤掉关键词命中），
  * 但仍与命中条目共用 maxChars 字符预算、优先消耗——常驻是每次都在的底料。
  * maxEntries / maxChars 为 0 表示不限制（命中多少带多少 / 不截断）。
  */
-export function scanLorebooks(scanText, { maxEntries, maxChars } = {}) {
+export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds } = {}) {
     const opts = settings.retrieval;
     const maxE = maxEntries ?? opts.maxEntries;
     const maxC = maxChars ?? opts.maxChars;
@@ -115,7 +122,7 @@ export function scanLorebooks(scanText, { maxEntries, maxChars } = {}) {
     const constants = [];
     const keyed = [];
 
-    for (const book of enabledBooks()) {
+    for (const book of enabledBooks(enabledIds)) {
         for (const entry of book.entries) {
             if (entry.disabled || !entry.content) continue;
             if (entry.constant) {

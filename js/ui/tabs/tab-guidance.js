@@ -1,5 +1,6 @@
 // 剧情指导页签：分步规划向导 + 随机事件工具区 + 游戏玩法工具区（均挂在页面底部）
-// ① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签）+ 游戏玩法勾选 + 预设临时勾选 + 剧情构思）
+// ① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签）+ 游戏玩法勾选 + 预设勾选 + 剧情构思；
+// 这些勾选按对话记忆存聊天文件，同一对话做完一轮回来不用重勾）
 // → ② 随机事件闸口（可跳过）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
 // 确认采用的规划存为「进行中剧情」（story.js，跟聊天文件走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
 // 跳过随机事件的路径会先停在「分析前确认」页，点确认才真正调模型。
@@ -16,7 +17,7 @@ import { renderEventsTools, resetEventsTools } from "./tab-events.js";
 import { renderStorageTools } from "./tab-storage.js";
 import { storageItemsInEffect } from "../../store.js";
 import { memoryState } from "../../memoryTable.js";
-import { getTavernContext } from "../../context.js";
+import { getTavernContext, chatMeta, persistChat } from "../../context.js";
 import { escapeHtml, estimateTokens } from "../../utils.js";
 import { searchToolReady } from "../../api.js";
 
@@ -24,7 +25,7 @@ import { searchToolReady } from "../../api.js";
 let step = '';
 const run = {
     note: '',            // 剧情构思方向
-    presetIds: [],       // 本次启用的预设（临时勾选，不写回设置）
+    presetIds: null,     // 本次启用的预设；null = 未初始化（进第 1 步取对话记忆，没有则默认勾启用中的），[] = 明确全不勾
     gpIds: null,         // 本次随分析发送的游戏玩法条目 id；null = 未初始化（进第 1 步时默认勾当前生效的）
     event: null,         // { mode:'llm'|'lib'|'manual', title, choice } 入库用
     eventText: '',       // 拼给模型的事件材料
@@ -41,6 +42,41 @@ const ev = { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: 
 // 进行中剧情全文 / 历史列表是否展开；历史里展开查看的条目 id（均只存内存）
 let showActive = false, showHistory = false, viewHistId = null;
 let report = null;      // 最近一次检查报告（内存缓存，正式存档在 story 条目上）
+
+// ---------------------------------------------------------------------------
+// 第 1 步勾选按对话记忆（chatMetadata.plotPlannerPicks）：记忆表格的表范围/标签匹配/标签、
+// 游戏玩法与预设的勾选都存聊天文件——同一对话做完一轮规划回来不用重勾，换对话各用各的。
+// run 是工作副本，进第 1 步时从这里恢复；每次勾选变动立即写回
+// ---------------------------------------------------------------------------
+
+function applyPicks() {
+    const p = chatMeta().plotPlannerPicks;
+    if (!p) {
+        run.memSheets = null;
+        run.memMatch = false;
+        run.memTags = [];
+        run.gpIds = null;
+        run.presetIds = null;
+        return;
+    }
+    run.memSheets = Array.isArray(p.memSheets) ? p.memSheets : null;
+    run.memMatch = Boolean(p.memMatch);
+    run.memTags = Array.isArray(p.memTags) ? p.memTags : [];
+    run.gpIds = Array.isArray(p.gpIds) ? p.gpIds : null;
+    run.presetIds = Array.isArray(p.presetIds) ? p.presetIds : null;
+}
+
+function savePicks() {
+    chatMeta().plotPlannerPicks = {
+        version: 1,
+        memSheets: run.memSheets,
+        memMatch: run.memMatch,
+        memTags: run.memTags,
+        gpIds: run.gpIds,
+        presetIds: run.presetIds ?? [],
+    };
+    persistChat();
+}
 
 // 分析/检查的流式显示：onDelta 累计文本 + 当前阶段。analyzeToken 让旧一轮在途的流式回调
 // 与结果不写进切换后的新聊天（resetGuidance 时递增作废）
@@ -83,12 +119,12 @@ export const guidanceTab = {
 };
 
 // 聊天切换时由 index.js 调用：清掉向导进度，避免 A 聊天的规划带到 B 聊天；
-// 剧情数据本身存 chatMetadata，随聊天文件自动切换
+// 剧情数据与第 1 步勾选本身存 chatMetadata，随聊天文件自动切换（勾选进第 1 步时恢复）
 export function resetGuidance() {
     step = '';
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
     Object.assign(run, {
-        note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+        note: '', presetIds: null, gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
         memSheets: null, memMatch: false, memTags: [], readyFrom: 'event', research: null,
     });
     Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
@@ -295,10 +331,12 @@ function renderMain(container) {
 
 function startCollect(container) {
     step = 'collect';
-    if (!run.presetIds.length) {
+    // 第 1 步勾选从本对话的记忆恢复；没存过的对话用默认（全部表全量、预设=启用中的）
+    applyPicks();
+    if (run.presetIds == null) {
         run.presetIds = (settings.guidance?.presets ?? []).filter(p => p.enabled).map(p => p.id);
     }
-    // 游戏玩法：每次进第 1 步若未手动勾过，默认勾「当前生效中」的条目（生效判定与主对话注入同一套）
+    // 游戏玩法：没存过勾选的对话默认勾「当前生效中」的条目（生效判定与主对话注入同一套）
     if (run.gpIds == null) {
         run.gpIds = storageItemsInEffect().map(i => i.id);
     }
@@ -363,11 +401,11 @@ function renderCollect(container, main) {
             <b>第 1 步 · 收集确认</b>
             <span class="menu_button" id="pp_gd_c1_preview">查看完整提示词</span>
         </div>
-        <div class="pp-gd-stat"><span id="pp_gd_c1_stat"></span><span class="pp-muted" id="pp_gd_c1_count"> · 预设 ${run.presetIds.length}/${presets.length} 启用${activeStory() ? ' · 已附进行中剧情' : ''}</span></div>
+        <div class="pp-gd-stat"><span id="pp_gd_c1_stat"></span><span class="pp-muted" id="pp_gd_c1_count"> · 预设 ${(run.presetIds ?? []).length}/${presets.length} 启用${activeStory() ? ' · 已附进行中剧情' : ''}</span></div>
         ${recallSheets.length ? `
         <div>
             <div class="pp-gd-layhead">
-                <label class="pp-label" title="只影响本次分析，不改记忆表格页的配置">记忆表格召回</label>
+                <label class="pp-label" title="勾选随当前对话记忆（存聊天文件），下一轮规划回来不用重勾；不改记忆表格页的配置">记忆表格召回</label>
                 <span id="pp_gd_mem_jump" class="menu_button" title="标签词表与 AI 打标签在「记忆表格」页管理">管理标签 ›</span>
             </div>
             <div class="pp-gd-memlay">
@@ -387,12 +425,12 @@ function renderCollect(container, main) {
         </div>` : `
         <div class="pp-gd-layhead"><label class="pp-label">记忆表格召回</label></div>
         <div class="pp-muted">没有开启「参与召回」的记忆表，本次不附带</div>`}
-        <label class="pp-label" title="改动只对本次分析生效，不写回「规划预设」区的默认启用状态">本次启用的预设</label>
+        <label class="pp-label" title="勾选随当前对话记忆（存聊天文件），下一轮回来不用重勾；不写回「规划预设」区的默认启用状态">本次启用的预设</label>
         <div class="pp-gd-selp">
-            ${presets.map(p => `<label><input type="checkbox" data-c1p="${p.id}" ${run.presetIds.includes(p.id) ? 'checked' : ''}/> ${escapeHtml(p.name)}</label>`).join('')
+            ${presets.map(p => `<label><input type="checkbox" data-c1p="${p.id}" ${(run.presetIds ?? []).includes(p.id) ? 'checked' : ''}/> ${escapeHtml(p.name)}</label>`).join('')
             || '<span class="pp-muted">还没有预设</span>'}
         </div>
-        <label class="pp-label" title="勾选的玩法规则随本次分析发给模型，规划须按其约束设计；默认勾选当前生效中的条目">游戏玩法</label>
+        <label class="pp-label" title="勾选的玩法规则随分析发给模型，规划须按其约束设计；勾选随当前对话记忆，首轮默认勾当前生效中的条目">游戏玩法</label>
         <div class="pp-gd-selp">
             ${gpItems.map(i => `<label title="勾选后该条玩法规则作为材料发给规划模型（不影响它注入主对话）"><input type="checkbox" data-c1g="${i.id}" ${(run.gpIds ?? []).includes(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
             || '<span class="pp-muted">还没有玩法条目</span>'}
@@ -444,6 +482,7 @@ function renderCollect(container, main) {
             : '<span class="pp-muted">所选表格里还没有带标签的行：到「记忆表格」页打标签</span>';
         chipsBox.querySelectorAll('[data-mtag]').forEach(cb => cb.addEventListener('change', () => {
             run.memTags = [...chipsBox.querySelectorAll('[data-mtag]:checked')].map(x => x.dataset.mtag);
+            savePicks();
             refreshMem();
         }));
     };
@@ -452,6 +491,7 @@ function renderCollect(container, main) {
 
     main.querySelectorAll('#pp_gd_c1_sheets [data-msheet]').forEach(cb => cb.addEventListener('change', () => {
         run.memSheets = [...main.querySelectorAll('#pp_gd_c1_sheets [data-msheet]:checked')].map(x => x.dataset.msheet);
+        savePicks();
         renderChips();
         refreshMem();
     }));
@@ -464,15 +504,18 @@ function renderCollect(container, main) {
 
     main.querySelector('#pp_gd_c1_memmatch')?.addEventListener('change', e => {
         run.memMatch = e.target.checked;
+        savePicks();
         refreshMem();
     });
 
     main.querySelectorAll('[data-c1p]').forEach(cb => cb.addEventListener('change', () => {
         run.presetIds = [...main.querySelectorAll('[data-c1p]:checked')].map(x => x.dataset.c1p);
-        main.querySelector('#pp_gd_c1_count').textContent = ` · 预设 ${run.presetIds.length}/${presets.length} 启用${activeStory() ? ' · 已附进行中剧情' : ''}`;
+        savePicks();
+        main.querySelector('#pp_gd_c1_count').textContent = ` · 预设 ${(run.presetIds ?? []).length}/${presets.length} 启用${activeStory() ? ' · 已附进行中剧情' : ''}`;
     }));
     main.querySelectorAll('[data-c1g]').forEach(cb => cb.addEventListener('change', () => {
         run.gpIds = [...main.querySelectorAll('[data-c1g]:checked')].map(x => x.dataset.c1g);
+        savePicks();
         refreshMem();
     }));
 
@@ -526,7 +569,7 @@ function renderReady(container, main) {
     main.innerHTML = `
     <div class="pp-section">
         <b>分析前确认</b>
-        <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${run.presetIds.length}/${presets.length} 启用 · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}</div>
+        <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${(run.presetIds ?? []).length}/${presets.length} 启用 · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}</div>
         <div class="pp-gd-stat pp-muted">记忆表格：${sheetDesc} · ${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（先轻量判断，需要才检索）' : ''}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">确认，开始分析</span>
@@ -716,7 +759,7 @@ function renderEvCard(out) {
 // ---------------------------------------------------------------------------
 
 function runPresets() {
-    return (settings.guidance?.presets ?? []).filter(p => run.presetIds.includes(p.id));
+    return (settings.guidance?.presets ?? []).filter(p => (run.presetIds ?? []).includes(p.id));
 }
 
 function historySummaries() {
@@ -868,13 +911,14 @@ function renderResult(container, main) {
             summary: run.result?.plan?.summary ?? '',
             note: run.note,
             event: run.event,
-            presetIds: run.presetIds,
+            presetIds: run.presetIds ?? [],
         });
         syncStoryInjection(run.planText, run.result?.plan?.summary ?? '');
         toastr.success('已存为进行中剧情并自动注入（原剧情自动归档，可在历史回看）');
         step = '';
+        // 第 1 步勾选存在对话记忆里，下一轮进第 1 步自动恢复，这里照常清工作副本
         Object.assign(run, {
-            note: '', presetIds: [], gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+            note: '', presetIds: null, gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
             memSheets: null, memMatch: false, memTags: [], readyFrom: 'event', research: null,
         });
         // 第 2 步闸口状态一并清空：上一轮的事件卡/走向/意见不带进新一轮规划（「不保存，回到第 1 步」才保留）
@@ -942,7 +986,9 @@ function rewriteByAdvice(container) {
     const active = activeStory();
     if (!active || !report?.advice) return;
     run.note = '';
-    run.presetIds = (settings.guidance?.presets ?? []).filter(p => p.enabled).map(p => p.id);
+    // 第 1 步勾选从本对话的记忆恢复，重写与正常规划用同一批材料（与 startCollect 同一套口径）
+    applyPicks();
+    if (run.presetIds == null) run.presetIds = (settings.guidance?.presets ?? []).filter(p => p.enabled).map(p => p.id);
     if (run.gpIds == null) run.gpIds = storageItemsInEffect().map(i => i.id);   // 与第 1 步同默认：生效中的玩法条目
     run.event = null;
     run.eventText = '';
