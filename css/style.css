@@ -1018,6 +1018,12 @@
     gap: 8px;
 }
 
+/* 正文区子项按内容占真实高度、一律不许收缩——flex 默认的 shrink 会把折叠块/卡片
+   往矮里压，块与块文字叠挤、overflow-y 又等不到溢出出不了滚动条（打开一块挤塌全部的教训） */
+.pp-viewer-body > * {
+    flex-shrink: 0;
+}
+
 /* 提示词全文：跟主字号走，长文换行不撑横向 */
 .pp-viewer-pre {
     white-space: pre-wrap;
