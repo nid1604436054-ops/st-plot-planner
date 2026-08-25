@@ -15,6 +15,10 @@ function roleValue(role) {
     return role === 'user' ? ROLE_USER : ROLE_SYSTEM;
 }
 
+// 注入增删改后通知界面：「生效中的隐身注入」折叠区在剧情指导页底部、与产生注入的按钮同页，
+// 监听这个事件就地刷新列表（设置页时代的「切页签重渲染」不再覆盖这种情况）
+const notifyInjectionsChanged = () => document.dispatchEvent(new CustomEvent('pp-injections-changed'));
+
 // 写入一条注入；enabled=false 时等价于撤销（深度 0 = 紧贴上下文末尾，是合法值）
 export function applyInjection(item) {
     const depth = Number(item.depth);
@@ -44,17 +48,20 @@ export function addInjection(item) {
     settings.injections.push(item);
     applyInjection(item);
     save();
+    notifyInjectionsChanged();
 }
 
 export function updateInjection(item) {
     applyInjection(item);
     save();
+    notifyInjectionsChanged();
 }
 
 export function removeInjection(id) {
     settings.injections = settings.injections.filter(i => i.id !== id);
     revokeInjection(id);
     save();
+    notifyInjectionsChanged();
 }
 
 // 聊天切换：撤销不属于当前聊天的 scope=chat 注入，重放其余启用的
@@ -123,5 +130,8 @@ export function tickInjectionExpiries() {
             changed = true;
         }
     }
-    if (changed) save();
+    if (changed) {
+        save();
+        notifyInjectionsChanged();   // 到期自动撤下也要让列表当场消失，别等下次重渲染
+    }
 }

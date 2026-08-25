@@ -74,7 +74,7 @@ export const memoryTab = {
                 <div id="pp_mem_backups" style="display:none"></div>
             </div>
             <div class="pp-group-head">
-                <b class="pp-group-title" title="这份镜像只喂本插件的规划与检查（召回从这里取）；主对话模型看的是记忆表格插件的原表——在镜像里删行不影响扮演侧的记忆，要修扮演侧的事实得去源插件改">镜像 · 剧情召回用（随意编辑，不影响原表）</b>
+                <b class="pp-group-title" title="这份镜像只喂本插件的规划与检查（召回从这里取），随意编辑不影响原表；主对话模型看的是记忆表格插件的原表——在镜像里删行不影响扮演侧的记忆，要修扮演侧的事实得去源插件改">镜像剧情表格</b>
                 <span id="pp_mem_delbtn" class="menu_button" title="在镜像里删掉的行都在那一页：可恢复到镜像，或永久清除">已删除内容</span>
             </div>
             <div class="pp-mem-search">
@@ -202,14 +202,15 @@ function renderTagging(container) {
 
     el.innerHTML = `
     <b title="把镜像里还没标签的行分批交给「设置」页配置的 API，按下方的词表自动打标签（模型只能从词表里选，不能自拟）；一行可以同时命中多个标签——只要符合词表就都会打上，符合与否由模型按注释自行判断。之后剧情指导第 1 步的「按标签匹配」用的就是这些标签">打标签</b>
-    <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签——一行可同时命中多个标签，全都符合就全打上">标签词表（一行一个，注释可选）</label>
+    <label class="pp-label" title="一行一个标签名；注释可选，帮模型判断什么内容算这个标签。打标时模型只能从这些名字里选——一行可同时命中多个标签，全都符合就全打上">标签词表</label>
     <div id="pp_mem_vocab"></div>
     <div class="pp-btn-row">
         <span id="pp_mem_vocab_add" class="menu_button"><i class="fa-solid fa-plus"></i> 加一个标签</span>
     </div>
-    <label class="pp-label" title="勾选参与打标的表格；不勾 = 全部镜像表">打标区域（${sheets.length ? '不勾 = 全部表格' : '镜像里没有表格'}）</label>
+    <label class="pp-label" title="${sheets.length ? '勾选参与打标的表格；不勾 = 全部镜像表' : '镜像里还没有表格，先在上方同步记忆表格'}">打标区域</label>
     <div class="pp-gd-selp">
-        ${sheets.map(s => `<label><input type="checkbox" data-msheet="${escapeHtml(s.uid)}" ${!state.matchSheets.length || state.matchSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)}</label>`).join('')}
+        ${sheets.length ? `<label title="没全勾时勾上=一键勾选全部表格；已全勾时点掉=一键全不勾"><input type="checkbox" id="pp_mem_mall" /> 全选</label>` : ''}
+        ${sheets.map(s => `<label><input type="checkbox" data-msheet="${escapeHtml(s.uid)}" ${state.matchSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)}</label>`).join('')}
     </div>
     <div class="pp-btn-row">
         <label><input type="checkbox" id="pp_mem_tag_over" /> 覆盖已有标签</label>
@@ -247,9 +248,25 @@ function renderTagging(container) {
         renderVocab();
         vocabBox.querySelector('.pp-tag-vocab:last-child [data-vname]')?.focus();
     });
+    // 全选框（第 1 步标签 chips 同款交互）：勾上=一键全勾，再点=一键全不勾；
+    // 下面的勾选动过任何一个没勾上，全选的勾自动消失。勾选集严格按框面存（uid 列表），
+    // 空集语义不变：不勾任何表 = 打标打到全部镜像表
+    const mallEl = el.querySelector('#pp_mem_mall');
+    const syncMall = () => {
+        if (!mallEl) return;
+        const boxes = [...el.querySelectorAll('[data-msheet]')];
+        mallEl.checked = boxes.length > 0 && boxes.every(b => b.checked);
+    };
+    syncMall();
+    mallEl?.addEventListener('change', () => {
+        el.querySelectorAll('[data-msheet]').forEach(cb => { cb.checked = mallEl.checked; });
+        state.matchSheets = [...el.querySelectorAll('[data-msheet]:checked')].map(x => x.dataset.msheet);
+        persistMemory();
+    });
     el.querySelectorAll('[data-msheet]').forEach(cb => cb.addEventListener('change', () => {
         state.matchSheets = [...el.querySelectorAll('[data-msheet]:checked')].map(x => x.dataset.msheet);
         persistMemory();
+        syncMall();
     }));
 
     el.querySelector('#pp_mem_tag_run').addEventListener('click', async function () {
@@ -665,7 +682,7 @@ function renderSource(container) {
     // 默认只留一条摘要行：原表库是自动同步的只读备份（防清空），不是编辑区，展开只为核对/恢复
     const head = `
     <div class="pp-item" id="pp_mem_libhead" title="从记忆表格插件自动同步的只读快照，用于自动备份与恢复（入口在上方「备份与恢复」）；不能在这里编辑，编辑请用上面的镜像">
-        <div class="pp-item-main"><b>原表库 · 自动备份（只读）</b></div>
+        <div class="pp-item-main"><b>原表库 · 自动备份</b></div>
         <div class="pp-item-ops">
             <span class="pp-muted">${libSheets} 表 ${libRows} 行 · 备份 ${state.backups.length} 份</span>
             <span class="menu_button" id="pp_mem_libtoggle">${libOpen ? '收起' : '展开'} <i class="fa-solid fa-chevron-${libOpen ? 'down' : 'right'}"></i></span>

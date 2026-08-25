@@ -1,13 +1,13 @@
-// 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数 + 预设（全局固定要求）管理 + 生效中注入的管理
+// 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数 + 预设（全局固定要求）管理
 // + 数据备份与搬家（导出备份 / 导入备份 / 备份继承）
 // 配置直接放在主面板里，魔法棒 → 剧情规划器 → 设置，无需再去扩展面板
+// （「生效中的隐身注入」原住本页底部，2026-08-26 搬去剧情指导页底部工具区——见 tab-events.js）
 import { settings, save, newId } from "../../settings.js";
 import { testConnection, fetchModels, searchWeb } from "../../api.js";
-import { updateInjection, removeInjection } from "../../injection.js";
 import { guidanceSystemPrompt } from "../../planner.js";
 import { activeStory } from "../../story.js";
 import { chatDataKey, resetChatDataCache } from "../../chatdata.js";
-import { escapeHtml, clamp, fingerprint, readFileAsText } from "../../utils.js";
+import { escapeHtml, clamp, readFileAsText } from "../../utils.js";
 
 // 拉取过的模型列表缓存：页签每次激活都会重渲染，缓存避免切换后下拉列表丢失
 let modelIds = [];
@@ -152,12 +152,6 @@ export const settingsTab = {
             </details>
         </div>
         <div class="pp-section" id="pp_set_preset"></div>
-        <div class="pp-section">
-            <details class="pp-fold" id="pp_set_injfold">
-                <summary><i class="fa-solid fa-eye-slash"></i> 生效中的隐身注入（查看 / 提前撤下）</summary>
-                <div id="pp_set_injlist"></div>
-            </details>
-        </div>
         <div class="pp-section" id="pp_set_backup"></div>`;
 
         const bind = (id, get, set) => {
@@ -328,7 +322,6 @@ export const settingsTab = {
         });
 
         renderPreset(container);
-        renderInjList(container);
         renderBackup(container);
         // 折叠状态记忆（toggle 事件不冒泡，逐个绑定；备份区在 renderBackup 里渲染，放它后面）
         container.querySelectorAll('details[data-secfold]').forEach(el =>
@@ -427,54 +420,6 @@ function rebuildTransferList(container) {
         : '<option value="">（没有其他聊天的数据）</option>';
     sel.disabled = !keys.length;
     container.querySelector('#pp_set_transfer')?.classList.toggle('disabled', !keys.length);
-}
-
-// ---------------------------------------------------------------------------
-// 生效中的隐身注入：各功能确认后创建，这里只做查看 / 停用 / 删除
-// ---------------------------------------------------------------------------
-
-function injSourceName(item) {
-    if (item.source === 'reaction') return '路人反应';
-    const names = { manual: '手动', event: '随机事件', planner: '剧情规划', story: '剧情绑定' };
-    return names[item.source] ?? item.source ?? '手动';
-}
-
-function renderInjList(container) {
-    const list = container.querySelector('#pp_set_injlist');
-    if (!list) return;
-    if (!settings.injections.length) {
-        list.innerHTML = '<div class="pp-muted">暂无生效中的注入</div>';
-        return;
-    }
-    list.innerHTML = settings.injections.slice().reverse().map(i => `
-        <div class="pp-item">
-            <div class="pp-item-main">
-                <span class="pp-item-title">${escapeHtml(i.label)}</span>
-                <span class="pp-muted">
-                    深度 ${i.depth ?? 4} · ${i.scope === 'global' ? '全局' : '本聊天'} · 来源 ${injSourceName(i)}
-                    ${i.expires?.type === 'layers' ? ` · ${i.age ?? 0}/${i.expires.layers} 层` : ''}${i.enabled ? '' : ' · 已停用'}
-                </span>
-                ${i.mode === 'sealed'
-                    ? `<span class="pp-muted">密封内容（历史条目） · ${fingerprint(i.content)}</span>`
-                    : `<span class="pp-muted">${escapeHtml(clamp(i.content, 100))}</span>`}
-            </div>
-            <div class="pp-item-ops">
-                <label><input type="checkbox" data-inj-en="${i.id}" ${i.enabled ? 'checked' : ''} /> 启用</label>
-                <span class="menu_button fa-solid fa-trash" data-inj-del="${i.id}" title="删除"></span>
-            </div>
-        </div>`).join('');
-
-    list.querySelectorAll('[data-inj-en]').forEach(el => el.addEventListener('change', () => {
-        const item = settings.injections.find(x => x.id === el.dataset.injEn);
-        if (!item) return;
-        item.enabled = el.checked;
-        updateInjection(item);
-        renderInjList(container);
-    }));
-    list.querySelectorAll('[data-inj-del]').forEach(el => el.addEventListener('click', () => {
-        removeInjection(el.dataset.injDel);
-        renderInjList(container);
-    }));
 }
 
 // ---------------------------------------------------------------------------

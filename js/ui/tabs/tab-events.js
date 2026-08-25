@@ -3,10 +3,13 @@
 // 「事件库设置」里调掷骰三板块（事件条目 / 维度随机 / AI 自主）的开关与权重，供工具面板的掷骰用。
 // 路人反应与随机事件两工具的产物都是「单元」（暂存池在 units.js），与规划共用同一批材料
 // （见 tab-guidance.js / units.js / reactions.js）；旧版反应区自己的「材料勾选」（chatdata 的 reaction 块）已退役
+// 另外承载「生效中的隐身注入」折叠区（2026-08-26 应用户要求从设置页搬来，去掉灰底区块、
+// 追加挂在「游戏玩法」之后——注入管理与注入相关工具同住底部工具区）
 import { settings, save, newId } from "../../settings.js";
 import { defaultEventRules, generateEventEntries, dimNameOf } from "../../randomEvents.js";
+import { updateInjection, removeInjection } from "../../injection.js";
 import { currentFloor } from "../../context.js";
-import { escapeHtml, clamp } from "../../utils.js";
+import { escapeHtml, clamp, fingerprint } from "../../utils.js";
 
 let editingDim = null, editingRule = null;                     // 展开编辑中的维度 / 条目 id
 const lib = { dimId: '', count: 5, note: '', preview: [], busy: false };  // AI 建库草稿
@@ -426,3 +429,72 @@ function renderLibPreview(container) {
         renderLibPreview(container);
     });
 }
+
+// ---------------------------------------------------------------------------
+// 生效中的隐身注入：各功能确认后创建，这里只做查看 / 停用 / 删除。
+// 原住设置页（灰底 pp-section 里），应用户要求搬到本工具区、「游戏玩法」折叠区之后，
+// 与事件/反应转注入的按钮同页——注入增删改经 pp-injections-changed 事件就地刷新
+// ---------------------------------------------------------------------------
+
+let injFold = false;   // 折叠区展开状态（跨重渲染保留）
+
+function injSourceName(item) {
+    if (item.source === 'reaction') return '路人反应';
+    const names = { manual: '手动', event: '随机事件', planner: '剧情规划', story: '剧情绑定' };
+    return names[item.source] ?? item.source ?? '手动';
+}
+
+function renderInjListInto(listEl) {
+    if (!listEl) return;   // 剧情指导页没开着时列表不在 DOM，事件来了直接跳过
+    if (!settings.injections.length) {
+        listEl.innerHTML = '<div class="pp-muted">暂无生效中的注入</div>';
+        return;
+    }
+    listEl.innerHTML = settings.injections.slice().reverse().map(i => `
+        <div class="pp-item">
+            <div class="pp-item-main">
+                <span class="pp-item-title">${escapeHtml(i.label)}</span>
+                <span class="pp-muted">
+                    深度 ${i.depth ?? 4} · ${i.scope === 'global' ? '全局' : '本聊天'} · 来源 ${injSourceName(i)}
+                    ${i.expires?.type === 'layers' ? ` · ${i.age ?? 0}/${i.expires.layers} 层` : ''}${i.enabled ? '' : ' · 已停用'}
+                </span>
+                ${i.mode === 'sealed'
+                    ? `<span class="pp-muted">密封内容（历史条目） · ${fingerprint(i.content)}</span>`
+                    : `<span class="pp-muted">${escapeHtml(clamp(i.content, 100))}</span>`}
+            </div>
+            <div class="pp-item-ops">
+                <label><input type="checkbox" data-inj-en="${i.id}" ${i.enabled ? 'checked' : ''} /> 启用</label>
+                <span class="menu_button fa-solid fa-trash" data-inj-del="${i.id}" title="删除"></span>
+            </div>
+        </div>`).join('');
+
+    listEl.querySelectorAll('[data-inj-en]').forEach(el => el.addEventListener('change', () => {
+        const item = settings.injections.find(x => x.id === el.dataset.injEn);
+        if (!item) return;
+        item.enabled = el.checked;
+        updateInjection(item);
+    }));
+    listEl.querySelectorAll('[data-inj-del]').forEach(el => el.addEventListener('click', () => {
+        removeInjection(el.dataset.injDel);
+    }));
+}
+
+// 渲染「生效中的隐身注入」折叠区，追加到底部工具区容器（游戏玩法之后，由挂载顺序保证）
+export function renderInjectionTools(wrap) {
+    if (!wrap) return;
+    const fold = document.createElement('details');
+    fold.className = 'pp-fold pp-fold-root';
+    fold.id = 'pp_ev_injfold';
+    if (injFold) fold.open = true;
+    fold.innerHTML = `
+        <summary title="本插件产生的隐身注入都在这里：查看内容、停用/启用、删除提前撤下"><i class="fa-solid fa-eye-slash"></i> 生效中的隐身注入</summary>
+        <div id="pp_ev_injlist"></div>`;
+    wrap.appendChild(fold);
+    fold.addEventListener('toggle', () => { injFold = fold.open; });
+    renderInjListInto(fold.querySelector('#pp_ev_injlist'));
+}
+
+// 向导第 4 步转注入、事件/反应卡注入、到期自动撤下……都发生在本页：列表当场跟着变
+document.addEventListener('pp-injections-changed', () => {
+    renderInjListInto(document.querySelector('#pp_ev_injlist'));
+});

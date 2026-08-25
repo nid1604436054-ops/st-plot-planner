@@ -3,7 +3,7 @@
 // + 随机事件/路人反应两个现场工具的入口键（板块各住一个悬浮面板，产物都是「单元」，见 units.js）+ 剧情构思；
 // 这些勾选按对话记忆存聊天数据，同一对话做完一轮回来不用重勾；预设不在本页勾——已全局化，
 // 「设置」页启用后插件发给大模型的任何调用都自动带上）
-// → ② 分析前确认（点确认才真正调模型）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
+// → ② 分析前确认（点「开始分析」才真正调模型）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（重新生成 / 确认采用 / 放弃保存）
 // 确认采用的规划存为「进行中剧情」（story.js，跟聊天数据走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
 // 单元池不随采用清空，清理由各工具面板的一键清理键手动执行。
 // 向导进度留底 + 自由跳转（调试排版用）：进行中的向导状态实时快照存 chatdata 的 wizard 块
@@ -12,14 +12,15 @@
 // 另有「检查当前剧情」：对照进行中剧情出执行报告（完成度/推进/文风/OOC/其他/建议）
 // 掷骰入口只有随机事件工具面板；页面下部工具区（tab-events.js）只放事件库配置与 AI 建库；
 // 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列（条目库管理 + AI 玩法咨询都在该区——
-// 生成类功能不进向导运行区），生效条目由第 1 步勾选随分析发送，检查报告（runStoryReview）自动附带当前生效条目
+// 生成类功能不进向导运行区），生效条目由第 1 步勾选随分析发送，检查报告（runStoryReview）自动附带当前生效条目；
+// 「生效中的隐身注入」折叠区（tab-events.js）也在该容器末尾——注入管理与注入相关工具同住底部工具区
 import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, startResearchPrefetch, guidanceResearchInputs } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
 import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
 import { storyState, activeStory, confirmPlot, endActive, attachReport, deleteStory, clearHistory } from "../../story.js";
 import { generateReactionCard, composeReactionText } from "../../reactions.js";
-import { renderEventsTools } from "./tab-events.js";
+import { renderEventsTools, renderInjectionTools } from "./tab-events.js";
 import { renderStorageTools } from "./tab-storage.js";
 import { storageItemsInEffect } from "../../store.js";
 import { memoryState } from "../../memoryTable.js";
@@ -146,7 +147,7 @@ function stepNavHtml() {
     const cur = step;
     const items = [
         ['collect', '① 材料', '第 1 步 · 收集确认：材料与勾选（随机事件/路人反应两个工具在此进）'],
-        ['ready', '② 确认', '第 2 步 · 分析前确认：进去后点「确认，开始分析」才调模型'],
+        ['ready', '② 确认', '第 2 步 · 分析前确认：进去后点「开始分析」才调模型'],
         ['running', '③ 生成', '第 3 步 · 分析中：实时输出页。分析在途时点这里回到输出页；没在跑时落到第 2 步的确认页'],
         ['result', '④ 结果', '第 4 步 · 人工二检：检查结果与规划文本；没有生成结果时进去是空白二检页，可直接往规划框里填字试排版'],
     ];
@@ -370,7 +371,7 @@ function wireRxUnit(cardEl, unit, rerender, refresh) {
         });
         toastr.success(unit.inPlan
             ? `已注入，${unit.payload.floors} 层后自动撤下；生效期间规划与检查自动附带同一口径，已同时取消「参与规划」`
-            : `已注入，${unit.payload.floors} 层后自动撤下（一层 = 一条角色回复；生效期间规划与检查报告自动附带同一口径，设置页底部可提前撤下）`);
+            : `已注入，${unit.payload.floors} 层后自动撤下（一层 = 一条角色回复；生效期间规划与检查报告自动附带同一口径，页面底部「生效中的隐身注入」可提前撤下）`);
         unit.inPlan = false;
         persistUnits();
         rerender();
@@ -446,8 +447,10 @@ export const guidanceTab = {
         renderMain(container);
         restoreWizard(container);   // 刚刷新 / 刚切聊天：本聊天存有向导快照就回到离开的那一步
         renderEventsTools(container.querySelector('#pp_gd_events'));
-        // 挂进事件工具区的折叠区容器：三个根折叠区同容器，边距合并、间距一致
+        // 挂进事件工具区的折叠区容器：四个根折叠区同容器，边距合并、间距一致
+        //（事件库设置 / AI 建库 / 游戏玩法 / 生效中的隐身注入，注入管理在游戏玩法之后）
         renderStorageTools(container.querySelector('#pp_ev_settings_wrap'));
+        renderInjectionTools(container.querySelector('#pp_ev_settings_wrap'));
     },
 };
 
@@ -830,7 +833,8 @@ function renderCollect(container, main) {
         const us = unitsState();
         const evN = us.eventUnits.filter(u => u.inPlan).length;
         const rxN = us.reactionUnits.filter(u => u.inPlan).length;
-        const unitSeg = `${evN ? ` · 事件单元 ${evN}` : ''}${rxN ? ` · 反应单元 ${rxN}` : ''}`;
+        // 单元数常驻显示（0 也显示）：第 2 步确认页与这里同口径，有没有单元一眼可见
+        const unitSeg = ` · 单元：随机事件 ${evN} · 路人反应 ${rxN}`;
         return `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}${unitSeg}`;
     };
     // 标签列下方的即时提示：只在该说话时出现（档位/标签没配对上、或标签档要空手）
@@ -1037,9 +1041,8 @@ function renderCollect(container, main) {
     });
 }
 
-// 分析前确认：材料清单一目了然，点确认才真正调模型
+// 分析前确认：这页只核对随分析插入的单元，对话/世界书等其余材料清单在第 1 步「查看完整提示词」弹窗里
 function renderReady(container, main) {
-    const presets = settings.guidance?.presets ?? [];
     const stat = collectStats({ memoryTags: wizardMemoryTags(), memoryModes: wizardMemoryModes(), memoryRecent: wizardMemoryRecent() });
     // 档位口径与第 1 步状态行同一套：常驻 X 表 · 标签 Y 表（…）· 停用 Z 表
     const memState = memoryState();
@@ -1062,17 +1065,17 @@ function renderReady(container, main) {
     main.innerHTML = `
     <div class="pp-section">
         <div class="pp-gd-stephead"><b>第 2 步 · 分析前确认</b></div>
-        <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${presets.filter(p => p.enabled).length}/${presets.length} 全局生效 · 随机事件：${evInPlan ? `${evInPlan} 单元参与` : '无'}</div>
-        <div class="pp-gd-stat pp-muted">记忆表格：${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${rxInPlan ? ` · 路人反应 ${rxInPlan} 单元` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ` · 联网搜索：开（${searchPreJudge() ? '先轻量判断，需要才检索' : '直接检索，不判断'}）` : ''}</div>
+        <div class="pp-gd-stat" title="随分析发给模型的插入内容：随机事件与路人反应的暂存单元、勾选的游戏玩法条目。对话层数、世界书命中、预设等其余材料清单在第 1 步「查看完整提示词」弹窗开头">插入单元：随机事件 ${evInPlan ? `${evInPlan} 单元` : '无'} · 玩法 ${gpOn ? `${(run.gpIds ?? []).length} 条` : '无'} · 路人反应 ${rxInPlan ? `${rxInPlan} 单元` : '无'}</div>
+        <div class="pp-gd-stat pp-muted">记忆表格：${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ` · 联网搜索：开（${searchPreJudge() ? '先轻量判断，需要才检索' : '直接检索，不判断'}）` : ''}</div>
         <div class="pp-btn-row">
-            <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">确认，开始分析</span>
+            <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">开始分析</span>
             <span id="pp_gd_ready_back" class="menu_button">返回</span>
         </div>
     </div>`;
     // 联网判断预跑：进这一页时材料与事件已定型，趁用户核对的几秒把判断跑完；
     // 分析时指纹对不上（这之后输入又变了）会自动作废重判。
     // 刷新恢复进本页（restoring）不预跑——那不是用户动作，不该无声花一次调用；
-    // 点「确认，开始分析」时 prefetch 为空会照常内联判断，不漏
+    // 点「开始分析」时 prefetch 为空会照常内联判断，不漏
     run.research = searchToolActive() && !restoring
         ? startResearchPrefetch(guidanceResearchInputs({
             userNote: run.note,
@@ -1322,7 +1325,7 @@ function wireEvUnit(cardEl, unit, rerender) {
             createdAt: Date.now(),
             expires: { type: 'layers', layers: injLayers },
         });
-        toastr.success(`已注入，${injLayers} 层后自动撤下（设置页底部可提前撤下）`);
+        toastr.success(`已注入，${injLayers} 层后自动撤下（页面底部「生效中的隐身注入」可提前撤下）`);
     });
     cardEl.querySelector('[data-evu-del]').addEventListener('click', () => {
         removeUnit(unit.id);
@@ -1496,8 +1499,8 @@ function renderResult(container, main) {
     <div class="pp-section">
         <b title="可编辑；「确认采用」与「转为隐身注入」用的都是这份文本">剧情规划</b>
         <textarea id="pp_gd_plan" class="text_pole textarea_compact" rows="14"></textarea>
-        <label class="pp-label">修改意见</label>
-        <textarea id="pp_gd_revise_note" class="text_pole textarea_compact" rows="2" placeholder="填给模型的修改要求，点「打回重新生成」生效"></textarea>
+        <label class="pp-label" title="填给模型的修改要求，点「重新生成」按它把规划重写一版（材料与第 1 步勾选不变）">修改意见</label>
+        <textarea id="pp_gd_revise_note" class="text_pole textarea_compact" rows="2" title="填给模型的修改要求，点「重新生成」按它把规划重写一版（材料与第 1 步勾选不变）"></textarea>
         <label class="pp-label" title="默认沿用上次；「确认采用」的剧情注入也按这里的深度与角色注入（剧情注入永不过期，完结时自动撤下）">注入参数</label>
         <div class="pp-gd-selp pp-gd-injrow">
             <label>深度 <input type="number" class="text_pole" id="pp_gd_inj_depth" min="0" max="100" step="1" title="0 = 紧贴上下文末尾；数字越大越靠前" /></label>
@@ -1507,9 +1510,9 @@ function renderResult(container, main) {
         </div>
         <div class="pp-btn-row">
             <span id="pp_gd_adopt" class="menu_button">确认采用</span>
-            <span id="pp_gd_revise" class="menu_button">打回重新生成</span>
-            <span id="pp_gd_inject" class="menu_button" title="手动转一条隐身注入（与剧情自动注入相互独立，按上面的过期设置）">转为隐身注入</span>
-            <span id="pp_gd_discard" class="menu_button" title="丢弃本次生成（构思、预设与事件选择保留）">不保存，回到第 1 步</span>
+            <span id="pp_gd_revise" class="menu_button" title="按上面的修改意见把规划重写一版（材料与第 1 步勾选不变）">重新生成</span>
+            <span id="pp_gd_inject" class="menu_button" title="把上面这份规划文本直接注入主对话（模型可见、聊天界面不显示），按上面的深度/角色/过期生效、到期自动撤下。与「确认采用」的区别：采用是把规划存为「进行中剧情」档案——后续规划与检查都以它为基准，并自动绑定剧情注入（完结才撤下）；转注入不进档案，只是把这份文本临时塞给主对话模型">转为隐身注入</span>
+            <span id="pp_gd_discard" class="menu_button" title="丢弃本次生成（构思、预设与事件选择保留）">放弃保存</span>
         </div>
     </div>`;
 
@@ -1604,7 +1607,7 @@ function renderResult(container, main) {
             createdAt: Date.now(),
             expires: inj.expires === 'layers' ? { type: 'layers', layers: inj.layers } : { type: 'never' },
         });
-        toastr.success('已注入（模型可见、聊天界面不显示；设置页底部可提前撤下）');
+        toastr.success('已注入（模型可见、聊天界面不显示；页面底部「生效中的隐身注入」可提前撤下）');
     });
 }
 
