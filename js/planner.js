@@ -269,11 +269,12 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
 }
 
 // 本地检索统计（向导第 1 步展示用；纯本地，不调模型）
-// memoryTags 语义与 buildGuidanceMessages 相同：null 默认召回 / [] 全量 / 数组按标签 / false 不附带
+// memoryTags 语义与 buildGuidanceMessages 相同：null 默认召回 / [] 全量 / 数组按标签 / 'none' 只走最新窗口 / false 不附带
 // memorySheets：null = 全部（开了召回的表）；数组 = 只算勾选的表（空数组 = 一张都不带）
-export function collectStats({ memoryTags = null, memorySheets = null } = {}) {
+// memoryRecent：每表无论标签另附的表尾最新行数（0 = 不另附）
+export function collectStats({ memoryTags = null, memorySheets = null, memoryRecent = 0 } = {}) {
     const { chatList, hits } = collectPlanningContext();
-    const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets }).length;
+    const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets, latestPerSheet: memoryRecent }).length;
     return { layers: chatList.length, hits: hits.length, memChars };
 }
 
@@ -297,9 +298,11 @@ function reactionSection(header) {
  * @param {string} [options.activePlan]          进行中剧情全文（查重与进度对照）
  * @param {string[]} [options.historySummaries]  历史剧情摘要（查重用）
  * @param {*}      [options.memoryTags]          记忆表格召回方式：null/缺省=按记忆表格页召回标签，
- *                                               []=全量, ['a','b']=按标签, false=本次不附带
+ *                                               []=全量, ['a','b']=按标签, 'none'=不按标签只走最新窗口,
+ *                                               false=本次不附带
  * @param {*}      [options.memorySheets]        记忆表格表范围：null/缺省=全部（开了召回的表），
  *                                               数组=只带勾选的表（空数组=一张都不带）
+ * @param {number} [options.memoryRecent]        每表无论标签都另附的表尾最新行数；0=不另附（全量召回时无意义）
  * @param {Array}  [options.storageItems]        游戏玩法条目（{name, content}）：勾选后作为
  *                                               「游戏玩法」小节发给模型，规划须在其约束内设计
  */
@@ -316,8 +319,8 @@ export function materialSections(opts = {}) {
 }
 
 export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, storageItems = [] } = options;
-    const { parts, hits } = materialSections({ memoryTags, memorySheets, storageItems, activePlan, historySummaries });
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryRecent = 0, storageItems = [] } = options;
+    const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryRecent, storageItems, activePlan, historySummaries });
     const all = [
         ...parts,
         ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),

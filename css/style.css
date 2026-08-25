@@ -783,6 +783,23 @@
     flex: 0 0 auto;
 }
 
+/* 第 1 步标签过滤列的「每表另附最新 N 行」：数字框小尺寸不拉满宽。
+   选择器必须带 .pp-drawer 抬优先级，理由同上面的注入参数行——不带前缀会被
+   「抽屉内表单控件占满宽度」的全局规则反杀 */
+.pp-gd-recentrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.pp-drawer .pp-gd-recentrow input[type="number"] {
+    width: 4.5em;
+    min-width: 0;
+    padding: 0 4px;
+    flex: 0 0 auto;
+}
+
 /* 记忆表格「打标签」区：词表行（标签名 + 注释 + 删除），两个输入框均分宽度 */
 .pp-tag-vocab {
     display: flex;

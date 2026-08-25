@@ -1,5 +1,5 @@
 // 剧情指导页签：分步规划向导 + 随机事件工具区 + 游戏玩法工具区（均挂在页面底部）
-// ① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签）+ 游戏玩法勾选 + 剧情构思；
+// ① 收集确认（本地检索材料 + 记忆表格两层筛选（表范围/标签）+ 每表最新行补底（无论标签）+ 游戏玩法勾选 + 剧情构思；
 // 这些勾选按对话记忆存聊天文件，同一对话做完一轮回来不用重勾；预设不在本页勾——已全局化，
 // 「设置」页启用后插件发给大模型的任何调用都自动带上）
 // → ② 随机事件闸口（可跳过）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
@@ -38,6 +38,7 @@ const run = {
     memSheets: null,     // 第 1 步第一层：勾选的表 uid；null = 全部（开了召回的表），[] = 一张不带
     memMatch: false,     // 第 1 步第二层：是否按标签匹配召回记忆表格
     memTags: [],         // 按标签匹配时勾选的标签名
+    memRecent: 0,        // 按标签匹配时每张所选表无论标签都另附的表尾最新行数；0 = 不另附（行没有时间戳，新记录在表尾）
     readyFrom: 'event',  // 分析前确认页的「返回」回到哪一步
     research: null,      // 「分析前确认」页预跑的联网判断 {fingerprint, promise}；分析时指纹对不上自动作废
 };
@@ -95,6 +96,7 @@ function restoreWizard(container) {
         memSheets: Array.isArray(r.memSheets) ? r.memSheets : null,
         memMatch: Boolean(r.memMatch),
         memTags: Array.isArray(r.memTags) ? r.memTags : [],
+        memRecent: Math.max(0, Math.round(Number(r.memRecent) || 0)),
         readyFrom: r.readyFrom ?? 'event',
         research: null,
     });
@@ -162,12 +164,14 @@ function applyPicks() {
         run.memSheets = null;
         run.memMatch = false;
         run.memTags = [];
+        run.memRecent = 0;
         run.gpIds = null;
         return;
     }
     run.memSheets = Array.isArray(p.memSheets) ? p.memSheets : null;
     run.memMatch = Boolean(p.memMatch);
     run.memTags = Array.isArray(p.memTags) ? p.memTags : [];
+    run.memRecent = Math.max(0, Math.round(Number(p.memRecent) || 0));
     run.gpIds = Array.isArray(p.gpIds) ? p.gpIds : null;
 }
 
@@ -177,6 +181,7 @@ function savePicks() {
         memSheets: run.memSheets,
         memMatch: run.memMatch,
         memTags: run.memTags,
+        memRecent: run.memRecent,
         gpIds: run.gpIds,
     });
 }
@@ -226,7 +231,7 @@ export function resetGuidance() {
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
     Object.assign(run, {
         note: '', gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
-        memSheets: null, memMatch: false, memTags: [], readyFrom: 'event', research: null,
+        memSheets: null, memMatch: false, memTags: [], memRecent: 0, readyFrom: 'event', research: null,
     });
     Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
     resetEventsTools();   // 底部工具区的反应卡也是当前聊天的内容
@@ -452,16 +457,23 @@ function startCollect(container) {
 }
 
 // 本次运行的记忆表格召回方式 → planner 的 memoryTags：
-// 不匹配 = []（全量）；按标签但一个没勾 = false（不附带）；按标签 = 标签名数组
+// 不匹配 = []（全量）；按标签 = 标签名数组；按标签但一个没勾 = 'none'（只走最新窗口）或
+// false（不附带）——取决于「每表另附最新」有没有填
 function wizardMemoryTags() {
     if (!run.memMatch) return [];
-    return run.memTags.length ? run.memTags : false;
+    if (run.memTags.length) return run.memTags;
+    return run.memRecent > 0 ? 'none' : false;
 }
 
 // 本次运行的记忆表格表范围 → planner 的 memorySheets：
 // null = 全部（开了召回的表）；数组 = 勾选的表（可为空 = 一张不带）
 function wizardMemorySheets() {
     return run.memSheets;
+}
+
+// 每表无论标签都另附的表尾最新行数 → planner 的 memoryRecent（全量召回时无意义）
+function wizardMemoryRecent() {
+    return run.memRecent;
 }
 
 // 本次运行随分析发送的游戏玩法条目（第 1 步勾选，默认 = 当前生效中）
@@ -480,6 +492,7 @@ function wizardMaterials() {
     return {
         memoryTags: wizardMemoryTags(),
         memorySheets: wizardMemorySheets(),
+        memoryRecent: wizardMemoryRecent(),
         storageItems: wizardStorageItems(),
     };
 }
@@ -525,6 +538,7 @@ function renderCollect(container, main) {
                     <b class="pp-gd-layname">标签过滤</b>
                     <label title="勾选后只带所选标签的行；不勾则所选表格全量带出"><input type="checkbox" id="pp_gd_c1_memmatch" ${run.memMatch ? 'checked' : ''}/> 按标签匹配</label>
                     <div class="pp-gd-selp" id="pp_gd_c1_chips" ${run.memMatch ? '' : 'style="display:none"'}></div>
+                    <label class="pp-gd-recentrow" id="pp_gd_c1_recent_wrap" ${run.memMatch ? '' : 'style="display:none"'} title="标签过滤会漏掉近期发生但没打标签的事件：这里填 N，每张所选表格无论行上有没有标签、命没命中勾选的标签，都把表尾最新的 N 行一并带给模型——比如开了「重要事件」表填 30，它最新 30 条一定在材料里。记忆行没有时间戳，按表内顺序新记录追加在表尾，「最新」即表尾；0 = 不另附；不勾「按标签匹配」时全量带出，本项不生效">每表另附最新 <input type="number" class="text_pole" id="pp_gd_c1_recent" min="0" step="1" value="${run.memRecent}" /> 行（无论标签）</label>
                     <span class="pp-muted" id="pp_gd_c1_memtip"></span>
                 </div>
             </div>
@@ -548,21 +562,28 @@ function renderCollect(container, main) {
 
     const memModeDesc = () => Array.isArray(run.memSheets) && !run.memSheets.length ? '不附带（未选表格）'
         : run.memMatch
-            ? (run.memTags.length ? `按标签 ${run.memTags.length} 类` : '不附带（未勾标签）')
+            ? (run.memTags.length
+                ? `按标签 ${run.memTags.length} 类${run.memRecent ? ` + 每表最新 ${run.memRecent} 行` : ''}`
+                : (run.memRecent ? `只带每表最新 ${run.memRecent} 行` : '不附带（未勾标签）'))
             : '全量';
     const refreshMem = () => {
-        const st = collectStats({ memoryTags: wizardMemoryTags(), memorySheets: wizardMemorySheets() });
+        const st = collectStats({ memoryTags: wizardMemoryTags(), memorySheets: wizardMemorySheets(), memoryRecent: wizardMemoryRecent() });
         const sheetDesc = run.memSheets == null ? '全部表' : `${run.memSheets.length} 张表`;
         const memSeg = !recallSheets.length ? '记忆表格 不附带'
             : `记忆表格 ${st.memChars} 字（${sheetDesc} · ${memModeDesc()}）`;
         const gpDesc = gpItems.length ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
         main.querySelector('#pp_gd_c1_stat').textContent =
             `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}`;
+        const on = run.memMatch ? '' : 'none';
         const chipsEl = main.querySelector('#pp_gd_c1_chips');
-        if (chipsEl) chipsEl.style.display = run.memMatch ? '' : 'none';
+        if (chipsEl) chipsEl.style.display = on;
+        const recentWrap = main.querySelector('#pp_gd_c1_recent_wrap');
+        if (recentWrap) recentWrap.style.display = on;
         const tipEl = main.querySelector('#pp_gd_c1_memtip');
         if (tipEl) tipEl.textContent =
-            run.memMatch && !run.memTags.length ? '未勾选任何标签，本次将不附带记忆表格' : '';
+            run.memMatch && !run.memTags.length
+                ? (run.memRecent ? `未勾标签：只带每表最新 ${run.memRecent} 行` : '未勾选任何标签，本次将不附带记忆表格')
+                : '';
     };
 
     // 第二层标签 chips 的计数只统计第一层所选表格里的行；选表变了就地重建
@@ -612,6 +633,20 @@ function renderCollect(container, main) {
         refreshMem();
     });
 
+    // 每表另附最新行数：input 实时回存（失焦整卡重渲染不丢），change 收敛非法值并回填
+    const recentEl = main.querySelector('#pp_gd_c1_recent');
+    recentEl?.addEventListener('input', () => {
+        const v = Number(recentEl.value);
+        if (Number.isFinite(v)) { run.memRecent = Math.max(0, Math.round(v)); savePicks(); persistWizard(); refreshMem(); }
+    });
+    recentEl?.addEventListener('change', () => {
+        run.memRecent = Math.max(0, Math.round(Number(recentEl.value) || 0));
+        recentEl.value = String(run.memRecent);
+        savePicks();
+        persistWizard();
+        refreshMem();
+    });
+
     main.querySelectorAll('[data-c1g]').forEach(cb => cb.addEventListener('change', () => {
         run.gpIds = [...main.querySelectorAll('[data-c1g]:checked')].map(x => x.dataset.c1g);
         savePicks();
@@ -631,6 +666,7 @@ function renderCollect(container, main) {
                 historySummaries: s.history.filter(h => h.id !== s.activeId).map(h => h.summary),
                 memoryTags: wizardMemoryTags(),
                 memorySheets: wizardMemorySheets(),
+                memoryRecent: wizardMemoryRecent(),
                 storageItems: wizardStorageItems(),
             });
             // 与真实调用同一拼法：chatCompletion 出口会附加全局预设，这里用同一个函数还原，
@@ -669,11 +705,13 @@ function renderCollect(container, main) {
 // 分析前确认：材料清单一目了然，点确认才真正调模型
 function renderReady(container, main) {
     const presets = settings.guidance?.presets ?? [];
-    const stat = collectStats({ memoryTags: wizardMemoryTags(), memorySheets: wizardMemorySheets() });
+    const stat = collectStats({ memoryTags: wizardMemoryTags(), memorySheets: wizardMemorySheets(), memoryRecent: wizardMemoryRecent() });
     const sheetDesc = run.memSheets == null ? '全部表' : `${run.memSheets.length} 张表`;
     const memDesc = Array.isArray(run.memSheets) && !run.memSheets.length ? '不附带（未选表格）'
         : run.memMatch
-            ? (run.memTags.length ? `按标签（${run.memTags.join('、')}）` : '不附带（未勾标签）')
+            ? (run.memTags.length
+                ? `按标签（${run.memTags.join('、')}）${run.memRecent ? ` + 每表最新 ${run.memRecent} 行` : ''}`
+                : (run.memRecent ? `只带每表最新 ${run.memRecent} 行` : '不附带（未勾标签）'))
             : '全量召回';
     const gpOn = settings.storageItems.some(i => i.enabled);
     main.innerHTML = `
@@ -926,6 +964,7 @@ async function startAnalyze(container, { revise = false } = {}) {
             historySummaries: historySummaries(),
             memoryTags: wizardMemoryTags(),
             memorySheets: wizardMemorySheets(),
+            memoryRecent: wizardMemoryRecent(),
             storageItems: wizardStorageItems(),
             onDelta: t => { streamText = t; updateStreamView(token); },
             onStage: s => { streamStage = s; updateStreamView(token); },
@@ -1069,7 +1108,7 @@ function renderResult(container, main) {
         // 第 1 步勾选存在对话记忆里，下一轮进第 1 步自动恢复，这里照常清工作副本
         Object.assign(run, {
             note: '', gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
-            memSheets: null, memMatch: false, memTags: [], readyFrom: 'event', research: null,
+            memSheets: null, memMatch: false, memTags: [], memRecent: 0, readyFrom: 'event', research: null,
         });
         // 第 2 步闸口状态一并清空：上一轮的事件卡/走向/意见不带进新一轮规划（「不保存，回到第 1 步」才保留）
         Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });

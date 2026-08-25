@@ -497,7 +497,10 @@ export async function autoTagByVocabulary({ vocab = [], sheetUids = [], overwrit
 }
 
 // ---------------------------------------------------------------------------
-// 召回：按标签筛选镜像行，输出沿用记忆表格插件的提示词格式
+// 召回：按标签筛选镜像行，输出沿用记忆表格插件的提示词格式。
+// latestPerSheet：每张表无论标签都追加带上的表尾最新行数（行没有时间戳，
+// 记忆表格插件把新记录追加在表尾，「最新」即表尾）——按标签筛会把没打标签的
+// 近期事件漏掉，这个窗口保证最近的剧情发展始终在材料里
 // ---------------------------------------------------------------------------
 
 function csvSafe(v) {
@@ -508,9 +511,13 @@ function pickColumns(values, indices) {
     return indices ? indices.map(i => values[i]).filter(v => v !== undefined) : values;
 }
 
-export function buildMemoryContext({ tagFilter = null, sheetUids = null, maxChars } = {}) {
+export function buildMemoryContext({ tagFilter = null, sheetUids = null, latestPerSheet = 0, maxChars } = {}) {
     const state = memoryState();
-    const want = (tagFilter ?? state.recallTags).filter(Boolean);
+    // tagFilter：null = 按记忆表格页召回标签；数组 = 按标签筛（空数组 = 不筛全量）；
+    // 'none' = 完全不按标签，只走 latestPerSheet 最新窗口（向导勾了标签匹配但一个标签没勾时用）
+    const noTags = tagFilter === 'none';
+    const want = noTags ? [] : (tagFilter ?? state.recallTags).filter(Boolean);
+    const recent = Math.max(0, Math.round(Number(latestPerSheet) || 0));
     const only = Array.isArray(sheetUids) ? new Set(sheetUids) : null;   // null = 全部；空数组 = 一张表都不带
     const blocks = [];
     for (const sheet of state.mirror.sheets) {
@@ -518,8 +525,11 @@ export function buildMemoryContext({ tagFilter = null, sheetUids = null, maxChar
         if (recall.enabled === false) continue;
         if (only && !only.has(sheet.uid)) continue;
         const colIdx = Array.isArray(recall.columns) ? recall.columns : null;
+        const total = sheet.rows.length;
         const rows = sheet.rows
-            .filter(r => want.length === 0 || (state.tags[r.rid] ?? []).some(t => want.includes(t)))
+            .filter((r, i) => (!noTags && want.length === 0)                    // 全量
+                || want.some(t => (state.tags[r.rid] ?? []).includes(t))        // 标签命中
+                || (recent > 0 && i >= total - recent))                         // 表尾最新窗口：无论标签
             .map(r => {
                 const cells = pickColumns(r.cells, colIdx);
                 // 行尾带上这行的标签：模型能看见「同标签的同类事件已有多条」，配合规划提示词防流程复刻
