@@ -1174,6 +1174,7 @@ function openEvPanel(onChange) {
         });
         body.querySelector('#pp_gd_ev_llm').addEventListener('click', async () => {
             if (evBusy) return;
+            if (!(getTavernContext().chat ?? []).length) { toastr.warning('空聊天里没有对话材料，先聊几句再生成'); return; }
             if (unitsState().eventUnits.length >= MAX_UNITS_PER_TOOL) { toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个再生成`); return; }
             const imports = pickedImports('event', evImports);
             evBusy = true;
@@ -1195,6 +1196,7 @@ function openEvPanel(onChange) {
         });
         body.querySelector('#pp_gd_ev_roll').addEventListener('click', async () => {
             if (evBusy) return;
+            if (!(getTavernContext().chat ?? []).length) { toastr.warning('空聊天里没有对话材料，先聊几句再生成'); return; }
             if (unitsState().eventUnits.length >= MAX_UNITS_PER_TOOL) { toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个再生成`); return; }
             const r = rollEventPipeline();
             if (r.mode === 'none') {
@@ -1216,7 +1218,8 @@ function openEvPanel(onChange) {
                     status(`来自事件库「${r.rule.name}」`);
                 } else if (r.mode === 'ai') {
                     gen = await generateAiChoiceRandomEvent({ dimensions: r.dimensions, materials: { ...wizardMaterials(), importedUnits: imports } });
-                    const dim = r.dimensions.find(d => d.name === gen?.dimension) ?? null;
+                    // 回传的维度名先去首尾空格再精确匹配；仍对不上就记空（commitRolledEvent 容忍 null）
+                    const dim = r.dimensions.find(d => d.name === String(gen?.dimension ?? '').trim()) ?? null;
                     commitRolledEvent({ dimension: dim, title: gen.title, source: 'ai' });
                     status(`来自 AI 自主${dim ? `·维度「${dim.name}」` : ''}`);
                 } else {
@@ -1361,6 +1364,7 @@ function openRxPanel(onChange) {
         });
         body.querySelector('#pp_gd_rx_gen').addEventListener('click', async () => {
             if (rxBusy) return;
+            if (!(getTavernContext().chat ?? []).length) { toastr.warning('空聊天里没有对话材料，先聊几句再生成'); return; }
             if (unitsState().reactionUnits.length >= MAX_UNITS_PER_TOOL) { toastr.warning(`反应暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个再生成`); return; }
             const imports = pickedImports('reaction', rxImports);
             rxBusy = true;

@@ -182,7 +182,7 @@ export async function generateRandomEvent(rule, materials = {}) {
 }
 
 /**
- * 大模型自由随机：不经事件库掷骰，让模型即兴出一次意外遭遇（剧情向导第 2 步 / 掷骰管线的自由分支）。
+ * 大模型自由随机：不经事件库掷骰，让模型即兴出一次意外遭遇（随机事件工具面板的「大模型随机」键 / 掷骰管线的自由分支）。
  * @param {object} [options]
  * @param {object} [options.dimension]      维度对象 {name, prompt}：按维度气质即兴
  * @param {boolean} [options.useLibrary]    true 时把事件库条目列给模型参考（可从中选方向也可另起）

@@ -74,7 +74,7 @@ export const memoryTab = {
                 <div id="pp_mem_backups" style="display:none"></div>
             </div>
             <div class="pp-group-head">
-                <b class="pp-group-title">镜像 · 剧情召回用（随意编辑，不影响原表）</b>
+                <b class="pp-group-title" title="这份镜像只喂本插件的规划与检查（召回从这里取）；主对话模型看的是记忆表格插件的原表——在镜像里删行不影响扮演侧的记忆，要修扮演侧的事实得去源插件改">镜像 · 剧情召回用（随意编辑，不影响原表）</b>
                 <span id="pp_mem_delbtn" class="menu_button" title="在镜像里删掉的行都在那一页：可恢复到镜像，或永久清除">已删除内容</span>
             </div>
             <div class="pp-mem-search">

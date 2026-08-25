@@ -46,7 +46,8 @@ jQuery(() => {
         resetWorldbook();
     });
 
-    // 新消息到达：推进「按层数过期」的计数，重扫储存条目，同步记忆表格镜像
+    // 新消息到达：按楼层净增推进「按层数过期」的计数（滑动/重新生成楼数不变、不吃层），
+    // 重扫储存条目，同步记忆表格镜像
     eventSource.on(event_types.MESSAGE_RECEIVED, () => {
         tickInjectionExpiries();
         scanAndApplyStorage();

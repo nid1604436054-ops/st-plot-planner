@@ -188,6 +188,14 @@
     white-space: nowrap;
 }
 
+/* 条目卡内的编辑框：吃满整行（.pp-item 是 wrap 的横向 flex，basis 100% 自然换行独占一行） */
+.pp-item-editbox {
+    flex-basis: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
 /* 酒馆全局把勾选框设为 display:grid（块级），裸 label 里文字会被挤到下一行；
    抽屉内改回行内网格，勾选框与文字同行（.pp-gd-selp label 等行内弹性容器不受影响） */
 .pp-drawer input[type="checkbox"] {

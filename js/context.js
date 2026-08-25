@@ -45,7 +45,8 @@ export function collectPlanningContext({ enabledIds } = {}) {
     return { chatList, scanText, hits };
 }
 
-// 当前楼层（聊天消息数）：事件条目冷却与反应注入计层的基准
+// 当前楼层（聊天消息数，含 user 楼）：事件条目冷却的基准。
+// 注入计层不用它——那里要「一层 = 一条角色回复」，只数角色楼（injection.js 的 replyFloorCount）
 export function currentFloor() {
     const chat = getTavernContext().chat;
     return Array.isArray(chat) ? chat.length : 0;

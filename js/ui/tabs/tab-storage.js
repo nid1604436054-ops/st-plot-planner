@@ -243,7 +243,34 @@ function renderList(root) {
             </div>
             <div class="pp-item-ops">
                 <label><input type="checkbox" data-st-en="${i.id}" ${i.enabled ? 'checked' : ''} /> 启用</label>
+                <span class="menu_button fa-solid fa-pen" data-st-edit="${i.id}" title="编辑这个条目：名称/触发词/注入深度/常驻/正文都可改，保存后立即按新参数重扫注入"></span>
                 <span class="menu_button fa-solid fa-trash" data-st-del="${i.id}" title="删除"></span>
+            </div>
+            <div class="pp-item-editbox" data-st-editbox="${i.id}" hidden>
+                <div class="pp-grid2">
+                    <div>
+                        <label class="pp-label">名称</label>
+                        <input class="text_pole textarea_compact" data-st-name value="${escapeHtml(i.name)}" />
+                    </div>
+                    <div>
+                        <label class="pp-label">触发词（逗号分隔，留空则需勾常驻）</label>
+                        <input class="text_pole textarea_compact" data-st-keys value="${escapeHtml((i.keys ?? []).join(','))}" placeholder="扑克,德扑,牌局" />
+                    </div>
+                </div>
+                <div class="pp-grid2">
+                    <div>
+                        <label class="pp-label">注入深度</label>
+                        <input class="text_pole textarea_compact" data-st-depth type="number" min="0" max="16" value="${i.depth ?? 6}" />
+                    </div>
+                    <div style="align-self:end">
+                        <label><input type="checkbox" data-st-const ${i.constant ? 'checked' : ''} /> 常驻（无条件注入）</label>
+                    </div>
+                </div>
+                <textarea class="text_pole textarea_compact" rows="5" data-st-content>${escapeHtml(i.content)}</textarea>
+                <div class="pp-btn-row">
+                    <span class="menu_button" data-st-save title="保存修改并按新参数重扫注入">保存</span>
+                    <span class="menu_button" data-st-cancel title="放弃未保存的改动，收起编辑框">取消</span>
+                </div>
             </div>
         </div>`).join('');
 
@@ -254,6 +281,33 @@ function renderList(root) {
         save();
         scanAndApplyStorage();
     }));
+    // 编辑框展开/收起：一个条目一个框，打开几个互不影响
+    list.querySelectorAll('[data-st-edit]').forEach(el => el.addEventListener('click', () => {
+        const box = list.querySelector(`[data-st-editbox="${el.dataset.stEdit}"]`);
+        if (box) box.hidden = !box.hidden;
+    }));
+    list.querySelectorAll('[data-st-editbox]').forEach(box => {
+        const item = settings.storageItems.find(x => x.id === box.dataset.stEditbox);
+        if (!item) return;
+        box.querySelector('[data-st-save]').addEventListener('click', () => {
+            const name = box.querySelector('[data-st-name]').value.trim();
+            const content = box.querySelector('[data-st-content]').value.trim();
+            if (!name || !content) { toastr.warning('请填写名称与内容'); return; }
+            // 深度 0 是合法值（同添加表单），留空才回退默认
+            const depthRaw = box.querySelector('[data-st-depth]').value.trim();
+            item.name = name;
+            item.keys = box.querySelector('[data-st-keys]').value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+            item.constant = box.querySelector('[data-st-const]').checked;
+            item.depth = depthRaw !== '' && Number.isFinite(Number(depthRaw))
+                ? Math.min(Math.max(Math.round(Number(depthRaw)), 0), 16) : 6;
+            item.content = content;
+            save();
+            scanAndApplyStorage();   // 正文/深度/触发词/常驻任一改动都靠这一次重扫落到注入
+            renderList(root);
+            toastr.success(`已保存「${name}」并按新参数重扫注入`);
+        });
+        box.querySelector('[data-st-cancel]').addEventListener('click', () => { box.hidden = true; });
+    });
     list.querySelectorAll('[data-st-del]').forEach(el => el.addEventListener('click', () => {
         removeItem(el.dataset.stDel);
         renderList(root);

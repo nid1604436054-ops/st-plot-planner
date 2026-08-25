@@ -12,7 +12,7 @@ let editingDim = null, editingRule = null;                     // 展开编辑�
 const lib = { dimId: '', count: 5, note: '', preview: [], busy: false };  // AI 建库草稿
 const folds = { settings: false, dims: false, entries: false, ailib: false }; // 折叠区展开状态（跨重渲染保留）
 
-// 渲染随机事件工具区（底部两个折叠区），由剧情指导页挂载；掷骰本身在向导第 2 步
+// 渲染随机事件工具区（底部两个折叠区），由剧情指导页挂载；掷骰本身在随机事件工具面板（第 1 步入口键点开）
 export function renderEventsTools(container) {
     // 默认条目只在首次使用时种一次（seeded 标记）：之后删空事件库是合法状态，不再复活
     if (!settings.events.seeded) {

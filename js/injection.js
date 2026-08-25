@@ -37,6 +37,10 @@ export function addInjection(item) {
     if (item.scope === 'chat' && item.chatId === undefined) {
         item.chatId = getTavernContext().chatId;
     }
+    // 按层数过期的注入记下计层基线（楼数口径见 replyFloorCount），此后已过层数按楼层净增推导
+    if (item.expires?.type === 'layers' && item.floorBase == null) {
+        item.floorBase = replyFloorCount();
+    }
     settings.injections.push(item);
     applyInjection(item);
     save();
@@ -75,18 +79,36 @@ export function activeReactionInjections() {
         && !(i.scope === 'chat' && i.chatId !== undefined && i.chatId !== chatId));
 }
 
-// 每收到一条角色回复，推进「按层数过期」的计数（开发方案 §M4 生命周期；一层 = 一条角色回复，
-// user 消息不计——tick 只挂在 MESSAGE_RECEIVED 上）；
-// 带反应卡的注入（source=reaction）同时按新楼层重写正文（旧式扩散链卡逐层换段，新卡口径不变、临近到期提示收束）。
-// 绑定其他聊天的 scope=chat 注入不跟着别的聊天计数。
+// 计层楼数 = 已落地的角色回复数（user 消息不计，一层 = 一条角色回复）。
+// 滑动/重新生成只是替换最后一条回复，楼数不变；删楼层只会让楼数变少——
+// 按净增推导对这三种情况都天然免疫
+function replyFloorCount() {
+    const chat = getTavernContext().chat;
+    if (!Array.isArray(chat)) return 0;
+    return chat.reduce((n, m) => n + (m?.is_user ? 0 : 1), 0);
+}
+
+// 已过层数按「聊天楼层净增」推导（2026-08-26 用户拍板）：注入创建时记下基线楼数
+// （addInjection），此后 age = 当前楼数 - 基线。MESSAGE_RECEIVED 在滑动/重新生成时也会
+// 触发，但楼数没变 → 不吃层，多触发无害；删楼层楼数只减，推导结果不为负。
+// 带反应卡的注入（source=reaction）同时按新楼层重写正文（旧式扩散链卡逐层换段，新卡口径
+// 不变、临近到期提示收束）。绑定其他聊天的 scope=chat 注入不跟着别的聊天计数。
 export function tickInjectionExpiries() {
     const chatId = getTavernContext().chatId;
+    const floors = replyFloorCount();
     let changed = false;
     for (const item of settings.injections) {
         if (!item.enabled) continue;
         if (item.scope === 'chat' && item.chatId !== undefined && item.chatId !== chatId) continue;
         if (item.expires?.type !== 'layers') continue;
-        item.age = (item.age ?? 0) + 1;
+        if (item.floorBase == null) {
+            // 升级前创建的老注入按现有进度折算基线，剩余层数原样保留不跳变；
+            // 楼层被删过时基线可能为负——不能夹 0，夹了反而把已过层数放大
+            item.floorBase = floors - (item.age ?? 0);
+        }
+        const age = Math.max(0, floors - item.floorBase);
+        if (age === (item.age ?? 0)) continue;   // 楼数没有净增（滑动/重新生成）不吃层
+        item.age = age;
         if (item.age >= item.expires.layers) {
             item.enabled = false;
             revokeInjection(item.id);
