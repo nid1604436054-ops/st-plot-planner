@@ -78,6 +78,7 @@ function ensureDefaults() {
     store.retrieval.memChars ??= 4000;
     store.guidance.inject ??= { depth: 4, role: 'system', expires: 'never', layers: 20 };
     store.storageScanLayers ??= 20;   // 老安装补玩法触发词扫描窗口（沿用此前写死的 20）
+    store.storageConsult ??= { idea: '', usePlan: false, useGp: false, draft: null };   // 玩法咨询的思路/材料勾选/草案（随全局设置留底）
     store.lorebookTrash ??= [];       // 老安装补世界书回收站
     store.chatData ??= {};            // 老安装补每聊天数据冷层
     // M3 三层化迁移：老安装补维度层与掷骰配置，已有条目挂上维度/轻重/关键词（不覆盖已写内容）

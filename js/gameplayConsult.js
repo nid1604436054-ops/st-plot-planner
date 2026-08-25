@@ -1,8 +1,9 @@
-// 玩法咨询（向导第 1 步「游戏玩法」区的 AI 生成）：用户给一句大概思路，模型扩写成一份
-// 完整、可直接执行的玩法规则，可改后存进玩法条目库（settings.storageItems，store.js）。
+// 玩法咨询（「游戏玩法」工具区 tab-storage.js 的 AI 生成）：用户给一句大概思路，模型扩写成
+// 一份完整、可直接执行的玩法规则，可改后经 addItem 存进玩法条目库（settings.storageItems）。
+// 生成/制作类功能不进向导第 1 步运行区——第 1 步只勾选现成条目随分析发送。
 // 材料刻意轻量——不复用向导第 1 步的整套材料面板：角色摘要/最近对话/世界书命中是
 // materialSections 的固定底座（本地检索，不花调用），调用方只按需追加进行中剧情与
-// 已勾选的现有玩法；记忆表格那类既往事件流水对玩法设计没用，一律不带。
+// 当前生效中的现有玩法；记忆表格那类既往事件流水对玩法设计没用，一律不带。
 // 预设已全局化，由 chatCompletion 出口自动附带
 import { chatCompletion } from "./api.js";
 import { materialSections } from "./materials.js";
@@ -21,7 +22,7 @@ const CONSULT_SYSTEM_PROMPT = '你是文字角色扮演的玩法设计师。用�
  * @param {object} [options]
  * @param {string} [options.idea]         玩法的大概思路（一句话方向）
  * @param {string} [options.activePlan]   进行中剧情全文（空串 = 不附带）
- * @param {Array}  [options.storageItems] 现有玩法条目（{name, content}，空数组 = 不附带）
+ * @param {Array}  [options.storageItems] 当前生效中的玩法条目（{name, content}，空数组 = 不附带）
  * @returns {Promise<string>} 规则正文
  */
 export async function generateGameplayDraft({ idea = '', activePlan = '', storageItems = [] } = {}) {

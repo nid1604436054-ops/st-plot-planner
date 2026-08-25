@@ -1,6 +1,5 @@
 // 剧情指导页签：分步规划向导 + 随机事件工具区 + 游戏玩法工具区（均挂在页面底部）
 // ① 收集确认（本地检索材料 + 记忆表格档位（停用/标签/常驻）+ 标签勾选与每表最新行补底 + 游戏玩法勾选
-// + 玩法咨询（AI 按一句思路生成完整玩法，可改后入玩法条目库并勾选——咨询材料轻量勾选，不复用上方整套面板）
 // + 路人反应（与规划共用本页同一批材料：生成反应卡→转隐身注入 或 计入本次规划材料，两路互斥）+ 剧情构思；
 // 这些勾选按对话记忆存聊天文件，同一对话做完一轮回来不用重勾；预设不在本页勾——已全局化，
 // 「设置」页启用后插件发给大模型的任何调用都自动带上）
@@ -12,18 +11,17 @@
 // 页首常驻 ①②③④ 跳转条随时互跳（已填内容与生成结果保留），跳进没有生成结果的第 4 步可直接往规划框填字看排版。
 // 另有「检查当前剧情」：对照进行中剧情出执行报告（完成度/推进/文风/OOC/其他/建议）
 // 掷骰入口只有向导第 2 步；页面下部工具区（tab-events.js）只放事件库配置与 AI 建库（反应卡已并入第 1 步）；
-// 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列，生效条目由第 1 步勾选随分析发送，
-// 检查报告（runStoryReview）自动附带当前生效条目
+// 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列（条目库管理 + AI 玩法咨询都在该区——
+// 生成类功能不进向导运行区），生效条目由第 1 步勾选随分析发送，检查报告（runStoryReview）自动附带当前生效条目
 import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, startResearchPrefetch, guidanceResearchInputs } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
 import { addInjection, updateInjection, removeInjection, activeReactionInjections } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
 import { storyState, activeStory, confirmPlot, endActive, attachReport, deleteStory, clearHistory } from "../../story.js";
 import { generateReactionCard, composeReactionText } from "../../reactions.js";
-import { generateGameplayDraft } from "../../gameplayConsult.js";
 import { renderEventsTools } from "./tab-events.js";
 import { renderStorageTools } from "./tab-storage.js";
-import { storageItemsInEffect, addItem } from "../../store.js";
+import { storageItemsInEffect } from "../../store.js";
 import { memoryState } from "../../memoryTable.js";
 import { getTavernContext } from "../../context.js";
 import { loadChatData, saveChatData } from "../../chatdata.js";
@@ -44,16 +42,11 @@ const run = {
     memRecent: 0,        // 「标签」档的表无论标签都另附的表尾最新行数；0 = 不另附（行没有时间戳，新记录在表尾）
     rxNote: '',          // 路人反应的指导意见（期望烈度、余波方向、要避开什么）
     reaction: null,      // 第 1 步生成的路人反应卡 { salience, immediate, aftermath, boundaries, floors, text, edited, inPlan }；text = 注入正文预览（可改），inPlan = 计入本次规划材料
-    gpIdea: '',          // 玩法咨询的思路（一句话方向，AI 扩写成完整规则）
-    gpUsePlan: false,    // 玩法咨询是否附进行中剧情
-    gpUseGp: false,      // 玩法咨询是否附上方已勾选的玩法条目
-    gpDraft: null,       // 生成的玩法草案 { name, text, inject }；text 可改，inject = 入库时是否常驻注入主对话
     readyFrom: 'event',  // 分析前确认页的「返回」回到哪一步
     research: null,      // 「分析前确认」页预跑的联网判断 {fingerprint, promise}；分析时指纹对不上自动作废
 };
-// 反应卡 / 玩法草案生成在途标志（瞬时态，不入 run 也不入快照）
+// 反应卡生成在途标志（瞬时态，不入 run 也不入快照）
 let rxBusy = false;
-let gpBusy = false;
 // ② 随机事件闸口的界面状态
 const ev = { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false };
 // 进行中剧情全文 / 历史列表是否展开；历史里展开查看的条目 id（均只存内存）
@@ -110,10 +103,6 @@ function restoreWizard(container) {
         memRecent: Math.max(0, Math.round(Number(r.memRecent) || 0)),
         rxNote: r.rxNote ?? '',
         reaction: normalizeReactionCard(r.reaction),
-        gpIdea: r.gpIdea ?? '',
-        gpUsePlan: Boolean(r.gpUsePlan),
-        gpUseGp: Boolean(r.gpUseGp),
-        gpDraft: normalizeGpDraft(r.gpDraft),
         readyFrom: r.readyFrom ?? 'event',
         research: null,
     });
@@ -219,12 +208,6 @@ function normalizeReactionCard(rx) {
     };
 }
 
-// 玩法草案快照读回清洗：正文为空（含老版本快照没这字段）一律当没有草案
-function normalizeGpDraft(d) {
-    if (!d || typeof d !== 'object' || !String(d.text ?? '').trim()) return null;
-    return { name: String(d.name ?? '') || '新玩法', text: String(d.text), inject: d.inject !== false };
-}
-
 function applyPicks() {
     const p = loadChatData('picks', null);
     if (!p) {
@@ -295,7 +278,7 @@ export function resetGuidance() {
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
     Object.assign(run, {
         note: '', gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
-        memModes: null, memTags: [], memRecent: 0, rxNote: '', reaction: null, gpIdea: '', gpUsePlan: false, gpUseGp: false, gpDraft: null, readyFrom: 'event', research: null,
+        memModes: null, memTags: [], memRecent: 0, rxNote: '', reaction: null, readyFrom: 'event', research: null,
     });
     Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
     showActive = false; showHistory = false; viewHistId = null; report = null;
@@ -585,14 +568,9 @@ function renderCollect(container, main) {
             <span class="pp-seg-opt${modeOf(s.uid) === 'always' ? ' on' : ''}" data-state="always">常驻</span>
         </div>
     </div>`;
-    // 游戏玩法：只列启用中的条目；「生效中」标记与主对话注入同一判定。
-    // 抽成函数：咨询入库新条目后重渲染勾选列表用同一份拼法
-    const gpListHtml = () => {
-        const hit = new Set(storageItemsInEffect().map(i => i.id));
-        return settings.storageItems.filter(i => i.enabled)
-            .map(i => `<label title="勾选后该条玩法规则作为材料发给规划模型（不影响它注入主对话）"><input type="checkbox" data-c1g="${i.id}" ${(run.gpIds ?? []).includes(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${hit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`)
-            .join('') || '<span class="pp-muted">还没有玩法条目</span>';
-    };
+    // 游戏玩法：只列启用中的条目；「生效中」标记与主对话注入同一判定
+    const gpItems = settings.storageItems.filter(i => i.enabled);
+    const gpHit = new Set(storageItemsInEffect().map(i => i.id));
     main.innerHTML = `
     <div class="pp-section">
         <div class="pp-gd-stephead">
@@ -623,16 +601,11 @@ function renderCollect(container, main) {
         </div>` : `
         <div class="pp-gd-layhead"><label class="pp-label">记忆表格召回</label></div>
         <div class="pp-muted">没有开启「参与召回」的记忆表，本次不附带</div>`}
-        <label class="pp-label" title="勾选的玩法规则随分析发给模型，规划须按其约束设计；勾选随当前对话记忆，首轮默认勾当前生效中的条目">游戏玩法</label>
-        <div class="pp-gd-selp" id="pp_gd_c1_gp">${gpListHtml()}</div>
-        <label class="pp-label" title="AI 咨询：填一句大概思路，花一次模型调用扩写成完整可执行的玩法规则，草案可改，入库后出现在上方勾选列表并自动勾选。材料固定带角色摘要、最近对话与世界书命中（本地检索，不花调用），下面两个勾选按需追加——咨询刻意不复用上方整套材料面板，记忆表格那类既往事件流水对玩法设计没用，一律不带">玩法咨询（AI 把思路写成规则）</label>
-        <textarea id="pp_gd_gp_idea" class="text_pole textarea_compact" rows="2" placeholder="大概思路（如：加一个牌局赌注玩法，输家要答应赢家一个要求）"></textarea>
+        <label class="pp-label" title="勾选的玩法规则随分析发给模型，规划须按其约束设计；勾选随当前对话记忆，首轮默认勾当前生效中的条目。条目的添加与 AI 咨询生成在页面底部「游戏玩法」折叠区">游戏玩法</label>
         <div class="pp-gd-selp">
-            <label title="带上进行中剧情全文：生成的玩法贴合当前剧情阶段、不与其走向冲突"><input type="checkbox" id="pp_gd_gp_useplan" /> 附进行中剧情</label>
-            <label title="带上方已勾选的玩法条目：新玩法与现有规则不冲突、能衔接"><input type="checkbox" id="pp_gd_gp_usegp" /> 附已勾选的玩法</label>
+            ${gpItems.map(i => `<label title="勾选后该条玩法规则作为材料发给规划模型（不影响它注入主对话）"><input type="checkbox" data-c1g="${i.id}" ${(run.gpIds ?? []).includes(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
+            || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
-        <div class="pp-btn-row"><span id="pp_gd_gp_gen" class="menu_button">生成玩法草案</span></div>
-        <div id="pp_gd_gp_card"></div>
         <label class="pp-label" title="材料＝本页上方同一批（记忆表格档位与标签、玩法勾选、世界书、进行中剧情），不是旧版反应区那套独立勾选。生成后两路任选：转隐身注入挂到主对话（生效期间规划与检查自动附带同一口径），或计入本次规划材料、随第 3 步分析发给规划模型；两路互斥，重新生成会重置">路人反应（与规划共用本页材料）</label>
         <textarea id="pp_gd_rx_note" class="text_pole textarea_compact" rows="2" placeholder="指导意见（可选：期望烈度、余波方向、要避开什么）"></textarea>
         <div class="pp-btn-row"><span id="pp_gd_rx_gen" class="menu_button">生成反应卡</span></div>
@@ -676,7 +649,7 @@ function renderCollect(container, main) {
         const st = collectStats({ memoryTags: wizardMemoryTags(), memoryModes: wizardMemoryModes(), memoryRecent: wizardMemoryRecent() });
         const memSeg = !recallSheets.length ? '记忆表格 不附带'
             : `记忆表格 ${st.memChars} 字（${memScopeDesc()}）`;
-        const gpDesc = settings.storageItems.some(i => i.enabled) ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
+        const gpDesc = gpItems.length ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
         const rxSeg = run.reaction?.inPlan ? ' · 附路人反应' : '';
         main.querySelector('#pp_gd_c1_stat').textContent =
             `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}${rxSeg}`;
@@ -742,100 +715,12 @@ function renderCollect(container, main) {
         refreshMem();
     });
 
-    // 玩法勾选绑定抽成函数：咨询入库新条目后勾选列表重渲染，要重绑一次
-    const bindGpChecks = () => main.querySelectorAll('[data-c1g]').forEach(cb => cb.addEventListener('change', () => {
+    main.querySelectorAll('[data-c1g]').forEach(cb => cb.addEventListener('change', () => {
         run.gpIds = [...main.querySelectorAll('[data-c1g]:checked')].map(x => x.dataset.c1g);
         savePicks();
         persistWizard();
         refreshMem();
     }));
-    bindGpChecks();
-
-    // 玩法咨询：思路 → 完整玩法草案。材料底座固定（角色摘要/最近对话/世界书命中），
-    // 进行中剧情与已勾玩法按勾选追加（默认都不带——咨询是轻量口径，用不上就别塞）。
-    // 草案随向导快照留底（跳步/刷新不丢），入库 = 加进全局玩法条目库 + 自动勾选随本次分析
-    const gpBox = main.querySelector('#pp_gd_c1_gp');
-    const gpIdeaEl = main.querySelector('#pp_gd_gp_idea');
-    gpIdeaEl.value = run.gpIdea;
-    gpIdeaEl.addEventListener('input', () => { run.gpIdea = gpIdeaEl.value; persistWizard(); });
-    const gpPlanEl = main.querySelector('#pp_gd_gp_useplan');
-    const gpUseGpEl = main.querySelector('#pp_gd_gp_usegp');
-    gpPlanEl.checked = run.gpUsePlan;
-    gpUseGpEl.checked = run.gpUseGp;
-    gpPlanEl.addEventListener('change', () => { run.gpUsePlan = gpPlanEl.checked; persistWizard(); });
-    gpUseGpEl.addEventListener('change', () => { run.gpUseGp = gpUseGpEl.checked; persistWizard(); });
-
-    const renderGpDraft = () => {
-        const box = main.querySelector('#pp_gd_gp_card');
-        if (!box) return;   // 生成回调落地时已跳去别的步骤：草案在 run 里，回来照常渲染
-        const d = run.gpDraft;
-        if (!d) { box.innerHTML = ''; return; }
-        box.innerHTML = `
-        <div class="pp-item pp-gd-evcard">
-            <b>玩法草案（可改后入库）</b>
-            <label class="pp-label" title="入库存的就是这份名称与正文：与上方已勾玩法同一格式，随分析发给规划模型">名称</label>
-            <input id="pp_gd_gp_name" class="text_pole textarea_compact" value="${escapeHtml(d.name)}" />
-            <label class="pp-label">规则正文（可改）</label>
-            <textarea id="pp_gd_gp_text" class="text_pole textarea_compact" rows="10">${escapeHtml(d.text)}</textarea>
-            <label title="勾上＝入库为常驻条目，无条件注入主对话（玩法要在剧情里实际执行就该勾）；不勾＝只作规划材料，主对话不吃它，之后可在底部「游戏玩法」区再改"><input type="checkbox" id="pp_gd_gp_inject" ${d.inject !== false ? 'checked' : ''}/> 常驻注入主对话（不勾＝只作规划材料）</label>
-            <div class="pp-btn-row">
-                <span id="pp_gd_gp_save" class="menu_button" title="加入全局玩法条目库（页面底部「游戏玩法」区与设置可再编辑），并自动勾选随本次分析发送">存为玩法条目并勾选</span>
-                <span id="pp_gd_gp_drop" class="menu_button" title="丢弃草案；思路保留，可改完思路重新生成">放弃草案</span>
-            </div>
-        </div>`;
-        const nameEl = box.querySelector('#pp_gd_gp_name');
-        const textEl = box.querySelector('#pp_gd_gp_text');
-        const injectEl = box.querySelector('#pp_gd_gp_inject');
-        nameEl.addEventListener('input', () => { d.name = nameEl.value; persistWizard(); });
-        textEl.addEventListener('input', () => { d.text = textEl.value; persistWizard(); });
-        injectEl.addEventListener('change', () => { d.inject = injectEl.checked; persistWizard(); });
-        box.querySelector('#pp_gd_gp_save').addEventListener('click', () => {
-            const name = d.name.trim();
-            const text = d.text.trim();
-            if (!name || !text) { toastr.warning('请填写名称与规则正文'); return; }
-            const inject = d.inject !== false;
-            const item = addItem({ id: newId('si-'), name, keys: [], constant: inject, depth: 6, content: text, enabled: true });
-            run.gpIds = [...(run.gpIds ?? []), item.id];
-            run.gpDraft = null;
-            savePicks();
-            persistWizard();
-            gpBox.innerHTML = gpListHtml();
-            bindGpChecks();
-            renderGpDraft();
-            refreshMem();
-            toastr.success(`已入库并勾选「${name}」${inject ? '，常驻注入主对话' : '（只作规划材料）'}`);
-        });
-        box.querySelector('#pp_gd_gp_drop').addEventListener('click', () => {
-            run.gpDraft = null;
-            persistWizard();
-            renderGpDraft();
-        });
-    };
-    if (run.gpDraft) renderGpDraft();
-    main.querySelector('#pp_gd_gp_gen').addEventListener('click', async () => {
-        const idea = run.gpIdea.trim();
-        if (!idea) { toastr.warning('先填一句大概思路'); return; }
-        if (gpBusy) return;
-        gpBusy = true;
-        const btn = main.querySelector('#pp_gd_gp_gen');
-        btn.textContent = '生成中……';
-        try {
-            const text = await generateGameplayDraft({
-                idea,
-                activePlan: run.gpUsePlan ? activeStory()?.planText ?? '' : '',
-                storageItems: run.gpUseGp ? wizardStorageItems() : [],
-            });
-            if (!text) throw new Error('模型没有返回内容');
-            run.gpDraft = { name: idea.slice(0, 20), text, inject: true };
-            persistWizard();
-            renderGpDraft();
-        } catch (err) {
-            toastr.error(String(err.message ?? err));
-        } finally {
-            gpBusy = false;
-            btn.textContent = '生成玩法草案';
-        }
-    });
 
     // 路人反应卡：材料＝本页同一批（wizardMaterials：记忆表格档位/标签/最新行 + 玩法勾选；
     // 世界书沿用本对话书单，进行中剧情与分析同源），生成结果随向导快照留底、跳步/刷新不丢。
@@ -1404,7 +1289,7 @@ function renderResult(container, main) {
         // 第 1 步勾选存在对话记忆里，下一轮进第 1 步自动恢复，这里照常清工作副本
         Object.assign(run, {
             note: '', gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
-            memModes: null, memTags: [], memRecent: 0, rxNote: '', reaction: null, gpIdea: '', gpUsePlan: false, gpUseGp: false, gpDraft: null, readyFrom: 'event', research: null,
+            memModes: null, memTags: [], memRecent: 0, rxNote: '', reaction: null, readyFrom: 'event', research: null,
         });
         // 第 2 步闸口状态一并清空：上一轮的事件卡/走向/意见不带进新一轮规划（「不保存，回到第 1 步」才保留）
         Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
