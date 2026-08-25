@@ -1,6 +1,6 @@
 // 剧情指导页签：分步规划向导 + 随机事件工具区 + 游戏玩法工具区（均挂在页面底部）
 // ① 收集确认（本地检索材料 + 记忆表格档位（停用/标签/常驻）+ 标签勾选与每表最新行补底 + 游戏玩法勾选
-// + 路人反应（与规划共用本页同一批材料：生成反应卡→转隐身注入 或 计入本次规划材料，两路互斥）+ 剧情构思；
+// + 路人反应（与规划共用本页同一批材料：生成反应卡弹悬浮窗编辑→转隐身注入 或 计入本次规划材料，两路互斥，可放弃）+ 剧情构思；
 // 这些勾选按对话记忆存聊天文件，同一对话做完一轮回来不用重勾；预设不在本页勾——已全局化，
 // 「设置」页启用后插件发给大模型的任何调用都自动带上）
 // → ② 随机事件闸口（可跳过）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
@@ -158,6 +158,56 @@ function gotoStep(container, target) {
 }
 
 // ---------------------------------------------------------------------------
+// 悬浮查看器：居中大窗盖在页面上（标题栏 + 右上关闭 + 统计行 + 可滚正文）。
+// 路人反应卡与「查看完整提示词」共用——长内容弹窗看，不摊在页面里把面板撑长；
+// Esc、点窗外遮罩空白、右上 × 三路都能关。窗挂在 document.body（不在抽屉里），
+// 切聊天时由 resetGuidance 一并关掉
+// ---------------------------------------------------------------------------
+
+let viewerEsc = null;   // Esc 关窗的监听引用，关窗时摘掉防泄漏
+
+function closeViewer() {
+    if (viewerEsc) { document.removeEventListener('keydown', viewerEsc); viewerEsc = null; }
+    document.querySelector('.pp-viewer-mask')?.remove();
+}
+
+// statHtml = 标题栏下的统计行（可空）；返回遮罩元素，调用方往 .pp-viewer-body 里填内容挂控件
+function openViewer(title, statHtml = '') {
+    closeViewer();
+    const mask = document.createElement('div');
+    mask.className = 'pp-viewer-mask';
+    mask.innerHTML = `
+    <div class="pp-viewer" role="dialog" aria-label="${escapeHtml(title)}">
+        <div class="pp-viewer-head">
+            <b>${escapeHtml(title)}</b>
+            <span class="menu_button pp-viewer-close fa-solid fa-xmark" title="关闭（Esc 或点窗外空白处也行）"></span>
+        </div>
+        ${statHtml ? `<div class="pp-viewer-stat">${statHtml}</div>` : ''}
+        <div class="pp-viewer-body"></div>
+    </div>`;
+    document.body.appendChild(mask);
+    viewerEsc = e => { if (e.key === 'Escape') closeViewer(); };
+    document.addEventListener('keydown', viewerEsc);
+    mask.addEventListener('mousedown', e => { if (e.target === mask) closeViewer(); });
+    mask.querySelector('.pp-viewer-close').addEventListener('click', closeViewer);
+    return mask;
+}
+
+// 复制到剪贴板：优先剪贴板 API，非安全上下文/未授权退回 execCommand
+async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* 退回 execCommand */ }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { /* 环境连 execCommand 都不给，认栽 */ }
+    ta.remove();
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
 // 第 1 步勾选按对话记忆（chatdata.js 的 picks 块）：记忆表格的每表档位/标签/最新行数、
 // 游戏玩法的勾选都按对话各自记住——同一对话做完一轮规划回来不用重勾，换对话各用各的。
 // 预设不在这里：已全局化，「设置」页的启用开关是唯一开关。run 是工作副本，进第 1 步时
@@ -206,6 +256,81 @@ function normalizeReactionCard(rx) {
         edited: Boolean(rx.edited),
         inPlan: Boolean(rx.inPlan),
     };
+}
+
+// 反应卡悬浮窗的窗内内容：字段展示 + 楼层预算 + 正文预览 + 两路操作（放弃在按钮行末尾）
+function rxCardHtml(card) {
+    const stars = '★'.repeat(card.salience) + '☆'.repeat(5 - card.salience);
+    return `
+    <div class="pp-item pp-gd-evcard">
+        <div>显著性 <span style="color:#e8c06a">${stars}</span>（${card.salience}/5）</div>
+        <label class="pp-label">即时反应口径（每轮 1-3 句，织进当前场景，写一次就够）</label>
+        <div>${escapeHtml(card.immediate)}</div>
+        <label class="pp-label">余波口径（消息传开/平息的方向，不写场面）</label>
+        <div>${escapeHtml(card.aftermath)}</div>
+        <label class="pp-label">底线</label>
+        <div>${escapeHtml(card.boundaries)}</div>
+        <label class="pp-label" title="转注入与计入规划材料用的都是下面这份预览文本；改过就按这份固定，注入后只按层数过期">楼层预算（一层 = 一条角色回复，user 消息不计；到期自动撤下）</label>
+        <input id="pp_gd_rx_floors" class="text_pole textarea_compact" type="number" min="2" max="30" value="${card.floors}" />
+        <label class="pp-label">注入正文预览（可改）</label>
+        <textarea id="pp_gd_rx_text" class="text_pole textarea_compact" rows="10">${escapeHtml(card.text)}</textarea>
+        <div class="pp-btn-row">
+            <span id="pp_gd_rx_ok" class="menu_button" title="转为隐身注入（模型可见、聊天界面不显示），按楼层预算到期自动撤下；生效期间规划与检查自动附带同一口径，无须再计入材料">确认，转为隐身注入</span>
+            <span id="pp_gd_rx_plan" class="menu_button${card.inPlan ? ' pp-gd-sel' : ''}" title="把这张卡作为「路人反应」小节随第 3 步分析发给规划模型（不注入主对话），规划为其留出呈现空间；与转注入互斥">${card.inPlan ? '已计入规划材料，点此取消' : '计入本次规划材料'}</span>
+            <span id="pp_gd_rx_drop_v" class="menu_button" title="丢弃这张卡（已转隐身注入的不受影响），关闭悬浮窗">放弃反应卡</span>
+        </div>
+    </div>`;
+}
+
+// 窗内控件接线：onChange = 注入/计入状态一变后就地重画（含页面状态行与统计刷新），onDrop = 放弃
+function wireRxCard(body, card, { onChange, onDrop }) {
+    const textEl = body.querySelector('#pp_gd_rx_text');
+    const floorsEl = body.querySelector('#pp_gd_rx_floors');
+    floorsEl.addEventListener('change', () => {
+        card.floors = Math.min(Math.max(Number(floorsEl.value) || card.floors, 2), 30);
+        floorsEl.value = card.floors;
+        if (!card.edited) { card.text = composeReactionText(card, 0); textEl.value = card.text; }
+        persistWizard();
+    });
+    textEl.addEventListener('input', () => { card.text = textEl.value; card.edited = true; persistWizard(); });
+    body.querySelector('#pp_gd_rx_ok').addEventListener('click', () => {
+        const text = textEl.value.trim();
+        if (!text) { toastr.warning('注入内容为空'); return; }
+        const auto = composeReactionText(card, 0);
+        const reaction = card.edited && text !== auto ? { ...card, edited: true } : card;
+        addInjection({
+            id: newId('inj-'),
+            label: card.immediate ? `路人反应：${card.immediate.slice(0, 24)}` : '路人反应',
+            mode: 'open',
+            content: text,
+            depth: 4,
+            role: 'system',
+            scope: 'chat',
+            enabled: true,
+            source: 'reaction',
+            createdAt: Date.now(),
+            expires: { type: 'layers', layers: card.floors },
+            reaction,
+            age: 0,
+        });
+        toastr.success(card.inPlan
+            ? `已注入，${card.floors} 层后自动撤下；生效期间规划与检查自动附带同一口径，已同时取消「计入规划材料」`
+            : `已注入，${card.floors} 层后自动撤下（一层 = 一条角色回复；生效期间规划与检查报告自动附带同一口径，设置页底部可提前撤下）`);
+        card.inPlan = false;
+        persistWizard();
+        onChange();
+    });
+    body.querySelector('#pp_gd_rx_plan').addEventListener('click', () => {
+        // 同一张卡已作为注入生效时拦下「计入」：规划/检查会自动附带注入文本，再计入就是同文进两次
+        if (!card.inPlan && activeReactionInjections().some(i => String(i.content ?? '').trim() === textEl.value.trim())) {
+            toastr.info('这张卡已作为隐身注入生效，规划与检查自动附带同一口径，无须再计入材料');
+            return;
+        }
+        card.inPlan = !card.inPlan;
+        persistWizard();
+        onChange();
+    });
+    body.querySelector('#pp_gd_rx_drop_v').addEventListener('click', onDrop);
 }
 
 function applyPicks() {
@@ -275,6 +400,7 @@ export const guidanceTab = {
 // restoreWizard 会自动恢复新聊天自己的快照——切回来，没处理完的向导还在
 export function resetGuidance() {
     step = '';
+    closeViewer();   // 开着的悬浮查看器（反应卡/提示词预览）一并关掉，不带到新聊天
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
     Object.assign(run, {
         note: '', gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
@@ -606,10 +732,14 @@ function renderCollect(container, main) {
             ${gpItems.map(i => `<label title="勾选后该条玩法规则作为材料发给规划模型（不影响它注入主对话）"><input type="checkbox" data-c1g="${i.id}" ${(run.gpIds ?? []).includes(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
             || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
-        <label class="pp-label" title="材料＝本页上方同一批（记忆表格档位与标签、玩法勾选、世界书、进行中剧情），不是旧版反应区那套独立勾选。生成后两路任选：转隐身注入挂到主对话（生效期间规划与检查自动附带同一口径），或计入本次规划材料、随第 3 步分析发给规划模型；两路互斥，重新生成会重置">路人反应（与规划共用本页材料）</label>
+        <label class="pp-label" title="材料＝本页上方同一批（记忆表格档位与标签、玩法勾选、世界书、进行中剧情），不是旧版反应区那套独立勾选。生成完弹悬浮窗查看编辑，两路任选：转隐身注入挂到主对话（生效期间规划与检查自动附带同一口径），或计入本次规划材料、随第 3 步分析发给规划模型；两路互斥，重新生成会重置，不要可随时放弃">路人反应（与规划共用本页材料）</label>
         <textarea id="pp_gd_rx_note" class="text_pole textarea_compact" rows="2" placeholder="指导意见（可选：期望烈度、余波方向、要避开什么）"></textarea>
-        <div class="pp-btn-row"><span id="pp_gd_rx_gen" class="menu_button">生成反应卡</span></div>
-        <div id="pp_gd_rx_card"></div>
+        <div class="pp-btn-row">
+            <span id="pp_gd_rx_gen" class="menu_button">生成反应卡</span>
+            <span id="pp_gd_rx_open" class="menu_button" hidden title="重新打开悬浮窗，查看/编辑当前这张反应卡">查看反应卡</span>
+            <span id="pp_gd_rx_drop" class="menu_button" hidden title="丢弃当前反应卡（已转隐身注入的不受影响）">放弃反应卡</span>
+        </div>
+        <div class="pp-muted" id="pp_gd_rx_state" hidden></div>
         <label class="pp-label">剧情构思方向</label>
         <textarea id="pp_gd_note" class="text_pole textarea_compact" rows="3" placeholder="已有的想法、约束或重点（可选，随分析发给模型）"></textarea>
         <div class="pp-btn-row">
@@ -617,8 +747,7 @@ function renderCollect(container, main) {
             <span id="pp_gd_c1_skip" class="menu_button">跳过事件，直接分析</span>
             <span id="pp_gd_c1_cancel" class="menu_button">取消</span>
         </div>
-    </div>
-    <div id="pp_gd_promptview" class="pp-gd-builtin" style="display:none"></div>`;
+    </div>`;
 
     // 状态行的记忆段口径：按档位计数（常驻 X · 标签 Y · 停用 Z），有标签档再拼标签/最新行明细
     const memScopeDesc = () => {
@@ -724,86 +853,46 @@ function renderCollect(container, main) {
 
     // 路人反应卡：材料＝本页同一批（wizardMaterials：记忆表格档位/标签/最新行 + 玩法勾选；
     // 世界书沿用本对话书单，进行中剧情与分析同源），生成结果随向导快照留底、跳步/刷新不丢。
+    // 卡片整张住悬浮窗：生成完自动弹窗，「查看反应卡」随时再开，页面只留一行状态——
+    // 第 1 步不被撑长，下面的规划操作不被压下去；不要就「放弃反应卡」清掉。
     // 两路互斥：转注入后规划与检查经 activeReactionInjections 自动附带同一口径，
     // 「计入规划材料」只在未注入时才有意义——注入即自动取消计入，防同文重复进提示词
-    const rxBox = main.querySelector('#pp_gd_rx_card');
     const rxNoteEl = main.querySelector('#pp_gd_rx_note');
     rxNoteEl.value = run.rxNote;
     rxNoteEl.addEventListener('input', () => { run.rxNote = rxNoteEl.value; persistWizard(); });
-    const renderRxCard = () => {
+    const rxOpenEl = main.querySelector('#pp_gd_rx_open');
+    const rxDropEl = main.querySelector('#pp_gd_rx_drop');
+    const rxStateEl = main.querySelector('#pp_gd_rx_state');
+    const renderRxState = () => {
         const card = run.reaction;
-        if (!card) { rxBox.innerHTML = ''; return; }
-        if (!card.text) card.text = composeReactionText(card, 0);   // 老快照没存 text：按卡面重算
+        rxOpenEl.hidden = rxDropEl.hidden = rxStateEl.hidden = !card;
+        if (!card) return;
         const stars = '★'.repeat(card.salience) + '☆'.repeat(5 - card.salience);
-        rxBox.innerHTML = `
-        <div class="pp-item pp-gd-evcard">
-            <b>路人反应卡</b>
-            <div>显著性 <span style="color:#e8c06a">${stars}</span>（${card.salience}/5）</div>
-            <label class="pp-label">即时反应口径（每轮 1-3 句，织进当前场景，写一次就够）</label>
-            <div>${escapeHtml(card.immediate)}</div>
-            <label class="pp-label">余波口径（消息传开/平息的方向，不写场面）</label>
-            <div>${escapeHtml(card.aftermath)}</div>
-            <label class="pp-label">底线</label>
-            <div>${escapeHtml(card.boundaries)}</div>
-            <label class="pp-label" title="转注入与计入规划材料用的都是下面这份预览文本；改过就按这份固定，注入后只按层数过期">楼层预算（一层 = 一条角色回复，user 消息不计；到期自动撤下）</label>
-            <input id="pp_gd_rx_floors" class="text_pole textarea_compact" type="number" min="2" max="30" value="${card.floors}" />
-            <label class="pp-label">注入正文预览（可改）</label>
-            <textarea id="pp_gd_rx_text" class="text_pole textarea_compact" rows="10">${escapeHtml(card.text)}</textarea>
-            <div class="pp-btn-row">
-                <span id="pp_gd_rx_ok" class="menu_button" title="转为隐身注入（模型可见、聊天界面不显示），按楼层预算到期自动撤下；生效期间规划与检查自动附带同一口径，无须再计入材料">确认，转为隐身注入</span>
-                <span id="pp_gd_rx_plan" class="menu_button${card.inPlan ? ' pp-gd-sel' : ''}" title="把这张卡作为「路人反应」小节随第 3 步分析发给规划模型（不注入主对话），规划为其留出呈现空间；与转注入互斥">${card.inPlan ? '已计入规划材料，点此取消' : '计入本次规划材料'}</span>
-            </div>
-        </div>`;
-        const textEl = rxBox.querySelector('#pp_gd_rx_text');
-        const floorsEl = rxBox.querySelector('#pp_gd_rx_floors');
-        floorsEl.addEventListener('change', () => {
-            card.floors = Math.min(Math.max(Number(floorsEl.value) || card.floors, 2), 30);
-            floorsEl.value = card.floors;
-            if (!card.edited) { card.text = composeReactionText(card, 0); textEl.value = card.text; }
-            persistWizard();
-        });
-        textEl.addEventListener('input', () => { card.text = textEl.value; card.edited = true; persistWizard(); });
-        rxBox.querySelector('#pp_gd_rx_ok').addEventListener('click', () => {
-            const text = textEl.value.trim();
-            if (!text) { toastr.warning('注入内容为空'); return; }
-            const auto = composeReactionText(card, 0);
-            const reaction = card.edited && text !== auto ? { ...card, edited: true } : card;
-            addInjection({
-                id: newId('inj-'),
-                label: card.immediate ? `路人反应：${card.immediate.slice(0, 24)}` : '路人反应',
-                mode: 'open',
-                content: text,
-                depth: 4,
-                role: 'system',
-                scope: 'chat',
-                enabled: true,
-                source: 'reaction',
-                createdAt: Date.now(),
-                expires: { type: 'layers', layers: card.floors },
-                reaction,
-                age: 0,
-            });
-            toastr.success(card.inPlan
-                ? `已注入，${card.floors} 层后自动撤下；生效期间规划与检查自动附带同一口径，已同时取消「计入规划材料」`
-                : `已注入，${card.floors} 层后自动撤下（一层 = 一条角色回复；生效期间规划与检查报告自动附带同一口径，设置页底部可提前撤下）`);
-            card.inPlan = false;
-            persistWizard();
-            renderRxCard();
-            refreshMem();
-        });
-        rxBox.querySelector('#pp_gd_rx_plan').addEventListener('click', () => {
-            // 同一张卡已作为注入生效时拦下「计入」：规划/检查会自动附带注入文本，再计入就是同文进两次
-            if (!card.inPlan && activeReactionInjections().some(i => String(i.content ?? '').trim() === textEl.value.trim())) {
-                toastr.info('这张卡已作为隐身注入生效，规划与检查自动附带同一口径，无须再计入材料');
-                return;
-            }
-            card.inPlan = !card.inPlan;
-            persistWizard();
-            renderRxCard();
-            refreshMem();
-        });
+        rxStateEl.textContent = `已生成反应卡 · 显著性 ${stars}（${card.salience}/5）${card.inPlan ? ' · 已计入本次规划材料' : ''}`;
     };
-    if (run.reaction) renderRxCard();
+    const dropReaction = () => {
+        run.reaction = null;
+        persistWizard();
+        closeViewer();
+        renderRxState();
+        refreshMem();
+        toastr.info('已放弃反应卡（已转隐身注入的不受影响）');
+    };
+    const openRxViewer = () => {
+        const card = run.reaction;
+        if (!card) return;
+        if (!card.text) card.text = composeReactionText(card, 0);   // 老快照没存 text：按卡面重算
+        const body = openViewer('路人反应卡').querySelector('.pp-viewer-body');
+        const render = () => {
+            body.innerHTML = rxCardHtml(card);
+            wireRxCard(body, card, { onChange: rerender, onDrop: dropReaction });
+        };
+        const rerender = () => { render(); renderRxState(); refreshMem(); };
+        render();
+    };
+    renderRxState();
+    rxOpenEl.addEventListener('click', openRxViewer);
+    rxDropEl.addEventListener('click', dropReaction);
     main.querySelector('#pp_gd_rx_gen').addEventListener('click', async () => {
         if (rxBusy) return;
         rxBusy = true;
@@ -817,8 +906,9 @@ function renderCollect(container, main) {
             });
             run.reaction = { ...card, text: composeReactionText(card, 0), edited: false, inPlan: false };
             persistWizard();
-            renderRxCard();
+            renderRxState();
             refreshMem();
+            openRxViewer();
         } catch (err) {
             toastr.error(String(err.message ?? err));
         } finally {
@@ -827,9 +917,9 @@ function renderCollect(container, main) {
         }
     });
 
+    // 完整提示词预览走悬浮查看器：全文在窗里滚着看（标题栏下带规模统计与「复制全文」），
+    // 不再往页面底部展开——不用翻大半个面板找输出
     main.querySelector('#pp_gd_c1_preview').addEventListener('click', () => {
-        const view = main.querySelector('#pp_gd_promptview');
-        if (view.style.display !== 'none') { view.style.display = 'none'; return; }
         try {
             const s = storyState();
             const built = buildGuidanceMessages({
@@ -854,10 +944,16 @@ function renderCollect(container, main) {
             const { sections = [] } = built;
             const totalChars = sections.reduce((n, x) => n + x.chars, 0);
             const secLine = sections.map(x => `${x.title} ${x.chars.toLocaleString()} 字`).join(' · ');
-        view.innerHTML = `<div class="pp-muted" style="margin-bottom:6px" title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考；实际分词通常更省（中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：分析前先轻量判断是否需要现实信息（只发剧情简报，纯虚构默认不检索），判需要才检索，纪要追加为附加小节，不在此预览内' : ''}">材料共 ${totalChars.toLocaleString()} 字 · 粗估约 ${(sysTok + usrTok).toLocaleString()} tokens</div>`
-            + `<div class="pp-muted" style="margin-bottom:6px" title="逐小节的精确字符数（非估算）。世界书一节只含关键词命中或状态为「常驻」的条目，不是全部词条——想让重要词条每次都带上，到「世界书」页把状态切到「常驻」">材料构成：${escapeHtml(secLine)}</div>`
-                + escapeHtml(`【系统提示词】\n${sysMsg.content}\n\n【用户消息】\n${usrMsg.content}`);
-            view.style.display = '';
+            const fullText = `【系统提示词】\n${sysMsg.content}\n\n【用户消息】\n${usrMsg.content}`;
+            const mask = openViewer('完整提示词预览',
+                `<span title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考；实际分词通常更省（中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：分析前先轻量判断是否需要现实信息（只发剧情简报，纯虚构默认不检索），判需要才检索，纪要追加为附加小节，不在此预览内' : ''}">材料共 ${totalChars.toLocaleString()} 字 · 粗估约 ${(sysTok + usrTok).toLocaleString()} tokens</span>`
+                + `<span class="pp-muted" title="逐小节的精确字符数（非估算）。世界书一节只含关键词命中或状态为「常驻」的条目，不是全部词条——想让重要词条每次都带上，到「世界书」页把状态切到「常驻」">材料构成：${escapeHtml(secLine)}</span>`
+                + `<span class="menu_button" id="pp_gd_pv_copy" style="margin-left:auto" title="复制系统提示词与用户消息全文，可直接粘到别处调试"><i class="fa-regular fa-copy"></i> 复制全文</span>`);
+            mask.querySelector('.pp-viewer-body').innerHTML = `<pre class="pp-viewer-pre">${escapeHtml(fullText)}</pre>`;
+            mask.querySelector('#pp_gd_pv_copy').addEventListener('click', async () => {
+                if (await copyText(fullText)) toastr.success('已复制到剪贴板');
+                else toastr.error('复制失败：浏览器未授权剪贴板');
+            });
         } catch (err) {
             toastr.error(String(err.message ?? err));
         }
