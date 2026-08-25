@@ -6,7 +6,6 @@
 import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
 import { buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext, memoryState } from "./memoryTable.js";
-import { loadChatData, saveChatData } from "./chatdata.js";
 
 // 档位统计（记忆小节标题的口径文字用）：与 buildMemoryContext 同一集合——
 // 开了「参与召回」的镜像表按 sheetModes 数档，没进映射的表算常驻
@@ -55,26 +54,9 @@ export function gameplaySection(items, header) {
 // api.js（globalPresetBlock / withGlobalPresets，chatCompletion 出口自动附加），
 // 本模块与各调用方不再经手预设
 
-// 反应卡自己的材料勾选（chatdata.js 的 reaction 块，按对话存）——
-// 独立于向导第 1 步的勾选（picks 块管规划分析），两边互不影响：
-//   books     null = 沿用本对话「世界书」页的启用书单；数组 = 本批独立书单（String id）
-//   memSheets 勾选的记忆表 uid（空 = 不附带记忆；反应卡不做标签层，勾了全量）
-//   gpIds     null = 附带当前生效中的玩法条目；数组 = 本批勾选（空 = 不附带）
-//   plan      是否附带进行中剧情（默认 true）
-//   （历史数据里的 presetIds 字段已随预设全局化退役，读回时直接忽略）
-export function reactionPicks() {
-    const p = loadChatData('reaction', () => ({ version: 1 }));
-    return {
-        books: Array.isArray(p?.books) ? p.books.map(String) : null,
-        memSheets: Array.isArray(p?.memSheets) ? p.memSheets : [],
-        gpIds: Array.isArray(p?.gpIds) ? p.gpIds : null,
-        plan: p ? p.plan !== false : true,
-    };
-}
-
-export function saveReactionPicks(picks) {
-    saveChatData('reaction', { version: 1, ...picks });
-}
+// 反应卡自己的「材料勾选」（chatdata 的 reaction 块）已退役：反应卡生成并进向导第 1 步，
+// 与规划分析共用同一批材料（见 reactions.js / tab-guidance.js）；旧聊天数据里的 reaction 块
+// 不再读写，留着无害
 
 /**
  * 组装共用的材料小节：角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 进行中剧情 / 历史摘要。

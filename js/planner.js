@@ -47,7 +47,7 @@ export function guidanceSystemPrompt(hasActivePlan = false) {
         '你是文字角色扮演的剧情顾问，负责两件事：',
         `1) 检查：结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）、是否与已有剧情重复、文风是否重复${hasActivePlan ? '、正在执行的剧情推进到什么程度' : ''}；`,
         '2) 规划：为后续剧情设计「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
-        '要求：判断必须引用对话依据；给出「进行中剧情」时对照它检查进度与重复；给了「随机事件」就将其自然融入规划；规划要具体、可执行、尊重既有设定；面向当前场景做预编排。',
+        '要求：判断必须引用对话依据；给出「进行中剧情」时对照它检查进度与重复；给了「随机事件」就将其自然融入规划；给了「路人反应」就视为已发生之事的世界回应口径，规划为其留出呈现空间、不与余波和收束口径冲突；规划要具体、可执行、尊重既有设定；面向当前场景做预编排。',
         '检查与规划必须耦合：checks 判出的每个问题都要在 plan 里得到处置，判了不改等于白判——OOC 在 beats 里写明怎么拉回人设/事实/关系，剧情与文风重复写明怎么绕开、往哪个新方向走；需要扮演模型后续持续注意的规避要点（如别再重复某类描写）放进 risks；不允许 checks 报了问题而 plan 与之无关。',
         '记忆表格里若已有多条同标签或同类型的既有事件（行尾带标签，如多次约会、多次同类冲突），视为这类事件已经写过：规划可以再安排同类事件，但不要复刻已有记录的流程与桥段，过程或走向须有新意。',
     '文风重复的判定基准：只针对角色（char）的扮演文本——先检查用户（user）近期输入是否自己在重复动作、场景或指令；角色只是跟进用户发起的重复不算文风重复；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判「轻微/明显」，并在 note 里写明用户是否先重复、角色重复了什么。',
@@ -280,12 +280,15 @@ export function collectStats({ memoryTags = null, memorySheets = null, memoryMod
 
 // 记忆表格 / 游戏玩法小节的构建在 materials.js（与路人反应校准共用同一批口径）
 
-// 路人反应小节：生效中的反应卡注入自动附带（分析与检查报告共用）。
-// 附带的正文就是主对话提示词里的同一份文本——规划/检查模型与主对话模型看到同一口径
-function reactionSection(header) {
-    const list = activeReactionInjections();
-    if (!list.length) return [];
-    return [header, list.map(i => String(i.content).trim()).join('\n\n')];
+// 路人反应小节：生效中的反应卡注入自动附带（分析与检查报告共用）；
+// 向导第 1 步「计入规划材料」的反应卡（未注入）由 extraText 一并拼进来——
+// 附带的正文就是主对话提示词里的同一份文本，规划/检查模型与主对话模型看到同一口径
+function reactionSection(header, extraText = '') {
+    const list = activeReactionInjections().map(i => String(i.content).trim()).filter(Boolean);
+    const extra = String(extraText ?? '').trim();
+    if (!list.length && !extra) return [];
+    if (extra) list.push(extra);
+    return [header, list.join('\n\n')];
 }
 
 /**
@@ -295,6 +298,8 @@ function reactionSection(header) {
  * @param {string} [options.previousPlan]        打回重写时：上一版规划
  * @param {string} [options.revisionNote]        打回重写时：修改意见
  * @param {string} [options.eventText]           随机事件闸口选定的事件/走向文本
+ * @param {string} [options.reactionText]        向导第 1 步「计入规划材料」的反应卡正文
+ *                                               （未注入的那张；与生效中的反应注入合并进「路人反应」小节）
  * @param {string} [options.activePlan]          进行中剧情全文（查重与进度对照）
  * @param {string[]} [options.historySummaries]  历史剧情摘要（查重用）
  * @param {*}      [options.memoryTags]          记忆表格召回标签：['a','b']=按标签（只作用于「标签」档的表），
@@ -311,18 +316,19 @@ function reactionSection(header) {
 // 供规划分析与随机事件生成共用的材料小节（两处口径完全一致）：
 // 角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要。
 // 随机事件是向导第 2 步，材料必须与第 1 步预览同一批——各算一份必然对不上账。
-// 小节本体在 materials.js（reactions.js 也直接用它出反应卡）；「路人反应」小节在这里插入
+// 小节本体在 materials.js（reactions.js 也直接用它出反应卡）；「路人反应」小节在这里插入，
+// opts.reactionText = 向导第 1 步「计入规划材料」的未注入反应卡正文（与生效注入合并成一节）
 export function materialSections(opts = {}) {
     const { parts, hits } = baseMaterialSections(opts);
     const idx = parts.findIndex(p => p.startsWith('## 进行中剧情'));
     parts.splice(idx === -1 ? parts.length : idx, 0,
-        ...reactionSection('## 路人反应（当前生效的反应卡，后续剧情安排与其余波、收束口径一致）'));
+        ...reactionSection('## 路人反应（世界对引人注目之事的回应口径，后续剧情安排与其余波、收束口径一致）', opts.reactionText));
     return { parts, hits };
 }
 
 export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [] } = options;
-    const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries });
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', reactionText = '', activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [] } = options;
+    const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries, reactionText });
     const all = [
         ...parts,
         ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),

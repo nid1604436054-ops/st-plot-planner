@@ -4,14 +4,11 @@
 // 余波口径（消息传开或平息的方向）+ 底线（不可逆伤害一律禁止）+ 楼层预算（一层 = 一条角色回复，
 // user 消息不计，到期自动撤下）。旧版按楼层分段的「扩散链」卡片还存在旧注入里，
 // composeReactionText 走兼容分支继续逐层换段——3~4 层根本扩散不开，新卡不再产扩散链。
-// 材料用反应区自己的「材料勾选」（materials.reactionPicks，存对话记忆，独立于向导第 1 步）：
-// 世界书（按勾选的书检索）/记忆表格/游戏玩法/进行中剧情按勾选发送——长线剧情里角色的身世、
-// 名声在世界书与记忆里，不带就没法校准路人认知。预设已全局化，由 chatCompletion 出口自动附带
+// 材料与剧情规划第 1 步共用同一批（调用方传入 materials/activePlan，即向导的记忆表格档位/
+// 标签/玩法勾选与进行中剧情）——旧版反应区自己那套「材料勾选」（chatdata 的 reaction 块）已退役。
+// 长线剧情里角色的身世、名声在世界书与记忆里，不带就没法校准路人认知。预设已全局化，由 chatCompletion 出口自动附带
 import { chatCompletion } from "./api.js";
-import { activeStory } from "./story.js";
-import { materialSections, reactionPicks } from "./materials.js";
-import { storageItemsInEffect } from "./store.js";
-import { settings } from "./settings.js";
+import { materialSections } from "./materials.js";
 import { extractJson } from "./utils.js";
 
 const DEFAULT_BOUNDARY = '不得导致感情实质破裂、主要角色受异性实质侵犯、user 无法逆转的损失；危机可以重，出口必须存在。';
@@ -35,22 +32,22 @@ const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器�
 
 /**
  * 生成一张路人反应卡（引人注目的事从最近对话里自动判定，不手填）。
- * 材料用反应区自己的「材料勾选」（存对话记忆，独立于向导第 1 步——在那里增删不影响规划分析）；
+ * 材料与剧情规划第 1 步共用同一批：materials 即向导 wizardMaterials() 的返回
+ * （记忆表格档位/标签/最新行窗口 + 玩法勾选），世界书沿用本对话启用书单；
  * 预设走全局（chatCompletion 出口自动附带）。
  * @param {object} [options]
- * @param {string} [options.note]  指导意见（期望烈度、余波方向、要避开什么）
+ * @param {string} [options.note]       指导意见（期望烈度、余波方向、要避开什么）
+ * @param {object} [options.materials]  向导第 1 步材料 { memoryTags, memoryModes, memoryRecent, storageItems }
+ * @param {string} [options.activePlan] 进行中剧情全文（与规划分析同一来源）
  * @returns {Promise<{salience:number, immediate:string, aftermath:string, boundaries:string, floors:number}>}
  */
-export async function generateReactionCard({ note = '' } = {}) {
-    const picks = reactionPicks();
-    const gpIds = picks.gpIds ?? storageItemsInEffect().map(i => i.id);
-    const activePlan = picks.plan ? (activeStory()?.planText ?? '').trim() : '';
+export async function generateReactionCard({ note = '', materials = {}, activePlan = '' } = {}) {
     const { parts } = materialSections({
-        memoryTags: [],                       // 反应卡不做记忆标签层：勾了表就全量，全不勾 = 不附带
-        memorySheets: picks.memSheets,
-        storageItems: (settings.storageItems ?? []).filter(i => gpIds.includes(i.id)),
-        activePlan,
-        enabledIds: picks.books ?? undefined, // null = 沿用本对话「世界书」页的启用书单
+        memoryTags: materials.memoryTags ?? [],
+        memoryModes: materials.memoryModes ?? null,
+        memoryRecent: materials.memoryRecent ?? 0,
+        storageItems: materials.storageItems ?? [],
+        activePlan: String(activePlan ?? '').trim(),
         headers: {
             memoryPurpose: '既往剧情事件记录，是路人与世界已有认知的背景',
             gameplay: '## 游戏玩法（当前生效的玩法规则，路人与世界的反应须遵守其约束）',

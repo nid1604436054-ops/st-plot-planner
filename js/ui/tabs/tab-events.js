@@ -1,26 +1,18 @@
-// 随机事件工具区（挂在剧情指导页下部）：路人反应校准 + 底部「事件库设置」「AI 建库」两个折叠区。
+// 随机事件工具区（挂在剧情指导页下部）：底部「事件库设置」「AI 建库」两个折叠区。
 // 掷骰入口只有分步规划向导第 2 步（随机事件闸口），这里不再放独立的掷骰按钮；
 // 「事件库设置」里调掷骰三板块（事件条目 / 维度随机 / AI 自主）的开关与权重，供向导第 2 步的掷骰用。
-// 路人反应卡：从最近对话认出引人注目的事（不手填，唯一输入框是指导意见；材料在反应区自己的
-// 「材料勾选」折叠里勾——plotPlannerReactionPicks 随对话记忆，独立于向导第 1 步，见 reactions.js）
-// → 显著性/即时口径/余波口径/底线/楼层预算（一层 = 一条角色回复）→ 转自动到期注入
-// （生效期间规划与检查报告自动附带同一口径，见 planner.js）
+// 路人反应校准已并入向导第 1 步，与规划共用同一批材料（生成/转注入/计入规划材料都在那边，
+// 见 tab-guidance.js 与 reactions.js）；旧版反应区自己的「材料勾选」（chatdata 的 reaction 块）已退役
 import { settings, save, newId } from "../../settings.js";
 import { defaultEventRules, generateEventEntries, dimNameOf } from "../../randomEvents.js";
-import { generateReactionCard, composeReactionText } from "../../reactions.js";
-import { addInjection } from "../../injection.js";
-import { currentFloor, chatEnabledBookIds } from "../../context.js";
-import { reactionPicks, saveReactionPicks } from "../../materials.js";
-import { storageItemsInEffect } from "../../store.js";
-import { memoryState } from "../../memoryTable.js";
+import { currentFloor } from "../../context.js";
 import { escapeHtml, clamp } from "../../utils.js";
 
 let editingDim = null, editingRule = null;                     // 展开编辑中的维度 / 条目 id
 const lib = { dimId: '', count: 5, note: '', preview: [], busy: false };  // AI 建库草稿
-const rx = { note: '', card: null, busy: false, touched: false }; // 路人反应卡（note = 指导意见）
 const folds = { settings: false, dims: false, entries: false, ailib: false }; // 折叠区展开状态（跨重渲染保留）
 
-// 渲染随机事件工具区（路人反应 + 底部两个折叠区），由剧情指导页挂载；掷骰本身在向导第 2 步
+// 渲染随机事件工具区（底部两个折叠区），由剧情指导页挂载；掷骰本身在向导第 2 步
 export function renderEventsTools(container) {
     // 默认条目只在首次使用时种一次（seeded 标记）：之后删空事件库是合法状态，不再复活
     if (!settings.events.seeded) {
@@ -29,78 +21,8 @@ export function renderEventsTools(container) {
         save();
     }
     if (!lib.dimId) lib.dimId = settings.eventDimensions[0]?.id ?? '';
-
-    // 反应卡材料勾选：独立于向导第 1 步（chatdata.js 的 reaction 块，随对话记忆）。
-    // 世界书默认沿用本对话「世界书」页的书单（books = null），点任意一本即切为本批独立勾选
-    const picks = reactionPicks();
-    const chatBooks = chatEnabledBookIds() ?? settings.lorebooks.filter(b => b.enabled).map(b => String(b.id));
-    const bookOn = b => picks.books ? picks.books.includes(String(b.id)) : chatBooks.includes(String(b.id));
-    const mem = memoryState();
-    const recallSheets = mem.mirror.sheets.filter(s => (mem.sheetRecall[s.uid] ?? {}).enabled !== false);
-    const gpItems = settings.storageItems.filter(i => i.enabled);
-    const gpHit = new Set(storageItemsInEffect().map(i => i.id));
-    const gpOn = i => (picks.gpIds ?? [...gpHit]).includes(i.id);
-
-    container.innerHTML = `
-    <div class="pp-section">
-        <b>路人反应校准</b>
-        <details class="pp-fold" id="pp_rx_mats">
-            <summary title="生成反应卡用的材料在这里勾（存当前对话，换对话各用各的）；向导第 1 步的勾选只管规划分析，两边互不影响">材料勾选（只管反应卡，不跟向导第 1 步）</summary>
-            <label class="pp-label" title="附带进行中剧情全文，反应口径与规划方向一致；当前没有进行中剧情时勾了也无内容"><input type="checkbox" id="pp_rx_plan" ${picks.plan ? 'checked' : ''}/> 附带进行中剧情</label>
-            <label class="pp-label" title="按勾选的书检索关键词命中与常驻条目。长线剧情里角色的身世、名声在世界书里，路人认不认得出来就靠它">世界书（按勾选的书检索；<span id="pp_rx_books_mode">${picks.books == null ? '默认＝本对话「世界书」页的书单，点任意一本切为独立勾选' : '本批独立勾选'}</span>）</label>
-            <div class="pp-gd-selp">
-                ${settings.lorebooks.map(b => `<label><input type="checkbox" data-rxbook="${escapeHtml(String(b.id))}" ${bookOn(b) ? 'checked' : ''}/> ${escapeHtml(b.name)}</label>`).join('')
-                || '<span class="pp-muted">还没有导入世界书</span>'}
-            </div>
-            <label class="pp-label" title="勾选的表全量召回（不做标签过滤），全不勾＝不附带；长线剧情里角色的既往经历在这里">记忆表格（勾选的表全量；默认不附带）</label>
-            <div class="pp-gd-selp">
-                ${recallSheets.map(s => `<label><input type="checkbox" data-rxsheet="${escapeHtml(s.uid)}" ${picks.memSheets.includes(s.uid) ? 'checked' : ''}/> ${escapeHtml(s.name)} · ${s.rows.length} 行</label>`).join('')
-                || '<span class="pp-muted">没有开启「参与召回」的记忆表</span>'}
-            </div>
-            <label class="pp-label" title="勾选的玩法规则作为材料发给反应模型（不影响它们注入主对话）">游戏玩法（<span id="pp_rx_gps_mode">${picks.gpIds == null ? '默认＝生效中的条目' : '本批独立勾选'}</span>）</label>
-            <div class="pp-gd-selp">
-                ${gpItems.map(i => `<label><input type="checkbox" data-rxgp="${escapeHtml(i.id)}" ${gpOn(i) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
-                || '<span class="pp-muted">还没有启用的玩法条目</span>'}
-            </div>
-        </details>
-        <label class="pp-label">指导意见</label>
-        <textarea id="pp_rx_note" class="text_pole textarea_compact" rows="2" placeholder="例：别闹大，控制在背后议论和转发的程度"></textarea>
-        <div class="pp-btn-row"><span id="pp_rx_gen" class="menu_button">生成反应卡</span></div>
-        <div id="pp_rx_card"></div>
-    </div>
-    <div id="pp_ev_settings_wrap"></div>`;
-
-    // 勾选即写回对话记忆。世界书/玩法默认跟随各自的全局口径（本对话书单 / 生效中），
-    // 点过任意一本（条）即冻结为本批显式勾选；想回到「全跟默认」的等价状态，
-    // 把默认勾着的那些全勾上即可。预设已全局生效（「设置」页开关），不在材料里单勾
-    const matsEl = container.querySelector('#pp_rx_mats');
-    matsEl.querySelector('#pp_rx_plan').addEventListener('change', e => {
-        picks.plan = e.target.checked;
-        saveReactionPicks(picks);
-    });
-
-    const bindList = (attr, apply) => {
-        matsEl.querySelectorAll(`[data-${attr}]`).forEach(cb => cb.addEventListener('change', () => {
-            apply([...matsEl.querySelectorAll(`[data-${attr}]`)].filter(x => x.checked).map(x => x.dataset[attr]));
-        }));
-    };
-    bindList('rxbook', ids => { picks.books = ids.map(String); matsEl.querySelector('#pp_rx_books_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
-    bindList('rxsheet', ids => { picks.memSheets = ids; saveReactionPicks(picks); });
-    bindList('rxgp', ids => { picks.gpIds = ids; matsEl.querySelector('#pp_rx_gps_mode').textContent = '本批独立勾选'; saveReactionPicks(picks); });
-
-    const note = container.querySelector('#pp_rx_note');
-    note.value = rx.note;
-    note.addEventListener('input', () => { rx.note = note.value; });
-    container.querySelector('#pp_rx_gen').addEventListener('click', () => buildReaction(container));
-    if (rx.card) renderReactionCard(container);
-
+    container.innerHTML = '<div id="pp_ev_settings_wrap"></div>';
     renderSettings(container);
-}
-
-// 聊天切换时由剧情指导页一并调用：反应卡是当前聊天的内容，跟着清；
-// AI 建库草稿是建库工具状态（不分聊天），保留
-export function resetEventsTools() {
-    Object.assign(rx, { note: '', card: null, busy: false, touched: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -502,85 +424,5 @@ function renderLibPreview(container) {
     box.querySelector('#pp_ev_libclr').addEventListener('click', () => {
         lib.preview = [];
         renderLibPreview(container);
-    });
-}
-
-// ---------------------------------------------------------------------------
-// 路人反应校准
-// ---------------------------------------------------------------------------
-
-async function buildReaction(container) {
-    if (rx.busy) return;
-    rx.busy = true;
-    rx.touched = false;
-    const btn = container.querySelector('#pp_rx_gen');
-    btn.textContent = '生成中……';
-    try {
-        rx.card = await generateReactionCard({ note: rx.note });
-        renderReactionCard(container);
-    } catch (err) {
-        toastr.error(String(err.message ?? err));
-    } finally {
-        rx.busy = false;
-        btn.textContent = '生成反应卡';
-    }
-}
-
-function renderReactionCard(container) {
-    const card = rx.card;
-    const box = container.querySelector('#pp_rx_card');
-    const stars = '★'.repeat(card.salience) + '☆'.repeat(5 - card.salience);
-    box.innerHTML = `
-        <div class="pp-item pp-gd-evcard">
-            <b>路人反应卡</b>
-            <div>显著性 <span style="color:#e8c06a">${stars}</span>（${card.salience}/5）</div>
-            <label class="pp-label">即时反应口径（每轮 1-3 句，织进当前场景，写一次就够）</label>
-            <div>${escapeHtml(card.immediate)}</div>
-            <label class="pp-label">余波口径（消息传开/平息的方向，不写场面）</label>
-            <div>${escapeHtml(card.aftermath)}</div>
-            <label class="pp-label">底线</label>
-            <div>${escapeHtml(card.boundaries)}</div>
-            <label class="pp-label">楼层预算（一层 = 一条角色回复，user 消息不计；到期自动撤下）</label>
-            <input id="pp_rx_floors" class="text_pole textarea_compact" type="number" min="2" max="30" value="${card.floors}" />
-            <label class="pp-label">注入正文预览（可改；改过就按这份文本固定生效，只按层数过期）</label>
-            <textarea id="pp_rx_text" class="text_pole textarea_compact" rows="10">${escapeHtml(composeReactionText(card, 0))}</textarea>
-            <div class="pp-btn-row">
-                <span id="pp_rx_ok" class="menu_button">确认，转为隐身注入</span>
-            </div>
-        </div>`;
-
-    const textEl = box.querySelector('#pp_rx_text');
-    const floorsEl = box.querySelector('#pp_rx_floors');
-    floorsEl.addEventListener('change', () => {
-        card.floors = Math.min(Math.max(Number(floorsEl.value) || card.floors, 2), 30);
-        floorsEl.value = card.floors;
-        if (!rx.touched) textEl.value = composeReactionText(card, 0);
-    });
-    textEl.addEventListener('input', () => { rx.touched = true; });
-
-    box.querySelector('#pp_rx_ok').addEventListener('click', () => {
-        const text = textEl.value.trim();
-        if (!text) {
-            toastr.warning('注入内容为空');
-            return;
-        }
-        const auto = composeReactionText(card, 0);
-        const reaction = rx.touched && text !== auto ? { ...card, edited: true } : card;
-        addInjection({
-            id: newId('inj-'),
-            label: card.immediate ? `路人反应：${card.immediate.slice(0, 24)}` : '路人反应',
-            mode: 'open',
-            content: text,
-            depth: 4,
-            role: 'system',
-            scope: 'chat',
-            enabled: true,
-            source: 'reaction',
-            createdAt: Date.now(),
-            expires: { type: 'layers', layers: card.floors },
-            reaction,
-            age: 0,
-        });
-        toastr.success(`已注入，${card.floors} 层后自动撤下（一层 = 一条角色回复；生效期间规划与检查报告自动附带同一口径，设置页底部可提前撤下）`);
     });
 }

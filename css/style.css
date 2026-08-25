@@ -659,7 +659,7 @@
 
 .pp-gd-rv { overflow-wrap: anywhere; }
 
-/* 随机事件闸口：事件卡（竖排布局的 pp-item 变体）+ 选中的走向高亮 */
+/* 事件卡（竖排布局的 pp-item 变体）：随机事件闸口与第 1 步路人反应卡共用；pp-gd-sel = 选中态描边 */
 .pp-gd-evcard {
     flex-direction: column;
     align-items: stretch;
