@@ -714,7 +714,7 @@ function wizardUnitTexts() {
     return { eventText: ev.join('\n\n'), reactionText: rx.join('\n\n') };
 }
 
-// 联网搜索是否会对本次分析生效：设置页开了「分析前联网判断」且填了搜索密钥。
+// 联网搜索是否会对本次分析生效：设置页开了「启用联网搜索」且填了搜索密钥。
 // 生效时分析前先由一次无工具的轻量判断决定要不要联网（只发剧情简报），判需要才直查，
 // 纪要附加进分析材料
 const searchToolActive = () => settings.search?.toolMode !== false && searchToolReady();

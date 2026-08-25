@@ -9,7 +9,7 @@
 //     冲写走 saveSettingsDebounced（1 秒防抖，只序列化设置文件）。
 // 读序：会话缓存 → 热层 → 冷层 → 旧 chatMetadata 数据一次性迁移（迁完即从聊天文件删掉）。
 // 聊天身份 = 角色头像文件名｜聊天文件名：开分支、改聊天名、换新聊天文件都会被认成新聊天，
-// 旧数据用设置页「数据备份与搬家」的导出/导入/过户接回来。
+// 旧数据用设置页「数据备份与搬家」的导出/导入/备份继承接回来。
 import { settings, save } from "./settings.js";
 
 // 本模块故意不经 context.js 取 getContext（chatdata ← context 与 context ← chatdata 会成环），
@@ -116,7 +116,7 @@ export function flushChatData() {
     }, 5000);
 }
 
-// 导入备份 / 过户后调用：作废会话缓存与热层，后续读取回落到冷层（刚写入的那份）
+// 导入备份 / 备份继承后调用：作废会话缓存与热层，后续读取回落到冷层（刚写入的那份）
 export function resetChatDataCache() {
     sessionCache.clear();
     try {

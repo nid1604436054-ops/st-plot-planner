@@ -1,5 +1,5 @@
 // 设置页签：独立大模型通道（地址/密钥/模型）+ 检索与生成参数 + 预设（全局固定要求）管理 + 生效中注入的管理
-// + 数据备份与搬家（一键导出全部 / 导入备份 / 聊天数据过户）
+// + 数据备份与搬家（导出备份 / 导入备份 / 备份继承）
 // 配置直接放在主面板里，魔法棒 → 剧情规划器 → 设置，无需再去扩展面板
 import { settings, save, newId } from "../../settings.js";
 import { testConnection, fetchModels, searchWeb } from "../../api.js";
@@ -98,7 +98,7 @@ export const settingsTab = {
                     <input id="pp_set_smax" class="text_pole textarea_compact" type="number" min="1" max="10" />
                 </div>
                 <div>
-                    <label class="pp-label" title="勾上后：分析/检查前先由一次轻量判断（只发剧情简报）决定要不要联网，纯虚构剧情默认不检索；判「需要」才按给出的关键词直查（搜索不耗模型 token），结果附进材料；取消则完全不联网，只保留下方的手动试搜">分析前联网判断</label>
+                    <label class="pp-label" title="勾上后：分析/检查前先由一次轻量判断（只发剧情简报）决定要不要联网，纯虚构剧情默认不检索；判「需要」才按给出的关键词直查（搜索不耗模型 token），结果附进材料；取消则完全不联网，只保留下方的手动试搜">启用联网搜索</label>
                     <input id="pp_set_stool" type="checkbox" />
                 </div>
             </div>
@@ -330,9 +330,9 @@ export const settingsTab = {
 
 // ---------------------------------------------------------------------------
 // 数据备份与搬家：插件数据不进聊天文件（见 chatdata.js），这里是它的保险丝——
-// 一键导出全部（全局设置 + 所有聊天各自的数据）成 JSON 文件存到任意位置；
-// 导入恢复；过户把别的聊天的数据整个搬给当前聊天（新聊天继承旧聊天 / 开分支 /
-// 聊天改名后找回数据都靠它）
+// 导出备份（全局设置 + 所有聊天各自的数据）成 JSON 文件存到任意位置；
+// 导入备份恢复；备份继承把别的聊天的数据整个搬给当前聊天（新聊天继承旧聊天 /
+// 开分支 / 聊天改名后找回数据都靠它）
 // ---------------------------------------------------------------------------
 
 function renderBackup(container) {
@@ -342,13 +342,13 @@ function renderBackup(container) {
     <details class="pp-fold" data-secfold="backup" ${secFolds.backup ? 'open' : ''}>
         <summary><i class="fa-solid fa-box-archive"></i> 数据备份与搬家</summary>
         <div class="pp-btn-row">
-            <div id="pp_set_export" class="menu_button" title="把插件的全部数据导出成一个 JSON 文件，存到你选的位置：全局设置（连接/预设/世界书/事件库/玩法/注入）+ 每个聊天各自的数据（记忆表格镜像、剧情档案、各类勾选、书单）。换电脑、重装酒馆前的救命备份">一键导出全部数据</div>
-            <label class="menu_button" for="pp_set_import_file" title="选一个之前导出的备份文件恢复：全局设置整份覆盖，各聊天的数据按聊天身份合并回来；导入后建议刷新一次页面">导入备份</label>
-            <input id="pp_set_import_file" type="file" accept=".json,application/json" hidden />
+            <select id="pp_set_transfer_from" class="text_pole" title="备份继承的源聊天。聊天身份 = 角色头像｜聊天文件名。开分支、改聊天名、换新聊天文件都会被认成新聊天（数据不自动跟过去）——从列表里选旧身份，点下方「备份继承」把它的数据整个搬过来"></select>
         </div>
         <div class="pp-btn-row">
-            <select id="pp_set_transfer_from" class="text_pole" title="聊天身份 = 角色头像｜聊天文件名。开分支、改聊天名、换新聊天文件都会被认成新聊天（数据不自动跟过去）——从列表里选旧身份，点旁边按钮把它的数据整个搬过来"></select>
-            <div id="pp_set_transfer" class="menu_button" title="把左边选中的聊天的全部插件数据（记忆表格镜像、剧情档案、勾选、书单）复制给当前聊天；当前聊天已有的数据会被覆盖。适合：旧聊天太卡换了新的、开分支、改名后找回数据">过户到当前聊天</div>
+            <div id="pp_set_export" class="menu_button" title="把插件的全部数据导出成一个 JSON 文件，存到你选的位置：全局设置（连接/预设/世界书/事件库/玩法/注入）+ 每个聊天各自的数据（记忆表格镜像、剧情档案、各类勾选、书单）。换电脑、重装酒馆前的救命备份">导出备份</div>
+            <label class="menu_button" for="pp_set_import_file" title="选一个之前导出的备份文件恢复：全局设置整份覆盖，各聊天的数据按聊天身份合并回来；导入后建议刷新一次页面">导入备份</label>
+            <input id="pp_set_import_file" type="file" accept=".json,application/json" hidden />
+            <div id="pp_set_transfer" class="menu_button" title="把上面选中的聊天的全部插件数据（记忆表格镜像、剧情档案、勾选、书单）复制给当前聊天；当前聊天已有的数据会被覆盖。适合：旧聊天太卡换了新的、开分支、改名后找回数据">备份继承</div>
         </div>
     </details>`;
 
@@ -396,13 +396,13 @@ function renderBackup(container) {
     el.querySelector('#pp_set_transfer').addEventListener('click', () => {
         const from = el.querySelector('#pp_set_transfer_from').value;
         const src = from ? settings.chatData?.[from] : null;
-        if (!from || !src) { toastr.warning('请先在左边选择要搬来的聊天'); return; }
+        if (!from || !src) { toastr.warning('请先在上方选择要继承的源聊天'); return; }
         settings.chatData ??= {};
         settings.chatData[chatDataKey()] = JSON.parse(JSON.stringify(src));
         resetChatDataCache();
         save();
         rebuildTransferList(container);
-        toastr.success(`已把「${from}」的数据过户到当前聊天（记忆表格/剧情档案/勾选/书单），建议刷新一次页面`);
+        toastr.success(`已从「${from}」继承全部数据到当前聊天（记忆表格/剧情档案/勾选/书单），建议刷新一次页面`);
     });
 
     rebuildTransferList(container);
