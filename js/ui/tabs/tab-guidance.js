@@ -714,10 +714,11 @@ function wizardUnitTexts() {
     return { eventText: ev.join('\n\n'), reactionText: rx.join('\n\n') };
 }
 
-// 联网搜索是否会对本次分析生效：设置页开了「启用联网搜索」且填了搜索密钥。
-// 生效时分析前先由一次无工具的轻量判断决定要不要联网（只发剧情简报），判需要才直查，
-// 纪要附加进分析材料
-const searchToolActive = () => settings.search?.toolMode !== false && searchToolReady();
+// 联网搜索是否会对本次分析生效：设置页开了「启用联网搜索」（总开关）且填了搜索密钥。
+// 生效时分析前先发一次轻量调用：「模型搜索前判断」开着由它决定要不要联网（判需要才直查），
+// 关着则只为取关键词、每次必查；纪要附加进分析材料
+const searchToolActive = () => settings.search?.enabled !== false && searchToolReady();
+const searchPreJudge = () => settings.search?.preJudge !== false;
 
 // 两工具（随机事件/路人反应）生成用的材料 = 第 1 步的本次选择（记忆表范围/标签、玩法勾选），
 // 与规划分析完全同一批——三处口径一致才能互相对账（DESIGN §2.5：材料部分严格同源）；预设走全局，出口自动附带
@@ -979,7 +980,7 @@ function renderCollect(container, main) {
             ];
             const mask = openViewer('完整提示词预览',
                 `<span class="pp-muted" style="flex-basis:100%" title="本行 = 本次分析实际携带的材料概览。预设全局生效：「设置」页勾选启用的预设会拼进插件发给大模型的每一次调用的系统提示词（规划分析/检查报告/随机事件/路人反应/AI 打标/AI 建库/联网判断），开关在「设置」页">${escapeHtml(c1StatText())} · 预设 ${presets.filter(p => p.enabled).length}/${presets.length} 全局生效${activeStory() ? ' · 已附进行中剧情' : ''}</span>`
-                + `<span title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考；实际分词通常更省（中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：分析前先轻量判断是否需要现实信息（只发剧情简报，纯虚构默认不检索），判需要才检索，纪要追加为附加小节，不在此预览内' : ''}">材料共 ${totalChars.toLocaleString()} 字 · 粗估约 ${(sysTok + usrTok).toLocaleString()} tokens</span>`
+                + `<span title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考；实际分词通常更省（中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? `；已开联网搜索：${searchPreJudge() ? '分析前先轻量判断是否需要现实信息（只发剧情简报，纯虚构默认不检索），判需要才检索' : '分析前轻量取关键词后直接检索，不判断要不要搜'}，纪要追加为附加小节，不在此预览内` : ''}">材料共 ${totalChars.toLocaleString()} 字 · 粗估约 ${(sysTok + usrTok).toLocaleString()} tokens</span>`
                 + `<input type="text" id="pp_gd_pv_search" class="text_pole" placeholder="检索…" title="在全部块里检索（大小写不敏感）：命中的块自动展开并高亮、没命中的临时藏起，清空恢复全览" />`
                 + `<span id="pp_gd_pv_hits" class="pp-muted"></span>`
                 + `<span class="menu_button" id="pp_gd_pv_expand" title="把当前看得见的块全部展开/收起（检索时只作用于命中的块）">全部展开</span>`
@@ -1062,7 +1063,7 @@ function renderReady(container, main) {
     <div class="pp-section">
         <div class="pp-gd-stephead"><b>第 2 步 · 分析前确认</b></div>
         <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${presets.filter(p => p.enabled).length}/${presets.length} 全局生效 · 随机事件：${evInPlan ? `${evInPlan} 单元参与` : '无'}</div>
-        <div class="pp-gd-stat pp-muted">记忆表格：${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${rxInPlan ? ` · 路人反应 ${rxInPlan} 单元` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（先轻量判断，需要才检索）' : ''}</div>
+        <div class="pp-gd-stat pp-muted">记忆表格：${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${rxInPlan ? ` · 路人反应 ${rxInPlan} 单元` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ` · 联网搜索：开（${searchPreJudge() ? '先轻量判断，需要才检索' : '直接检索，不判断'}）` : ''}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">确认，开始分析</span>
             <span id="pp_gd_ready_back" class="menu_button">返回</span>

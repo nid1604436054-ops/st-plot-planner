@@ -94,9 +94,11 @@ export const REVIEW_SYSTEM_PROMPT = [
 // 分析走了流式但服务商没在末包回传 usage，如实说明没有实报数字
 function billToast(usage, search = null) {
     const parts = [];
-    if (search) parts.push(search.searched
-        ? `联网判断 1 次（轻量简报）+ Tavily 直查 ${search.queries} 个关键词（搜索不耗模型 token，全套材料只发 1 次）`
-        : `联网判断 1 次（轻量简报）：本次不需要现实信息，未检索${search.reason ? `（${search.reason}）` : ''}`);
+    if (search) parts.push(search.direct
+        ? `联网取关键词 1 次（轻量简报）${search.searched ? `+ Tavily 直查 ${search.queries} 个关键词（搜索不耗模型 token，全套材料只发 1 次）` : '：未取得关键词，未检索'}`
+        : search.searched
+            ? `联网判断 1 次（轻量简报）+ Tavily 直查 ${search.queries} 个关键词（搜索不耗模型 token，全套材料只发 1 次）`
+            : `联网判断 1 次（轻量简报）：本次不需要现实信息，未检索${search.reason ? `（${search.reason}）` : ''}`);
     if (usage?.promptTokens) parts.push(`合计输入 ${usage.promptTokens.toLocaleString()} · 输出 ${usage.completionTokens.toLocaleString()} tokens（服务商实报）`);
     else if (usage?.streamNoUsage) parts.push('本次分析走流式且服务商未在末包回传 usage，无实报 token 数字');
     if (search?.logs.length) parts.push(`检索词：${search.logs.join('；')}`);
@@ -114,6 +116,16 @@ const GATE_SYSTEM_PROMPT = [
     '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
     '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：',
     '{ "need": false, "reason": "一句话判断理由", "queries": ["判「需要」时给 1-3 个搜索关键词；判「不需要」给空数组"] }',
+].join('\n');
+
+// 「模型搜索前判断」关掉时的直查模式提示词：联网已确定执行，不再判要不要，
+// 轻量调用只负责产关键词（关键词没有本地来源，必须由模型给）
+const GATE_DIRECT_PROMPT = [
+    '你是「剧情联网检索」的关键词参谋。用户正在为一篇文字角色扮演作品做剧情规划/执行检查，会给你一份浓缩的剧情背景简报。',
+    '联网检索已确定执行，你的任务只有一件事：给出 1-3 个最值得检索的关键词。优先剧情依赖的现实世界具体事实（真实历史事件与年代细节、现实地域/机构/行业/法律/医学的运作方式、时效性信息、写错会露馅的专业流程）；纯虚构剧情没有可搜的现实信息时，给剧情核心名词（人名/地名/作品/物品等）也可以。',
+    '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
+    '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：',
+    '{ "queries": ["1-3 个搜索关键词"] }',
 ].join('\n');
 
 /**
@@ -146,12 +158,15 @@ export function buildResearchBrief({ topic = '', userNote = '', eventText = '', 
  *          usage 只含判断这一次调用的账单；notes 为空 = 本次未检索
  */
 export async function runWebResearch(research = {}) {
+    // preJudge 关 = 直查模式：轻量调用换「直接给关键词」提示词、必搜不判（判断关掉的是
+    // 「要不要搜」这一问，轻量调用本身省不掉——关键词必须由模型产）
+    const direct = settings.search?.preJudge === false;
     const gateUsage = { promptTokens: 0, completionTokens: 0 };
     let raw;
     try {
         raw = await chatCompletion({
             messages: [
-                { role: 'system', content: GATE_SYSTEM_PROMPT },
+                { role: 'system', content: direct ? GATE_DIRECT_PROMPT : GATE_SYSTEM_PROMPT },
                 { role: 'user', content: buildResearchBrief(research) },
             ],
             onUsage: u => { gateUsage.promptTokens = u.prompt_tokens ?? 0; gateUsage.completionTokens = u.completion_tokens ?? 0; },
@@ -168,8 +183,8 @@ export async function runWebResearch(research = {}) {
     } catch { /* 保持 null */ }
     const queries = (Array.isArray(verdict?.queries) ? verdict.queries : [])
         .map(q => String(q ?? '').trim()).filter(Boolean).slice(0, 3);
-    if (!verdict?.need || !queries.length) {
-        return { notes: '', searchLogs: [], reason: String(verdict?.reason ?? '').slice(0, 40), usage };
+    if ((!direct && !verdict?.need) || !queries.length) {
+        return { notes: '', searchLogs: [], reason: direct ? '未取得关键词' : String(verdict?.reason ?? '').slice(0, 40), usage };
     }
 
     const searchLogs = [];
@@ -226,7 +241,7 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
     let search = null;
     let notes = '';
 
-    if (settings.search?.toolMode && searchToolReady()) {
+    if (settings.search?.enabled !== false && searchToolReady()) {
         try {
             onStage?.('gate');
             const key = fingerprint(buildResearchBrief(research));
@@ -234,12 +249,12 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
                 ? await prefetch.promise            // 预跑时输入与现在完全一致：直接采用
                 : await runWebResearch(research);   // 输入变了（换事件/改构思/新修改意见）：重判
             add(r.usage);
-            search = { searched: r.searchLogs.length > 0, queries: r.searchLogs.length, logs: r.searchLogs, reason: r.reason };
+            search = { searched: r.searchLogs.length > 0, queries: r.searchLogs.length, logs: r.searchLogs, reason: r.reason, direct: settings.search?.preJudge === false };
             notes = r.notes;
         } catch (err) {
             if (err.name === 'AbortError') throw err;
             add(err.usage);   // 判断阶段失败也可能已产生计费（如空内容报错），照实累计
-            toastr.warning(`联网判断失败，跳过检索继续分析：${err.message}`);
+            toastr.warning(`联网${settings.search?.preJudge === false ? '取关键词' : '判断'}失败，跳过检索继续分析：${err.message}`);
         }
     }
 

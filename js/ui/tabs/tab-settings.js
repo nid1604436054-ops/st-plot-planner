@@ -92,14 +92,16 @@ export const settingsTab = {
                 <summary><i class="fa-solid fa-globe"></i> 联网搜索（Tavily）</summary>
                 <label class="pp-label">搜索 API 密钥（tvly- 开头，tavily.com 注册）</label>
             <input id="pp_set_skey" class="text_pole textarea_compact" type="password" placeholder="tvly-..." autocomplete="off" />
+            <label class="pp-label" title="单次搜索带回并塞给模型的结果条数">每次带回条数</label>
+            <input id="pp_set_smax" class="text_pole textarea_compact" type="number" min="1" max="10" />
             <div class="pp-grid2">
                 <div>
-                    <label class="pp-label" title="单次搜索带回并塞给模型的结果条数">每次带回条数</label>
-                    <input id="pp_set_smax" class="text_pole textarea_compact" type="number" min="1" max="10" />
+                    <label class="pp-label" title="联网搜索总开关：勾上后「分析」与「检查当前剧情」可以联网取现实信息，搜不搜由右边「模型搜索前判断」的口径决定；取消则完全不联网，只保留下方的手动试搜">启用联网搜索</label>
+                    <input id="pp_set_stool" type="checkbox" />
                 </div>
                 <div>
-                    <label class="pp-label" title="勾上后：分析/检查前先由一次轻量判断（只发剧情简报）决定要不要联网，纯虚构剧情默认不检索；判「需要」才按给出的关键词直查（搜索不耗模型 token），结果附进材料；取消则完全不联网，只保留下方的手动试搜">启用联网搜索</label>
-                    <input id="pp_set_stool" type="checkbox" />
+                    <label class="pp-label" title="勾上后每次搜索前先由一次轻量判断（只发剧情简报）决定要不要搜——纯虚构剧情默认不检索，省调用；取消则只要联网搜索开着，每次分析/检查都直接检索（轻量调用只为取关键词，不再判「不需要」）">模型搜索前判断</label>
+                    <input id="pp_set_prejudge" type="checkbox" />
                 </div>
             </div>
             <label class="pp-label" title="验证搜索真的能用">试搜</label>
@@ -181,8 +183,14 @@ export const settingsTab = {
         bind('#pp_set_skey', () => settings.search.apiKey, v => settings.search.apiKey = String(v).trim());
         bindNum('#pp_set_smax', () => settings.search.maxResults, v => settings.search.maxResults = Math.min(Math.max(v || 5, 1), 10));
         const sTool = container.querySelector('#pp_set_stool');
-        sTool.checked = settings.search.toolMode !== false;
-        sTool.addEventListener('change', () => { settings.search.toolMode = sTool.checked; save(); });
+        const sJudge = container.querySelector('#pp_set_prejudge');
+        sTool.checked = settings.search.enabled !== false;
+        sJudge.checked = settings.search.preJudge !== false;
+        // 总开关关掉时「搜索前判断」没有意义，置灰防误导；重开时勾选态原样恢复
+        const syncJudgeDisabled = () => { sJudge.disabled = !sTool.checked; };
+        sTool.addEventListener('change', () => { settings.search.enabled = sTool.checked; save(); syncJudgeDisabled(); });
+        sJudge.addEventListener('change', () => { settings.search.preJudge = sJudge.checked; save(); });
+        syncJudgeDisabled();
 
         applyModelMode(container);
         container.querySelector('#pp_set_model').addEventListener('change', () => {
