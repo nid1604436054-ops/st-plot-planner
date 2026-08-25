@@ -13,6 +13,7 @@ const DEFAULTS = {
         temperature: 0.7,
         maxTokens: 1500,
         thinkingOff: false, // 推理模型关闭思考：请求体附加主流关闭参数（GLM 系 thinking / Qwen 系 enable_thinking），端点不认时自动去参重试
+        profiles: [],       // 供应商方案库：{id, name, baseUrl, apiKey, model}，设置页存当前连接、下拉一键切换（温度等其余参数全局共用）
     },
     search: {
         provider: 'tavily',    // 联网搜索供应商（当前仅 Tavily，浏览器直连）
@@ -75,6 +76,7 @@ function ensureDefaults() {
             : [];
     }
     // 顶层 ??= 只对新装用户生效，老安装的嵌套新字段在这里补
+    store.api.profiles ??= [];        // 老安装补供应商方案列表
     store.retrieval.memChars ??= 4000;
     store.guidance.inject ??= { depth: 4, role: 'system', expires: 'never', layers: 20 };
     store.storageScanLayers ??= 20;   // 老安装补玩法触发词扫描窗口（沿用此前写死的 20）

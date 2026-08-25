@@ -45,6 +45,15 @@ function applyModelMode(container) {
     else rebuildModelSelect(container);
 }
 
+// 供应商方案下拉：留底的连接方案列成选项（首项占位，选中的保持显示方便接着删）
+function rebuildProfileSelect(container) {
+    const sel = container.querySelector('#pp_set_prof');
+    if (!sel) return;
+    const list = settings.api.profiles ?? [];
+    sel.innerHTML = '<option value="">选择方案切换…</option>'
+        + list.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('');
+}
+
 export const settingsTab = {
     id: 'settings',
     title: '设置',
@@ -52,6 +61,12 @@ export const settingsTab = {
         container.innerHTML = `
         <div class="pp-section">
             <b>大模型连接</b>
+            <label class="pp-label" title="把不同供应商的连接各存一套（地址+密钥+模型），下拉一键切换，测试不同供应商不用反复粘贴；温度等其余参数全局共用">供应商方案（多套连接快速切换）</label>
+            <div class="pp-model-row">
+                <select id="pp_set_prof" class="text_pole" title="选择已保存的方案立即整套启用（地址、密钥、模型一起换过来）；切换后模型下拉显示「当前自定义」，点「获取模型列表」可刷新成新供应商的列表"></select>
+                <div id="pp_set_prof_save" class="menu_button" title="把当前地址、密钥、模型存成一个方案：名字自动取地址域名；同一地址+密钥再次保存只更新模型，同域名不同密钥会另存一条（名字带 -2 -3 区分）">存当前</div>
+                <div id="pp_set_prof_del" class="menu_button" title="删除下拉里选中的方案（只删留底的方案，不动当前连接）">删除</div>
+            </div>
             <label class="pp-label">API 地址（含 /v1）</label>
             <input id="pp_set_base" class="text_pole textarea_compact" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" />
             <label class="pp-label">API 密钥</label>
@@ -173,6 +188,58 @@ export const settingsTab = {
         container.querySelector('#pp_set_model_toggle').addEventListener('click', () => {
             manualModel = !manualModel;
             applyModelMode(container);
+        });
+
+        // 供应商方案：测试不同供应商时把连接整套存下来/切回来，不用反复粘贴地址密钥
+        rebuildProfileSelect(container);
+        const profSel = container.querySelector('#pp_set_prof');
+        profSel.addEventListener('change', () => {
+            const p = (settings.api.profiles ?? []).find(x => x.id === profSel.value);
+            if (!p) return;
+            settings.api.baseUrl = p.baseUrl;
+            settings.api.apiKey = p.apiKey;
+            settings.api.model = String(p.model ?? '');
+            save();
+            container.querySelector('#pp_set_base').value = p.baseUrl;
+            container.querySelector('#pp_set_key').value = p.apiKey;
+            modelIds = [];          // 列表是旧供应商拉的，作废待重取
+            manualModel = false;
+            applyModelMode(container);
+            toastr.success(`已切换到「${p.name}」，模型列表请重新获取`);
+        });
+        container.querySelector('#pp_set_prof_save').addEventListener('click', () => {
+            // 显式同步输入框当前值，避免依赖 blur/change 触发时序
+            const base = String(container.querySelector('#pp_set_base').value || '').trim();
+            const key = String(container.querySelector('#pp_set_key').value || '').trim();
+            if (!base) { toastr.warning('请先填写 API 地址'); return; }
+            settings.api.baseUrl = base;
+            settings.api.apiKey = key;
+            save();
+            const list = settings.api.profiles ??= [];
+            const same = list.find(x => x.baseUrl === base && x.apiKey === key);
+            if (same) {
+                same.model = settings.api.model;
+                save();
+                toastr.success(`方案「${same.name}」已更新（模型 ${settings.api.model || '未选'}）`);
+            } else {
+                let host = base;
+                try { host = new URL(base).host; } catch { /* 地址不规范就用原文当名字 */ }
+                let name = host, n = 2;
+                while (list.some(x => x.name === name)) name = `${host}-${n++}`;
+                list.push({ id: newId('ap-'), name, baseUrl: base, apiKey: key, model: settings.api.model });
+                save();
+                rebuildProfileSelect(container);
+                toastr.success(`已保存方案「${name}」`);
+            }
+        });
+        container.querySelector('#pp_set_prof_del').addEventListener('click', () => {
+            const list = settings.api.profiles ?? [];
+            const idx = list.findIndex(x => x.id === profSel.value);
+            if (idx < 0) { toastr.warning('请先在下拉里选中要删除的方案'); return; }
+            const [removed] = list.splice(idx, 1);
+            save();
+            rebuildProfileSelect(container);
+            toastr.success(`已删除方案「${removed.name}」`);
         });
 
         container.querySelector('#pp_set_fetch_models').addEventListener('click', async function () {
