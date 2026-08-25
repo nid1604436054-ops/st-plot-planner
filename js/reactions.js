@@ -7,9 +7,8 @@
 // 材料与剧情规划第 1 步共用同一批（调用方传入 materials/activePlan，即向导的记忆表格档位/
 // 标签/玩法勾选与进行中剧情）——旧版反应区自己那套「材料勾选」（chatdata 的 reaction 块）已退役。
 // 长线剧情里角色的身世、名声在世界书与记忆里，不带就没法校准路人认知。预设已全局化，由 chatCompletion 出口自动附带
-import { chatCompletion } from "./api.js";
+import { chatCompletion, parseModelJson } from "./api.js";
 import { materialSections } from "./materials.js";
-import { extractJson } from "./utils.js";
 
 const DEFAULT_BOUNDARY = '不得导致感情实质破裂、主要角色受异性实质侵犯、user 无法逆转的损失；危机可以重，出口必须存在。';
 
@@ -61,13 +60,15 @@ export async function generateReactionCard({ note = '', materials = {}, activePl
         note.trim() ? `## 指导意见\n${note.trim()}` : '',
     ].filter(Boolean).join('\n\n');
 
-    const raw = await chatCompletion({
+    const request = {
         messages: [
             { role: 'system', content: CARD_SYSTEM_PROMPT },
             { role: 'user', content: user },
         ],
-    });
-    return normalizeCard(extractJson(raw));
+    };
+    const raw = await chatCompletion(request);
+    const { result } = await parseModelJson(raw, request);   // 坏输出带修复提示回炉一次
+    return normalizeCard(result);
 }
 
 export function normalizeCard(card) {

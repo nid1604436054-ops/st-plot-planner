@@ -1,6 +1,7 @@
 // M0 独立大模型通道：OpenAI 兼容 /chat/completions，浏览器直连
 // 注意：所选服务商需允许浏览器跨域（CORS）；不支持时优先换支持跨域的服务商/中转/本地网关
 import { settings } from "./settings.js";
+import { extractJson } from "./utils.js";
 
 export class ApiError extends Error {
     constructor(message, { status, body } = {}) {
@@ -183,6 +184,49 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
         }
     }
     return finish();   // 流没等到 [DONE] 就断了：按已收到的内容收尾
+}
+
+// ---------------------------------------------------------------------------
+// 结构化输出的契约加固（T3）：要求模型只回一个 JSON，现实里仍会夹说明、裹围栏、
+// 值内裸引号换行、甚至被截断。utils.extractJson 在本地能修的（剥围栏/定位/格式伤）
+// 都修了；这里补最后一道——本地修不回时把坏输出原样回传、附修复提示重发一次原请求，
+// 再失败才向上抛。反应卡 / 报告卡 / 自动打标 / 事件选项与建库各结构化流共用。
+// 联网判断的输出不走这里：它坏了按「不需要」处理（宁可少搜不多搜），不该多花一次调用
+// ---------------------------------------------------------------------------
+
+// 修复提示共享一份，不感知各任务的 schema——要修的是「格式」，内容指令是「保持不变」
+const JSON_REPAIR_PROMPT = '你上一条回复没能解析成 JSON。请重新输出同一份内容：内容保持不变，只修复格式——'
+    + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字（不要说明文字，不要用 Markdown 代码围栏包裹）；'
+    + '字符串值内不要出现英文双引号（引用一律改写为中文「」）、不要在值内换行（改写为空格或分号）；'
+    + '补齐缺失的逗号与引号，删掉尾逗号。若上一条是被截断的，请精简各字段的文字，确保 JSON 完整收尾。';
+
+/**
+ * 解析模型输出中的 JSON，本地修不回时自动带修复提示回炉一次。
+ * @param {string} raw       第一次调用的模型输出
+ * @param {object} [request] 第一次调用的请求原样传入：重试时 messages 换成
+ *                           「原对话 + 坏输出（assistant）+ 修复提示（user）」，其余参数
+ *                           （temperature/maxTokens/signal/onUsage/onDelta）原样随行；
+ *                           call 可覆盖实际发调函数（默认 chatCompletion，
+ *                           检查报告等走 guidanceCompletion 包装的流用它保持账单口径）
+ * @returns {Promise<{result:Object, raw:string, retried:boolean}>}
+ *          raw = 实际解析成功的那份输出（重试成功即修复后的）
+ */
+export async function parseModelJson(raw, { messages = [], call = chatCompletion, ...rest } = {}) {
+    try {
+        return { result: extractJson(raw), raw: String(raw ?? ''), retried: false };
+    } catch { /* 落到修复重试 */ }
+    toastr.info('模型输出不是合法 JSON，已带修复提示自动重试一次');
+    const repaired = await call({
+        ...rest,
+        messages: [...messages, { role: 'assistant', content: String(raw ?? '') }, { role: 'user', content: JSON_REPAIR_PROMPT }],
+    });
+    try {
+        return { result: extractJson(repaired), raw: repaired, retried: true };
+    } catch (err) {
+        err.raw = repaired;   // 上层展示排查看最后一次的输出（首次输出已随修复对话发给模型）
+        err.message = `自动修复重试一次后仍解析失败：${err.message}`;
+        throw err;
+    }
 }
 
 export async function testConnection() {

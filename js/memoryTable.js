@@ -10,8 +10,7 @@
 //   - 同步只更新原表库；合并（同步按钮的第二步）把新行带「新」标进来，
 //     用户编辑过的行不被覆盖（原表改动只标「原表已更新」），删除过的行内容不变不复活（墓碑按内容指纹）
 import { getTavernContext } from "./context.js";
-import { chatCompletion } from "./api.js";
-import { extractJson } from "./utils.js";
+import { chatCompletion, parseModelJson } from "./api.js";
 import { newId, settings } from "./settings.js";
 import { loadChatData, saveChatData } from "./chatdata.js";
 
@@ -449,7 +448,7 @@ export async function autoTagByVocabulary({ vocab = [], sheetUids = [], overwrit
         const lines = batch.map(r =>
             `[${r.rid}] ` + r.cells.map((c, j) => `${r.cols[j] ?? j}:${c}`).join(' | ')).join('\n');
         try {
-            const raw = await chatCompletion({
+            const request = {
                 temperature: 0.2,
                 maxTokens: 4000,
                 messages: [
@@ -465,8 +464,9 @@ export async function autoTagByVocabulary({ vocab = [], sheetUids = [], overwrit
                         ].join('\n\n'),
                     },
                 ],
-            });
-            const data = extractJson(raw);
+            };
+            const raw = await chatCompletion(request);
+            const { result: data } = await parseModelJson(raw, request);   // 坏输出带修复提示回炉一次
             const validNames = new Set(entries.map(v => v.name));
             const validIds = new Set(batch.map(r => r.rid));
             for (const item of data?.rows ?? []) {

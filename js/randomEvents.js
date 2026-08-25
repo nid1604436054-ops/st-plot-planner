@@ -3,10 +3,9 @@
 // 条目板块按「权重×概率」加权抽一条（必出），随机板块按维度权重抽方向，AI 自主板块由模型挑维度。
 // 设计取向（吸收用户 NPC_Reaction 预设）：轻重有别（轻＝一根针，重＝一个局）、宁重不轻、
 // 危机可重但出口必须存在、密度受控（同维度连出两次暂停一轮、最近事件防重复）。
-import { chatCompletion } from "./api.js";
+import { chatCompletion, parseModelJson } from "./api.js";
 import { collectRecentChat, formatChatLog, currentFloor } from "./context.js";
 import { settings, save, newId } from "./settings.js";
-import { extractJson } from "./utils.js";
 import { materialSections } from "./planner.js";
 import { storyState, activeStory } from "./story.js";
 
@@ -165,13 +164,15 @@ export async function generateRandomEvent(rule, materials = {}) {
         `维度「${dimNameOf(rule.dimension)}」｜条目「${rule.name}」：${rule.promptHint ?? ''}`,
         SEVERITY_HINT[rule.severity] ?? SEVERITY_HINT.light].join('\n\n');
 
-    const raw = await chatCompletion({
+    const request = {
         messages: [
             { role: 'system', content: EVENT_SYSTEM_PROMPT },
             { role: 'user', content: sections },
         ],
-    });
-    return extractJson(raw);
+    };
+    const raw = await chatCompletion(request);
+    const { result } = await parseModelJson(raw, request);   // 坏输出带修复提示回炉一次
+    return result;
 }
 
 /**
@@ -207,13 +208,15 @@ export async function generateFreeRandomEvent({ dimension = null, useLibrary = f
             : '（事件库为空，请即兴生成）');
     }
 
-    const raw = await chatCompletion({
+    const request = {
         messages: [
             { role: 'system', content: system },
             { role: 'user', content: sections.join('\n\n') },
         ],
-    });
-    return extractJson(raw);
+    };
+    const raw = await chatCompletion(request);
+    const { result } = await parseModelJson(raw, request);   // 坏输出带修复提示回炉一次
+    return result;
 }
 
 /**
@@ -239,13 +242,15 @@ export async function generateAiChoiceRandomEvent({ dimensions = [], materials =
     sections.push('## 维度清单（从中挑最贴合当前剧情的一个）',
         dimensions.length ? dimensions.map(d => `- ${d.name}：${d.prompt ?? ''}`).join('\n') : '（清单为空，请即兴生成，dimension 填「即兴」）');
 
-    const raw = await chatCompletion({
+    const request = {
         messages: [
             { role: 'system', content: system },
             { role: 'user', content: sections.join('\n\n') },
         ],
-    });
-    return extractJson(raw);
+    };
+    const raw = await chatCompletion(request);
+    const { result } = await parseModelJson(raw, request);   // 坏输出带修复提示回炉一次
+    return result;
 }
 
 /**
@@ -268,13 +273,14 @@ export async function generateEventEntries({ dimension, count = 5, note = '' } =
         `## 已有条目（避免重复或近似）\n${existing}`,
     ].filter(Boolean).join('\n\n');
 
-    const raw = await chatCompletion({
+    const request = {
         messages: [
             { role: 'system', content: system },
             { role: 'user', content: user },
         ],
-    });
-    const data = extractJson(raw);
+    };
+    const raw = await chatCompletion(request);
+    const { result: data } = await parseModelJson(raw, request);   // 坏输出带修复提示回炉一次
     const list = Array.isArray(data?.entries) ? data.entries : (Array.isArray(data) ? data : []);
     return list
         .filter(e => e && String(e?.name ?? '').trim())

@@ -1,6 +1,6 @@
 // M2 剧情指导：检查（OOC/剧情重复/文风重复/进度）+ 剧情规划（隐藏剧本）+ 检查报告
 // 与 M3 共用「上下文收集 + 世界书检索 + 独立 API」管线，全程不碰主对话连接
-import { chatCompletion, searchWeb, searchToolReady } from "./api.js";
+import { chatCompletion, searchWeb, searchToolReady, parseModelJson } from "./api.js";
 import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
 import { buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
@@ -411,22 +411,26 @@ export async function runStoryReview({ planText = '', userNote = '', onDelta, on
         ...(userNote ? ['## 用户补充说明', userNote] : []),
     ].join('\n\n');
 
-    const raw = await guidanceCompletion(
-        [
-            { role: 'system', content: REVIEW_SYSTEM_PROMPT },
-            { role: 'user', content: userContent },
-        ],
-        {
-            topic: '判断检查剧情执行情况是否需要核对现实世界信息',
-            userNote,
-            planText: String(planText || ''),
-        },
-        { onDelta, onStage },
-    );
+    const messages = [
+        { role: 'system', content: REVIEW_SYSTEM_PROMPT },
+        { role: 'user', content: userContent },
+    ];
+    const research = {
+        topic: '判断检查剧情执行情况是否需要核对现实世界信息',
+        userNote,
+        planText: String(planText || ''),
+    };
+    const stream = { onDelta, onStage };
+    const raw = await guidanceCompletion(messages, research, stream);
     try {
-        return { result: extractJson(raw), raw, hits: hits.length };
+        // 坏输出带修复提示回炉一次；call 仍走 guidanceCompletion，联网判断与账单口径不变
+        const parsed = await parseModelJson(raw, {
+            messages,
+            call: req => guidanceCompletion(req.messages, research, stream),
+        });
+        return { result: parsed.result, raw: parsed.raw, hits: hits.length };
     } catch (err) {
-        err.raw = raw;
+        err.raw ??= raw;   // 解析失败也把原始输出附到错误上，方便上层展示排查
         throw err;
     }
 }
