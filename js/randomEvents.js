@@ -6,7 +6,7 @@
 import { chatCompletion, parseModelJson } from "./api.js";
 import { collectRecentChat, formatChatLog, currentFloor } from "./context.js";
 import { settings, save, newId } from "./settings.js";
-import { materialSections } from "./planner.js";
+import { materialSections } from "./materials.js";
 import { storyState, activeStory } from "./story.js";
 
 const EVENT_SYSTEM_PROMPT = '你是文字角色扮演的随机遭遇生成器。基于当前情境与给定的事件方向，'
@@ -130,9 +130,12 @@ export function recentEventTitles(limit = 8) {
 }
 
 // 三类生成调用共享的上下文小节。材料与向导第 1 步完全同一批（materialSections）：
-// 角色摘要 / 对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要，
+// 角色摘要 / 对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 进行中剧情 / 历史摘要，
 // 再追加事件专属小节（最近事件防重复 + 底线）。materials 由向导传入（记忆表范围/标签、
-// 玩法勾选用第 1 步的本次选择）；预设已全局化，由 chatCompletion 出口自动附带
+// 玩法勾选用第 1 步的本次选择）；预设已全局化，由 chatCompletion 出口自动附带。
+// 单元制口径：已生效注入不自动进工具生成（防双算）——想让路人反应的单元影响本次事件，
+// 走显式导入（materials.importedUnits，唯一影响通道）；材料小节从 materials.js 直取，
+// 不再经 planner.js 的「路人反应」注入小节
 function contextSections(materials = {}) {
     const s = storyState();
     const { parts } = materialSections({
@@ -144,8 +147,11 @@ function contextSections(materials = {}) {
         activePlan: activeStory()?.planText ?? '',
         historySummaries: s.history.filter(h => h.id !== s.activeId).map(h => h.summary),
     });
+    const imported = (materials.importedUnits ?? [])
+        .map(u => String(u?.text ?? '').trim()).filter(Boolean);
     const recent = recentEventTitles();
     return [...parts,
+        ...(imported.length ? ['## 导入单元（来自路人反应工具的暂存产物，仅作参考材料，不是既成事实）', imported.join('\n\n')] : []),
         '## 最近已出过的事件（不要重复相近情节）',
         recent.length ? recent.map(t => `- ${t}`).join('\n') : '（暂无记录）',
         '## 底线',

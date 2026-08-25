@@ -297,9 +297,10 @@ function reactionSection(header, extraText = '') {
  * @param {string} [options.userNote]            用户剧情构思/补充说明
  * @param {string} [options.previousPlan]        打回重写时：上一版规划
  * @param {string} [options.revisionNote]        打回重写时：修改意见
- * @param {string} [options.eventText]           随机事件闸口选定的事件/走向文本
- * @param {string} [options.reactionText]        向导第 1 步「计入规划材料」的反应卡正文
- *                                               （未注入的那张；与生效中的反应注入合并进「路人反应」小节）
+ * @param {string} [options.eventText]           勾了「参与规划」的事件单元正文（多单元已由
+ *                                               调用方拼好；进「随机事件」小节，位置在剧情与反应之间）
+ * @param {string} [options.reactionText]         勾了「参与规划」的未注入反应单元正文
+ *                                               （与生效中的反应注入合并进「路人反应」小节）
  * @param {string} [options.activePlan]          进行中剧情全文（查重与进度对照）
  * @param {string[]} [options.historySummaries]  历史剧情摘要（查重用）
  * @param {*}      [options.memoryTags]          记忆表格召回标签：['a','b']=按标签（只作用于「标签」档的表），
@@ -313,15 +314,17 @@ function reactionSection(header, extraText = '') {
  * @param {Array}  [options.storageItems]        游戏玩法条目（{name, content}）：勾选后作为
  *                                               「游戏玩法」小节发给模型，规划须在其约束内设计
  */
-// 供规划分析与随机事件生成共用的材料小节（两处口径完全一致）：
-// 角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 路人反应 / 进行中剧情 / 历史摘要。
-// 随机事件是向导第 2 步，材料必须与第 1 步预览同一批——各算一份必然对不上账。
-// 小节本体在 materials.js（reactions.js 也直接用它出反应卡）；「路人反应」小节在这里插入，
-// opts.reactionText = 向导第 1 步「计入规划材料」的未注入反应卡正文（与生效注入合并成一节）
+// 供规划分析与检查报告共用的材料小节：
+// 角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 进行中剧情 / 路人反应 / 历史摘要。
+// 小节本体在 materials.js（reactions.js / randomEvents.js 也直接用它，工具生成不走本函数——
+// 已生效注入不自动进工具生成，防双算）；「路人反应」小节在这里插入，
+// opts.reactionText = 勾了「参与规划」的未注入反应单元正文（与生效注入合并成一节）。
+// 注入模板序固定：剧情 → 事件 → 反应——反应小节插在进行中剧情之后（事件小节由
+// buildGuidanceMessages 再插在两者中间），不给排顺序的旋钮
 export function materialSections(opts = {}) {
     const { parts, hits } = baseMaterialSections(opts);
     const idx = parts.findIndex(p => p.startsWith('## 进行中剧情'));
-    parts.splice(idx === -1 ? parts.length : idx, 0,
+    parts.splice(idx === -1 ? parts.length : idx + 2, 0,
         ...reactionSection('## 路人反应（世界对引人注目之事的回应口径，后续剧情安排与其余波、收束口径一致）', opts.reactionText));
     return { parts, hits };
 }
@@ -329,9 +332,16 @@ export function materialSections(opts = {}) {
 export function buildGuidanceMessages(options = {}) {
     const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', reactionText = '', activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [] } = options;
     const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries, reactionText });
+    // 注入模板序固定：剧情 → 事件 → 反应——事件小节插在进行中剧情与路人反应之间
+    // （没有进行中剧情时排在材料末尾，仍在反应小节之前），顺序不提供旋钮
+    const evt = String(eventText ?? '').trim();
+    if (evt) {
+        const idx = parts.findIndex(p => p.startsWith('## 进行中剧情'));
+        const at = idx === -1 ? parts.findIndex(p => p.startsWith('## 路人反应')) : idx + 2;
+        parts.splice(at === -1 ? parts.length : at, 0, '## 随机事件（本次规划需要融入的事件与走向）', evt);
+    }
     const all = [
         ...parts,
-        ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),
         ...(previousPlan ? ['## 上一版规划（请按修改意见修订）', previousPlan] : []),
         ...(revisionNote ? ['## 修改意见', revisionNote] : []),
         ...(userNote ? ['## 用户剧情构思与补充说明', userNote] : []),

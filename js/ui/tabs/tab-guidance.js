@@ -1,21 +1,21 @@
-// 剧情指导页签：分步规划向导 + 随机事件工具区 + 游戏玩法工具区（均挂在页面底部）
+// 剧情指导页签：分步规划向导（四步：材料→确认→生成→结果）+ 随机事件工具区 + 游戏玩法工具区（底部）
 // ① 收集确认（本地检索材料 + 记忆表格档位（停用/标签/常驻）+ 标签勾选与每表最新行补底 + 游戏玩法勾选
-// + 路人反应（整个板块住悬浮面板，第 1 步只留一个入口键：面板内生成/编辑→转隐身注入 或 计入本次规划材料，两路互斥，可放弃）+ 剧情构思；
-// 这些勾选按对话记忆存聊天文件，同一对话做完一轮回来不用重勾；预设不在本页勾——已全局化，
+// + 随机事件/路人反应两个现场工具的入口键（板块各住一个悬浮面板，产物都是「单元」，见 units.js）+ 剧情构思；
+// 这些勾选按对话记忆存聊天数据，同一对话做完一轮回来不用重勾；预设不在本页勾——已全局化，
 // 「设置」页启用后插件发给大模型的任何调用都自动带上）
-// → ② 随机事件闸口（可跳过）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
-// 确认采用的规划存为「进行中剧情」（story.js，跟聊天文件走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
-// 跳过随机事件的路径会先停在「分析前确认」页，点确认才真正调模型。
+// → ② 分析前确认（点确认才真正调模型）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
+// 确认采用的规划存为「进行中剧情」（story.js，跟聊天数据走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
+// 单元池不随采用清空，清理由各工具面板的一键清理键手动执行。
 // 向导进度留底 + 自由跳转（调试排版用）：进行中的向导状态实时快照存 chatdata 的 wizard 块
 // （按聊天身份走），刷新页面重开本页自动回到离开的那一步——已生成未处理的规划停在第 4 步等操作；
 // 页首常驻 ①②③④ 跳转条随时互跳（已填内容与生成结果保留），跳进没有生成结果的第 4 步可直接往规划框填字看排版。
 // 另有「检查当前剧情」：对照进行中剧情出执行报告（完成度/推进/文风/OOC/其他/建议）
-// 掷骰入口只有向导第 2 步；页面下部工具区（tab-events.js）只放事件库配置与 AI 建库（反应卡已并入第 1 步）；
+// 掷骰入口只有随机事件工具面板；页面下部工具区（tab-events.js）只放事件库配置与 AI 建库；
 // 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列（条目库管理 + AI 玩法咨询都在该区——
 // 生成类功能不进向导运行区），生效条目由第 1 步勾选随分析发送，检查报告（runStoryReview）自动附带当前生效条目
 import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, startResearchPrefetch, guidanceResearchInputs } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
-import { addInjection, updateInjection, removeInjection, activeReactionInjections } from "../../injection.js";
+import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
 import { storyState, activeStory, confirmPlot, endActive, attachReport, deleteStory, clearHistory } from "../../story.js";
 import { generateReactionCard, composeReactionText } from "../../reactions.js";
@@ -27,28 +27,25 @@ import { getTavernContext } from "../../context.js";
 import { loadChatData, saveChatData } from "../../chatdata.js";
 import { escapeHtml, estimateTokens } from "../../utils.js";
 import { searchToolReady, withGlobalPresets } from "../../api.js";
+import { unitsState, persistUnits, newEventUnit, newReactionUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, MAX_UNITS_PER_TOOL } from "../../units.js";
 
-// 向导状态机：'' 空闲 | collect ① | event ② | ready 分析前确认 | running ③ | result ④ | reviewing/report 检查报告
+// 向导状态机：'' 空闲 | collect ① | ready ② 分析前确认 | running ③ | result ④ | reviewing/report 检查报告
 let step = '';
 const run = {
     note: '',            // 剧情构思方向
     gpIds: null,         // 本次随分析发送的游戏玩法条目 id；null = 未初始化（进第 1 步时默认勾当前生效的）
-    event: null,         // { mode:'llm'|'lib'|'manual', title, choice } 入库用
-    eventText: '',       // 拼给模型的事件材料
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
     hadActive: false,   // 本次分析发起时是否存在进行中剧情（第 4 步「剧情进度」行只在这种时候显示）
     memModes: null,      // 第 1 步第一层：每张表的召回档位 { [uid]: 'off' 停用 | 'tags' 按标签 | 'always' 常驻全量 }；null = 未动过（全部常驻全量，与旧默认一致）
     memTags: [],         // 「标签」档的表按哪些标签召回（勾选的标签名，对所有标签档的表生效）
     memRecent: 0,        // 「标签」档的表无论标签都另附的表尾最新行数；0 = 不另附（行没有时间戳，新记录在表尾）
-    rxNote: '',          // 路人反应的指导意见（期望烈度、余波方向、要避开什么）
-    reaction: null,      // 第 1 步生成的路人反应卡 { salience, immediate, aftermath, boundaries, floors, text, edited, inPlan }；text = 注入正文预览（可改），inPlan = 计入本次规划材料
-    readyFrom: 'event',  // 分析前确认页的「返回」回到哪一步
+    readyFrom: 'collect', // 分析前确认页的「返回」回到哪一步
     research: null,      // 「分析前确认」页预跑的联网判断 {fingerprint, promise}；分析时指纹对不上自动作废
 };
-// 反应卡生成在途标志（瞬时态，不入 run 也不入快照）
-let rxBusy = false;
-// ② 随机事件闸口的界面状态
-const ev = { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false };
+// 两工具生成在途标志（瞬时态，不入 run 也不入快照）
+let rxBusy = false, evBusy = false;
+// 工具面板里的跨工具导入选材（勾选中的对方单元 id；瞬时态，切聊天时清）
+const evImports = new Set(), rxImports = new Set();
 // 进行中剧情全文 / 历史列表是否展开；历史里展开查看的条目 id（均只存内存）
 let showActive = false, showHistory = false, viewHistId = null;
 let report = null;      // 最近一次检查报告（内存缓存，正式存档在 story 条目上）
@@ -59,23 +56,50 @@ let report = null;      // 最近一次检查报告（内存缓存，正式存�
 // 只写 localStorage 热层，不碰聊天文件）；确认采用 / 取消向导时清空。检查报告流（reviewing/
 // report）不是向导状态，persistWizard 对非向导步骤直接跳过——第 4 步还没处理的生成结果
 // 不会被一次检查报告冲掉。research 持有 Promise、busy 是进行中标志，都不入快照：
-// 恢复后进「分析前确认」页会按需重新预跑。
+// 恢复后进「分析前确认」页会按需重新预跑。随机事件/路人反应的单元与面板草稿不在快照里——
+// 它们存 chatdata 的 units 块（units.js），与向导进度各自独立、采用后也保留
 // ---------------------------------------------------------------------------
 
-const WIZARD_STEPS = ['collect', 'event', 'ready', 'running', 'result'];
+const WIZARD_STEPS = ['collect', 'ready', 'running', 'result'];
 
 function persistWizard() {
     if (!WIZARD_STEPS.includes(step)) return;
     saveChatData('wizard', {
-        version: 1,
+        version: 2,
         step,
         run: { ...run, research: undefined },
-        ev: { ...ev, busy: undefined },
     });
 }
 
 function clearWizard() {
     saveChatData('wizard', null);
+}
+
+// v1 快照（五步版：随机事件是向导第 2 步、反应卡是 run.reaction）→ v2 归一化：
+// 旧第 2 步攒下的事件卡/意见转成事件工具的暂存单元，第 1 步的反应卡转成反应单元
+// （池每边只有 3 格，满了让位丢弃）；事件步骤号收窄进「分析前确认」。
+// 转换只发生一次（下次落盘就是 v2），用户在升级瞬间不丢攒到一半的东西
+function migrateSnapshotV1(snap) {
+    const r = snap.run ?? {}, e = snap.ev ?? {};
+    let touched = false;
+    const evCard = e.event;
+    if (evCard && typeof evCard === 'object' && String(evCard.title ?? evCard.description ?? '').trim()) {
+        const u = newEventUnit({ ...evCard, mode: e.mode ?? 'llm', choiceIdx: typeof e.choiceIdx === 'number' ? e.choiceIdx : null });
+        u.inPlan = Boolean(String(r.eventText ?? '').trim());
+        touched = addUnit(u) || touched;
+    } else if (String(r.eventText ?? '').trim()) {
+        const u = newEventUnit({ mode: 'manual', title: r.event?.title ?? '', description: r.eventText });
+        u.inPlan = true;
+        touched = addUnit(u) || touched;
+    }
+    const rx = normalizeReactionCard(r.reaction);
+    if (rx) touched = addUnit(newReactionUnit(rx, false, rx.inPlan)) || touched;
+    if (touched) toastr.info('旧向导里的事件/反应已转成暂存单元（在两个工具面板里）');
+    return {
+        version: 2,
+        step: snap.step === 'event' ? 'ready' : snap.step,
+        run: { ...r, event: undefined, eventText: undefined, rxNote: undefined, reaction: undefined, readyFrom: 'collect' },
+    };
 }
 
 // 恢复入口：向导空闲（刚刷新 / 刚切聊天重置完）且本聊天存有快照时，把状态装回去。
@@ -84,14 +108,14 @@ let restoring = false;   // 恢复渲染期间不触发联网判断预跑——�
 
 function restoreWizard(container) {
     if (step) return;   // 向导进行中：内存是权威，不用旧快照覆盖
-    const snap = loadChatData('wizard', null);
-    if (!snap || snap.version !== 1) return;
-    const r = snap.run ?? {}, e = snap.ev ?? {};
+    let snap = loadChatData('wizard', null);
+    if (!snap) return;
+    if (snap.version === 1) snap = migrateSnapshotV1(snap);
+    if (snap.version !== 2) return;
+    const r = snap.run ?? {};
     Object.assign(run, {
         note: r.note ?? '',
         gpIds: Array.isArray(r.gpIds) ? r.gpIds : null,
-        event: r.event ?? null,
-        eventText: r.eventText ?? '',
         result: r.result ?? null,
         raw: r.raw ?? '',
         hits: r.hits ?? 0,
@@ -101,20 +125,8 @@ function restoreWizard(container) {
         memModes: normalizeMemModes(r.memModes) ?? memModesFromLegacy(r),
         memTags: Array.isArray(r.memTags) ? r.memTags : [],
         memRecent: Math.max(0, Math.round(Number(r.memRecent) || 0)),
-        rxNote: r.rxNote ?? '',
-        reaction: normalizeReactionCard(r.reaction),
-        readyFrom: r.readyFrom ?? 'event',
+        readyFrom: 'collect',
         research: null,
-    });
-    Object.assign(ev, {
-        mode: e.mode ?? null,
-        event: e.event ?? null,
-        choiceIdx: typeof e.choiceIdx === 'number' ? e.choiceIdx : null,
-        opinion: e.opinion ?? '',
-        useLibrary: e.useLibrary !== false,
-        wantPreview: Boolean(e.wantPreview),
-        injectLayers: e.injectLayers,
-        busy: false,
     });
     const target = snap.step === 'running' ? 'ready' : snap.step;
     if (!WIZARD_STEPS.includes(target)) return;
@@ -131,27 +143,24 @@ function restoreWizard(container) {
 // ---------------------------------------------------------------------------
 
 function stepNavHtml() {
-    const cur = step === 'ready' || step === 'running' ? 'ready' : step;
+    const cur = step;
     const items = [
-        ['collect', '① 收集', '第 1 步 · 收集确认：材料与勾选'],
-        ['event', '② 事件', '第 2 步 · 随机事件闸口'],
-        ['ready', '③ 分析', '第 3 步 · 分析前确认：进去后点「确认，开始分析」才调模型'],
-        ['result', '④ 二检', '第 4 步 · 人工二检：检查结果与规划文本；没有生成结果时进去是空白二检页，可直接往规划框里填字试排版'],
+        ['collect', '① 材料', '第 1 步 · 收集确认：材料与勾选（随机事件/路人反应两个工具在此进）'],
+        ['ready', '② 确认', '第 2 步 · 分析前确认：进去后点「确认，开始分析」才调模型'],
+        ['running', '③ 生成', '第 3 步 · 分析中：实时输出页。分析在途时点这里回到输出页；没在跑时落到第 2 步的确认页'],
+        ['result', '④ 结果', '第 4 步 · 人工二检：检查结果与规划文本；没有生成结果时进去是空白二检页，可直接往规划框里填字试排版'],
     ];
     return `<div class="pp-gd-stepnav">${items.map(([id, label, tip]) =>
-        `<span class="menu_button${cur === id ? ' pp-gd-navcur' : ''}" data-goto="${id}" title="${tip}。四步随时互跳，已填内容与生成结果保留，刷新页面后也从这一步继续">${label}</span>`).join('')}</div>`;
+        `<span class="menu_button${cur === id ? ' pp-gd-navcur' : ''}" data-goto="${id === 'running' ? 'ready' : id}" title="${tip}。四步随时互跳，已填内容与生成结果保留，刷新页面后也从这一步继续">${label}</span>`).join('')}</div>`;
 }
 
 function gotoStep(container, target) {
     if (target === step || !WIZARD_STEPS.includes(target)) return;
     if (target === 'collect') return startCollect(container);   // 与正常入口同一套：勾选从对话记忆恢复、玩法补默认
-    if (target === 'ready') {
-        if (analyzeBusy) {   // 分析还在跑：点 ③ 回到的是实时输出页，不给再来一张确认页（防重复发起白花调用）
-            step = 'running';
-            renderMain(container);
-            return;
-        }
-        run.readyFrom = step === 'collect' ? 'collect' : 'event';   // 「返回」按钮落回合理位置
+    if (target === 'ready' && analyzeBusy) {   // 分析还在跑：点 ② 回到的是实时输出页，不给再来一张确认页（防重复发起白花调用）
+        step = 'running';
+        renderMain(container);
+        return;
     }
     step = target;
     renderMain(container);
@@ -272,11 +281,31 @@ function normalizeReactionCard(rx) {
     };
 }
 
-// 反应卡悬浮窗的窗内内容：字段展示 + 楼层预算 + 正文预览 + 两路操作（放弃在按钮行末尾）
-function rxCardHtml(card) {
+// 单元卡头：加工史徽章（左＝先经过的工具，右＝后经过的；空位占位保持多卡标题对齐）+ 标题
+const TOOL_MARK = { event: '事', reaction: '反' };
+const TOOL_NAME = { event: '随机事件', reaction: '路人反应' };
+
+function unitMarkHtml(b) {
+    return b
+        ? `<span class="pp-unit-mark" title="加工史标记（左＝先经过的工具，右＝后经过的）：${TOOL_NAME[b]}">${TOOL_MARK[b]}</span>`
+        : '<span class="pp-unit-mark pp-unit-mark-empty"></span>';
+}
+
+function unitHeadHtml(unit) {
+    return `<div class="pp-unit-head">${unitMarkHtml(unit.badges[0])}<div class="pp-gd-evtitle">${escapeHtml(unit.title || '(未命名)')}</div>${unitMarkHtml(unit.badges[1])}</div>`;
+}
+
+// 这个单元当前是否有生效中的注入（注入创建时带 unitId，按它对账；外聊的不算）
+const unitInjected = u => settings.injections.some(i => i.enabled && i.unitId === u.id
+    && !(i.scope === 'chat' && i.chatId !== undefined && i.chatId !== getTavernContext().chatId));
+
+// 反应单元卡（工具面板内）：字段展示 + 楼层预算 + 正文预览 + 操作（参与规划 / 转注入 / 删除）
+function rxUnitCardHtml(unit) {
+    const card = unit.payload;
     const stars = '★'.repeat(card.salience) + '☆'.repeat(5 - card.salience);
     return `
-    <div class="pp-item pp-gd-evcard">
+    <div class="pp-item pp-gd-evcard" data-uid="${escapeHtml(unit.id)}">
+        ${unitHeadHtml(unit)}
         <div>显著性 <span style="color:#e8c06a">${stars}</span>（${card.salience}/5）</div>
         <label class="pp-label">即时反应口径（每轮 1-3 句，织进当前场景，写一次就够）</label>
         <div>${escapeHtml(card.immediate)}</div>
@@ -284,37 +313,48 @@ function rxCardHtml(card) {
         <div>${escapeHtml(card.aftermath)}</div>
         <label class="pp-label">底线</label>
         <div>${escapeHtml(card.boundaries)}</div>
-        <label class="pp-label" title="转注入与计入规划材料用的都是下面这份预览文本；改过就按这份固定，注入后只按层数过期">楼层预算（一层 = 一条角色回复，user 消息不计；到期自动撤下）</label>
-        <input id="pp_gd_rx_floors" class="text_pole textarea_compact" type="number" min="2" max="30" value="${card.floors}" />
+        <label class="pp-label" title="转注入与参与规划用的都是下面这份预览文本；改过就按这份固定，注入后只按层数过期">楼层预算（一层 = 一条角色回复，user 消息不计；到期自动撤下）</label>
+        <input data-rxu-floors="1" class="text_pole textarea_compact" type="number" min="2" max="30" value="${card.floors}" />
         <label class="pp-label">注入正文预览（可改）</label>
-        <textarea id="pp_gd_rx_text" class="text_pole textarea_compact" rows="10">${escapeHtml(card.text)}</textarea>
+        <textarea data-rxu-text="1" class="text_pole textarea_compact" rows="10">${escapeHtml(unit.text)}</textarea>
         <div class="pp-btn-row">
-            <span id="pp_gd_rx_ok" class="menu_button" title="转为隐身注入（模型可见、聊天界面不显示），按楼层预算到期自动撤下；生效期间规划与检查自动附带同一口径，无须再计入材料">确认，转为隐身注入</span>
-            <span id="pp_gd_rx_plan" class="menu_button${card.inPlan ? ' pp-gd-sel' : ''}" title="把这张卡作为「路人反应」小节随第 3 步分析发给规划模型（不注入主对话），规划为其留出呈现空间；与转注入互斥">${card.inPlan ? '已计入规划材料，点此取消' : '计入本次规划材料'}</span>
-            <span id="pp_gd_rx_drop_v" class="menu_button" title="丢弃这张卡（已转隐身注入的不受影响），关闭悬浮窗">放弃反应卡</span>
+            <span data-rxu-plan="1" class="menu_button${unit.inPlan ? ' pp-gd-sel' : ''}" title="把这个单元作为「路人反应」小节随分析发给规划模型（不注入主对话），规划为其留出呈现空间；与转注入互斥">${unit.inPlan ? '已参与规划，点此取消' : '参与规划'}</span>
+            <span data-rxu-inject="1" class="menu_button" title="转为隐身注入（模型可见、聊天界面不显示），按楼层预算到期自动撤下；生效期间规划与检查自动附带同一口径；本单元留在暂存里不消耗">转为隐身注入</span>
+            <span data-rxu-del="1" class="menu_button fa-solid fa-trash" title="从暂存池删除这个单元（已转隐身注入的不受影响）"></span>
         </div>
     </div>`;
 }
 
-// 窗内控件接线：onChange = 注入/计入状态一变后就地重画（含页面状态行与统计刷新），onDrop = 放弃
-function wireRxCard(body, card, { onChange, onDrop }) {
-    const textEl = body.querySelector('#pp_gd_rx_text');
-    const floorsEl = body.querySelector('#pp_gd_rx_floors');
+// 反应单元卡接线：rerender = 面板整面重画（按钮态复位），refresh = 第 1 步状态行计数刷新
+function wireRxUnit(cardEl, unit, rerender, refresh) {
+    const floorsEl = cardEl.querySelector('[data-rxu-floors]');
+    const textEl = cardEl.querySelector('[data-rxu-text]');
     floorsEl.addEventListener('change', () => {
-        card.floors = Math.min(Math.max(Number(floorsEl.value) || card.floors, 2), 30);
-        floorsEl.value = card.floors;
-        if (!card.edited) { card.text = composeReactionText(card, 0); textEl.value = card.text; }
-        persistWizard();
+        unit.payload.floors = Math.min(Math.max(Number(floorsEl.value) || unit.payload.floors, 2), 30);
+        floorsEl.value = unit.payload.floors;
+        if (!unit.payload.edited) { unit.text = composeReactionText(unit.payload, 0); textEl.value = unit.text; }
+        persistUnits();
     });
-    textEl.addEventListener('input', () => { card.text = textEl.value; card.edited = true; persistWizard(); });
-    body.querySelector('#pp_gd_rx_ok').addEventListener('click', () => {
+    textEl.addEventListener('input', () => { unit.text = textEl.value; unit.payload.edited = true; persistUnits(); });
+    cardEl.querySelector('[data-rxu-plan]').addEventListener('click', () => {
+        // 已作为注入生效的单元拦下「参与」：规划/检查会自动附带注入文本，再参与就是同文进两次
+        if (!unit.inPlan && unitInjected(unit)) {
+            toastr.info('这个单元已作为隐身注入生效，规划与检查自动附带同一口径，无须再参与规划材料');
+            return;
+        }
+        unit.inPlan = !unit.inPlan;
+        persistUnits();
+        rerender();
+        refresh();
+    });
+    cardEl.querySelector('[data-rxu-inject]').addEventListener('click', () => {
         const text = textEl.value.trim();
         if (!text) { toastr.warning('注入内容为空'); return; }
-        const auto = composeReactionText(card, 0);
-        const reaction = card.edited && text !== auto ? { ...card, edited: true } : card;
+        const auto = composeReactionText(unit.payload, 0);
+        const reaction = unit.payload.edited && text !== auto ? { ...unit.payload, edited: true } : unit.payload;
         addInjection({
             id: newId('inj-'),
-            label: card.immediate ? `路人反应：${card.immediate.slice(0, 24)}` : '路人反应',
+            label: unit.payload.immediate ? `路人反应：${unit.payload.immediate.slice(0, 24)}` : '路人反应',
             mode: 'open',
             content: text,
             depth: 4,
@@ -322,29 +362,25 @@ function wireRxCard(body, card, { onChange, onDrop }) {
             scope: 'chat',
             enabled: true,
             source: 'reaction',
+            unitId: unit.id,
             createdAt: Date.now(),
-            expires: { type: 'layers', layers: card.floors },
+            expires: { type: 'layers', layers: unit.payload.floors },
             reaction,
             age: 0,
         });
-        toastr.success(card.inPlan
-            ? `已注入，${card.floors} 层后自动撤下；生效期间规划与检查自动附带同一口径，已同时取消「计入规划材料」`
-            : `已注入，${card.floors} 层后自动撤下（一层 = 一条角色回复；生效期间规划与检查报告自动附带同一口径，设置页底部可提前撤下）`);
-        card.inPlan = false;
-        persistWizard();
-        onChange();
+        toastr.success(unit.inPlan
+            ? `已注入，${unit.payload.floors} 层后自动撤下；生效期间规划与检查自动附带同一口径，已同时取消「参与规划」`
+            : `已注入，${unit.payload.floors} 层后自动撤下（一层 = 一条角色回复；生效期间规划与检查报告自动附带同一口径，设置页底部可提前撤下）`);
+        unit.inPlan = false;
+        persistUnits();
+        rerender();
+        refresh();
     });
-    body.querySelector('#pp_gd_rx_plan').addEventListener('click', () => {
-        // 同一张卡已作为注入生效时拦下「计入」：规划/检查会自动附带注入文本，再计入就是同文进两次
-        if (!card.inPlan && activeReactionInjections().some(i => String(i.content ?? '').trim() === textEl.value.trim())) {
-            toastr.info('这张卡已作为隐身注入生效，规划与检查自动附带同一口径，无须再计入材料');
-            return;
-        }
-        card.inPlan = !card.inPlan;
-        persistWizard();
-        onChange();
+    cardEl.querySelector('[data-rxu-del]').addEventListener('click', () => {
+        removeUnit(unit.id);
+        rerender();
+        refresh();
     });
-    body.querySelector('#pp_gd_rx_drop_v').addEventListener('click', onDrop);
 }
 
 // 第 1 步口径读回（不动 run）：检查报告也用它继承向导口径——报告不依赖向导正在不在第 1 步，
@@ -416,17 +452,18 @@ export const guidanceTab = {
 };
 
 // 聊天切换时由 index.js 调用：清掉向导进度，避免 A 聊天的规划带到 B 聊天；
-// 剧情数据、第 1 步勾选与向导快照本身存 chatdata.js（按聊天身份走），下面重新 render 时
+// 剧情数据、第 1 步勾选、单元池与向导快照本身存 chatdata.js（按聊天身份走），下面重新 render 时
 // restoreWizard 会自动恢复新聊天自己的快照——切回来，没处理完的向导还在
 export function resetGuidance() {
     step = '';
-    closeViewer();   // 开着的悬浮查看器（反应卡/提示词预览）一并关掉，不带到新聊天
+    closeViewer();   // 开着的悬浮查看器（两个工具面板/提示词预览）一并关掉，不带到新聊天
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
     Object.assign(run, {
-        note: '', gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
-        memModes: null, memTags: [], memRecent: 0, rxNote: '', reaction: null, readyFrom: 'event', research: null,
+        note: '', gpIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+        memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
     });
-    Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
+    evImports.clear();
+    rxImports.clear();
     showActive = false; showHistory = false; viewHistId = null; report = null;
     const container = document.getElementById('pp_tab_content');
     if (container?.querySelector('#pp_gd_storybar')) guidanceTab.render(container);
@@ -595,7 +632,6 @@ function renderMain(container) {
 
 function renderStepPage(container, main) {
     if (step === 'collect') return renderCollect(container, main);
-    if (step === 'event') return renderEvent(container, main);
     if (step === 'ready') return renderReady(container, main);
 
     if (step === 'running') {
@@ -667,10 +703,15 @@ function wizardStorageItems() {
     return (settings.storageItems ?? []).filter(i => (run.gpIds ?? []).includes(i.id));
 }
 
-// 第 1 步「计入规划材料」的反应卡正文（没卡或未计入 = 空串）：随分析进「路人反应」小节，
-// 与生效中的反应注入合并——「查看完整提示词」预览与真实调用同一来源
-function wizardReactionText() {
-    return run.reaction?.inPlan ? String(run.reaction.text ?? '').trim() : '';
+// 勾了「参与规划」的单元正文（从两工具的暂存池取）：事件进「随机事件」小节、反应进「路人反应」
+// 小节（与生效中的反应注入合并）——「查看完整提示词」预览与真实调用同一来源。
+// 已注入的反应单元在面板里就拦了「参与」（规划/检查自动附带注入正文，防同文进两次），
+// 这里再滤一道作兜底
+function wizardUnitTexts() {
+    const st = unitsState();
+    const ev = st.eventUnits.filter(u => u.inPlan).map(u => String(u.text ?? '').trim()).filter(Boolean);
+    const rx = st.reactionUnits.filter(u => u.inPlan && !unitInjected(u)).map(u => String(u.text ?? '').trim()).filter(Boolean);
+    return { eventText: ev.join('\n\n'), reactionText: rx.join('\n\n') };
 }
 
 // 联网搜索是否会对本次分析生效：设置页开了「分析前联网判断」且填了搜索密钥。
@@ -678,8 +719,8 @@ function wizardReactionText() {
 // 纪要附加进分析材料
 const searchToolActive = () => settings.search?.toolMode !== false && searchToolReady();
 
-// 第 2 步事件生成用的材料 = 第 1 步的本次选择（记忆表范围/标签、玩法勾选），
-// 与分析调用完全同一批——两步口径一致才能互相对账；预设走全局，出口自动附带
+// 两工具（随机事件/路人反应）生成用的材料 = 第 1 步的本次选择（记忆表范围/标签、玩法勾选），
+// 与规划分析完全同一批——三处口径一致才能互相对账（DESIGN §2.5：材料部分严格同源）；预设走全局，出口自动附带
 function wizardMaterials() {
     return {
         memoryTags: wizardMemoryTags(),
@@ -689,7 +730,7 @@ function wizardMaterials() {
     };
 }
 
-// 跳过类按钮先停在「分析前确认」页，不直接花一次模型调用
+// 第 1 步「下一步」先进「分析前确认」页，点确认才真正花一次模型调用
 function goReady(container, from) {
     run.readyFrom = from;
     step = 'ready';
@@ -752,12 +793,14 @@ function renderCollect(container, main) {
             ${gpItems.map(i => `<label title="勾选后该条玩法规则作为材料发给规划模型（不影响它注入主对话）"><input type="checkbox" data-c1g="${i.id}" ${(run.gpIds ?? []).includes(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
             || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
-        <div class="pp-btn-row"><span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见、生成反应卡（材料自动带本页上方同一批：记忆表格档位与标签、玩法勾选、世界书、进行中剧情）、编辑卡面，然后两路任选——转隐身注入挂主对话（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径）或计入本次规划材料随分析发给模型，两路互斥；不要了随时放弃，重新生成会重置">路人反应</span></div>
+        <div class="pp-btn-row">
+            <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内三路取材（大模型随机 / 掷骰 / 自己给意见立单元），产物是暂存单元（本工具最多 3 个，满了先删）。生成材料自动带本页上方同一批（记忆表格档位与标签、玩法勾选、世界书、进行中剧情），也可勾选导入路人反应的暂存单元做参考（已生效注入不自动带，防双算）。单元不论徽章数都能勾「参与规划」随分析发送、可转隐身注入、可被路人反应工具导入再加工；采纳规划后暂存不清空，清理用面板里的清空键">随机事件</span>
+            <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见、生成反应单元（材料自动带本页上方同一批，也可导入随机事件的暂存单元做参考）、编辑卡面，然后两路任选——转隐身注入挂主对话（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径）或勾「参与规划」随分析发给模型，两路互斥；产物最多暂存 3 个，清理用面板里的清空键">路人反应</span>
+        </div>
         <label class="pp-label">剧情构思方向</label>
         <textarea id="pp_gd_note" class="text_pole textarea_compact" rows="3" placeholder="已有的想法、约束或重点（可选，随分析发给模型）"></textarea>
         <div class="pp-btn-row">
-            <span id="pp_gd_c1_next" class="menu_button">下一步：随机事件</span>
-            <span id="pp_gd_c1_skip" class="menu_button">跳过事件，直接分析</span>
+            <span id="pp_gd_c1_next" class="menu_button">下一步</span>
             <span id="pp_gd_c1_cancel" class="menu_button">取消</span>
         </div>
     </div>`;
@@ -792,9 +835,12 @@ function renderCollect(container, main) {
         const memSeg = !recallSheets.length ? '记忆表格 不附带'
             : `记忆表格 ${st.memChars} 字（${memScopeDesc()}）`;
         const gpDesc = gpItems.length ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
-        const rxSeg = run.reaction?.inPlan ? ' · 附路人反应' : '';
+        const us = unitsState();
+        const evN = us.eventUnits.filter(u => u.inPlan).length;
+        const rxN = us.reactionUnits.filter(u => u.inPlan).length;
+        const unitSeg = `${evN ? ` · 事件单元 ${evN}` : ''}${rxN ? ` · 反应单元 ${rxN}` : ''}`;
         main.querySelector('#pp_gd_c1_stat').textContent =
-            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}${rxSeg}`;
+            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}${unitSeg}`;
         const tipEl = main.querySelector('#pp_gd_c1_memtip');
         if (tipEl) tipEl.textContent = memTipText();
     };
@@ -882,65 +928,19 @@ function renderCollect(container, main) {
         refreshMem();
     }));
 
-    // 路人反应整套住悬浮面板：第 1 步只留一个入口按钮，指导意见/生成/编辑/两路操作/放弃
-    // 全在面板里（面板套卡片），页面不被这个板块占一行以外的地盘。
-    // 材料＝本页同一批（wizardMaterials：记忆表格档位/标签/最新行 + 玩法勾选；世界书沿用
-    // 本对话书单，进行中剧情与分析同源），生成结果随向导快照留底、跳步/刷新不丢。
-    // 两路互斥：转注入后规划与检查经 activeReactionInjections 自动附带同一口径，
-    // 「计入规划材料」只在未注入时才有意义——注入即自动取消计入，防同文重复进提示词
+    // 两个现场工具的入口键：面板住在悬浮查看器里（openEvPanel / openRxPanel，见下），
+    // 页面不被这两个板块占一行以外的地盘；按钮文案带暂存计数，面板里的每次变动回来同步刷新
+    const evBtnEl = main.querySelector('#pp_gd_ev_panel');
     const rxBtnEl = main.querySelector('#pp_gd_rx_panel');
-    const syncRxBtn = () => { rxBtnEl.textContent = run.reaction ? '路人反应（已有卡，点开处理）' : '路人反应'; };
-    const openRxPanel = () => {
-        const body = openViewer('路人反应').querySelector('.pp-viewer-body');
-        const render = () => {
-            const card = run.reaction;
-            if (card && !card.text) card.text = composeReactionText(card, 0);   // 老快照没存 text：按卡面重算
-            body.innerHTML = `
-            <label class="pp-label" title="写给生成模型的指导意见：期望烈度、余波方向、要避开什么">指导意见（可选）</label>
-            <textarea id="pp_gd_rx_note" class="text_pole textarea_compact" rows="2" placeholder="期望烈度、余波方向、要避开什么"></textarea>
-            <div class="pp-btn-row">
-                <span id="pp_gd_rx_gen" class="menu_button">生成反应卡</span>
-            </div>
-            ${card ? rxCardHtml(card) : '<div class="pp-muted" title="材料自动带第 1 步上方同一批：记忆表格档位与标签、玩法勾选、世界书、进行中剧情">还没生成过卡——材料自动带本页上方同一批，生成完在下方编辑与选择去向</div>'}`;
-            const noteEl = body.querySelector('#pp_gd_rx_note');
-            noteEl.value = run.rxNote;
-            noteEl.addEventListener('input', () => { run.rxNote = noteEl.value; persistWizard(); });   // 只回存不重画，输入不掉焦点
-            if (card) wireRxCard(body, card, { onChange: rerender, onDrop: dropCard });
-            const genBtn = body.querySelector('#pp_gd_rx_gen');
-            genBtn.addEventListener('click', async () => {
-                if (rxBusy) return;
-                rxBusy = true;
-                genBtn.textContent = '生成中……';
-                try {
-                    const gen = await generateReactionCard({
-                        note: run.rxNote,
-                        materials: wizardMaterials(),
-                        activePlan: activeStory()?.planText ?? '',
-                    });
-                    run.reaction = { ...gen, text: composeReactionText(gen, 0), edited: false, inPlan: false };
-                    persistWizard();
-                    rerender();   // 面板整面重画：按钮文案复位、卡片上桌
-                } catch (err) {
-                    toastr.error(String(err.message ?? err));
-                    genBtn.textContent = '生成反应卡';
-                } finally {
-                    rxBusy = false;
-                }
-            });
-            syncRxBtn();
-        };
-        const dropCard = () => {
-            run.reaction = null;
-            persistWizard();
-            render();   // 面板留着开（回到未生成状态），关不关窗交给用户
-            refreshMem();
-            toastr.info('已放弃反应卡（已转隐身注入的不受影响）');
-        };
-        const rerender = () => { render(); refreshMem(); };
-        render();
+    const syncToolBtns = () => {
+        const us = unitsState();
+        evBtnEl.textContent = us.eventUnits.length ? `随机事件（暂存 ${us.eventUnits.length}）` : '随机事件';
+        rxBtnEl.textContent = us.reactionUnits.length ? `路人反应（暂存 ${us.reactionUnits.length}）` : '路人反应';
     };
-    syncRxBtn();
-    rxBtnEl.addEventListener('click', openRxPanel);
+    syncToolBtns();
+    const onPanelChange = () => { syncToolBtns(); refreshMem(); };
+    evBtnEl.addEventListener('click', () => openEvPanel(onPanelChange));
+    rxBtnEl.addEventListener('click', () => openRxPanel(onPanelChange));
 
     // 完整提示词预览走悬浮查看器：按材料类型分块折叠（系统提示词 + 世界书/记忆表格/
     // 最近对话…各一块，块头显示小节名与精确字数），统计行带检索（命中的块自动展开高亮、
@@ -948,10 +948,11 @@ function renderCollect(container, main) {
     main.querySelector('#pp_gd_c1_preview').addEventListener('click', () => {
         try {
             const s = storyState();
+            const ut = wizardUnitTexts();
             const built = buildGuidanceMessages({
                 userNote: run.note,
-                eventText: run.eventText,
-                reactionText: wizardReactionText(),
+                eventText: ut.eventText,
+                reactionText: ut.reactionText,
                 activePlan: activeStory()?.planText ?? '',
                 historySummaries: s.history.filter(h => h.id !== s.activeId).map(h => h.summary),
                 memoryTags: wizardMemoryTags(),
@@ -1025,12 +1026,7 @@ function renderCollect(container, main) {
         }
     });
 
-    main.querySelector('#pp_gd_c1_next').addEventListener('click', () => { step = 'event'; renderMain(container); });
-    main.querySelector('#pp_gd_c1_skip').addEventListener('click', () => {
-        run.event = null;
-        run.eventText = '';
-        goReady(container, 'collect');
-    });
+    main.querySelector('#pp_gd_c1_next').addEventListener('click', () => goReady(container, 'collect'));
     main.querySelector('#pp_gd_c1_cancel').addEventListener('click', () => {
         step = '';
         clearWizard();   // 主动退出：快照一并清空，刷新不再回到向导
@@ -1056,11 +1052,15 @@ function renderReady(container, main) {
             sheets.length - always - tagsN ? `停用 ${sheets.length - always - tagsN} 表` : '',
         ].filter(Boolean).join(' · ');
     const gpOn = settings.storageItems.some(i => i.enabled);
+    const us = unitsState();
+    const evInPlan = us.eventUnits.filter(u => u.inPlan).length;
+    const rxInPlan = us.reactionUnits.filter(u => u.inPlan).length;
+    const ut = wizardUnitTexts();
     main.innerHTML = `
     <div class="pp-section">
-        <b>分析前确认</b>
-        <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${presets.filter(p => p.enabled).length}/${presets.length} 全局生效 · 随机事件：${run.event?.title ? escapeHtml(run.event.title) : '无'}</div>
-        <div class="pp-gd-stat pp-muted">记忆表格：${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${run.reaction?.inPlan ? ' · 附路人反应卡' : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（先轻量判断，需要才检索）' : ''}</div>
+        <div class="pp-gd-stephead"><b>第 2 步 · 分析前确认</b></div>
+        <div class="pp-gd-stat">对话 ${stat.layers} 层 · 世界书命中 ${stat.hits} 条 · 预设 ${presets.filter(p => p.enabled).length}/${presets.length} 全局生效 · 随机事件：${evInPlan ? `${evInPlan} 单元参与` : '无'}</div>
+        <div class="pp-gd-stat pp-muted">记忆表格：${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${gpOn ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : ''}${rxInPlan ? ` · 路人反应 ${rxInPlan} 单元` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ' · 联网搜索：开（先轻量判断，需要才检索）' : ''}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">确认，开始分析</span>
             <span id="pp_gd_ready_back" class="menu_button">返回</span>
@@ -1073,7 +1073,7 @@ function renderReady(container, main) {
     run.research = searchToolActive() && !restoring
         ? startResearchPrefetch(guidanceResearchInputs({
             userNote: run.note,
-            eventText: run.eventText,
+            eventText: ut.eventText,
             activePlan: activeStory()?.planText ?? '',
             historySummaries: historySummaries(),
         }))
@@ -1085,189 +1085,307 @@ function renderReady(container, main) {
     });
 }
 
-// ② 随机事件闸口：大模型随机 / 事件库掷骰 / 自己给意见，三选一，也可跳过
-function renderEvent(container, main) {
-    main.innerHTML = `
-    <div class="pp-section">
-        <div class="pp-gd-stephead"><b>第 2 步 · 随机事件（可选）</b></div>
-        <div class="pp-gd-selp">
-            <label title="把事件库规则的名称与提示给模型参考，可从中选方向也可另起"><input type="checkbox" id="pp_gd_ev_lib" ${ev.useLibrary ? 'checked' : ''}/> 参考事件库</label>
-            <label title="事件生成的同时让模型顺带给一版后续走向预览（仅供参考，正式规划仍走第 3 步分析）"><input type="checkbox" id="pp_gd_ev_prev" ${ev.wantPreview ? 'checked' : ''}/> 顺带出预览剧情</label>
-        </div>
-        <div class="pp-btn-row">
-            <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰，直接让模型即兴生成；选定的事件融入本次规划，事件卡上也可转为隐身注入"><i class="fa-solid fa-dice"></i> 大模型随机</span>
-            <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：先在勾选的掷骰板块（事件条目/维度随机/AI自主）里按板块权重抽一个——条目板块按权重×概率抽一条（必出），维度随机按维度权重抽方向，AI自主由模型看剧情挑维度；板块开关与权重在本页底部「事件库设置」"><i class="fa-solid fa-dice-three"></i> 掷骰</span>
-        </div>
-        <label class="pp-label">或自己给意见</label>
-        <textarea id="pp_gd_ev_manual" class="text_pole textarea_compact" rows="2" placeholder="不掷骰，直接写下你的事件或走向想法"></textarea>
-        <div id="pp_gd_ev_out"></div>
-        <div class="pp-btn-row">
-            <span id="pp_gd_ev_done" class="menu_button">确认，开始分析</span>
-            <span id="pp_gd_ev_skip" class="menu_button">跳过随机事件</span>
-            <span id="pp_gd_ev_back" class="menu_button">上一步</span>
-        </div>
-        <div id="pp_gd_status" class="pp-muted"></div>
+// ---------------------------------------------------------------------------
+// 两个现场工具的悬浮面板（第 1 步入口键进 openViewer）：产物都是「单元」（units.js）。
+// 材料与本页上方同一批（wizardMaterials），已生效注入不自动进工具生成（防双算）——
+// 跨工具影响只走显式导入（对方暂存池里「加工史还没本工具」的单元才能勾）
+// ---------------------------------------------------------------------------
+
+// 导入选材行：列出对方池里可导入的单元；全部不可导入时说明一句，对方池空则整段不渲染
+function importRowHtml(tool, picked) {
+    const st = unitsState();
+    const others = tool === 'event' ? st.reactionUnits : st.eventUnits;
+    if (!others.length) return '';
+    const otherName = TOOL_NAME[tool === 'event' ? 'reaction' : 'event'];
+    const list = others.filter(u => unitImportable(u, tool));
+    if (!list.length) return `
+    <label class="pp-label">导入${otherName}单元做参考</label>
+    <div class="pp-muted" title="加工史已含本工具（两标满）的单元不能再导入——套娃在结构上不可能">对方暂存里的单元都已经过本工具（两标满），不能再导入</div>`;
+    return `
+    <label class="pp-label" title="跨工具导入是两工具间唯一影响通道：只能导入「加工史里还没有本工具」的单元（同工具回流禁、两标满禁）。导入不消耗——原单元留在对方暂存里，勾着再生成一次就是重 roll；导入产物 = 带累积徽章的新单元（左＝先、右＝后）">导入${otherName}单元做参考</label>
+    <div class="pp-gd-selp">
+        ${list.map(u => `<label title="${escapeHtml(String(u.text ?? '').slice(0, 300))}"><input type="checkbox" data-imp="${escapeHtml(u.id)}" ${picked.has(u.id) ? 'checked' : ''}/> ${escapeHtml(u.title || '(未命名)')}</label>`).join('')}
     </div>`;
-
-    const manual = main.querySelector('#pp_gd_ev_manual');
-    manual.value = ev.opinion;
-    manual.addEventListener('input', () => { ev.opinion = manual.value; persistWizard(); });
-    main.querySelector('#pp_gd_ev_lib').addEventListener('change', e => { ev.useLibrary = e.target.checked; persistWizard(); });
-    main.querySelector('#pp_gd_ev_prev').addEventListener('change', e => { ev.wantPreview = e.target.checked; persistWizard(); });
-
-    const out = main.querySelector('#pp_gd_ev_out');
-    const status = main.querySelector('#pp_gd_status');
-    if (ev.event) renderEvCard(out);
-
-    main.querySelector('#pp_gd_ev_llm').addEventListener('click', async () => {
-        if (ev.busy) return;
-        ev.busy = true;
-        status.textContent = '大模型随机生成中……';
-        try {
-            ev.mode = 'llm';
-            ev.event = await generateFreeRandomEvent({ useLibrary: ev.useLibrary, wantPreview: ev.wantPreview, materials: wizardMaterials() });
-            ev.choiceIdx = null;
-            renderEvCard(out);
-            status.textContent = '已生成（点选项选定走向，也可都不选只当参考）';
-        } catch (err) {
-            status.textContent = '';
-            toastr.error(String(err.message ?? err));
-        } finally {
-            ev.busy = false;
-        }
-    });
-    main.querySelector('#pp_gd_ev_roll').addEventListener('click', async () => {
-        if (ev.busy) return;
-        const r = rollEventPipeline();
-        if (r.mode === 'none') {
-            status.textContent = `本次未掷出事件（${r.reason}），可再掷或改用「大模型随机」`;
-            return;
-        }
-        ev.busy = true;
-        status.textContent = r.mode === 'library'
-            ? `掷中「${r.rule.name}」，生成中……`
-            : r.mode === 'ai'
-                ? 'AI 自主挑维度中，生成中……'
-                : `维度「${r.dimension.name}」自由生成中……`;
-        try {
-            if (r.mode === 'library') {
-                ev.mode = 'lib';
-                ev.event = await generateRandomEvent(r.rule, wizardMaterials());
-                commitRolledEvent({ rule: r.rule, dimension: r.dimension, title: ev.event.title, source: 'library' });
-                status.textContent = `来自事件库「${r.rule.name}」`;
-            } else if (r.mode === 'ai') {
-                ev.mode = 'ai';
-                ev.event = await generateAiChoiceRandomEvent({ dimensions: r.dimensions, materials: wizardMaterials() });
-                const dim = r.dimensions.find(d => d.name === ev.event?.dimension) ?? null;
-                commitRolledEvent({ dimension: dim, title: ev.event.title, source: 'ai' });
-                status.textContent = `来自 AI 自主${dim ? `·维度「${dim.name}」` : ''}`;
-            } else {
-                ev.mode = 'free';
-                ev.event = await generateFreeRandomEvent({ dimension: r.dimension, useLibrary: ev.useLibrary, wantPreview: ev.wantPreview, materials: wizardMaterials() });
-                commitRolledEvent({ dimension: r.dimension, title: ev.event.title, source: 'free' });
-                status.textContent = `来自维度「${r.dimension.name}」自由生成`;
-            }
-            ev.choiceIdx = null;
-            renderEvCard(out);
-        } catch (err) {
-            status.textContent = '';
-            toastr.error(String(err.message ?? err));
-        } finally {
-            ev.busy = false;
-        }
-    });
-    main.querySelector('#pp_gd_ev_done').addEventListener('click', () => {
-        const e = ev.event;
-        const op = ev.opinion.trim();
-        if (e) {
-            const opt = ev.choiceIdx != null ? (e.options ?? [])[ev.choiceIdx] : null;
-            run.event = { mode: ev.mode ?? 'llm', title: e.title ?? '', choice: opt?.label ?? '' };
-            run.eventText = `【${e.title ?? ''}】${e.description ?? ''}`
-                + (e.preview ? `\n预览走向：${e.preview}` : '')
-                + (opt ? `\n已选走向：${opt.label ?? ''}（幕后提示：${opt.hint ?? ''}）` : '')
-                + (op ? `\n附加意见：${op}` : '');
-        } else if (op) {
-            run.event = { mode: 'manual', title: '', choice: '' };
-            run.eventText = `【事件指导意见】${op}`;
-        } else {
-            run.event = null;
-            run.eventText = '';
-        }
-        startAnalyze(container);
-    });
-    main.querySelector('#pp_gd_ev_skip').addEventListener('click', () => {
-        run.event = null;
-        run.eventText = '';
-        goReady(container, 'event');
-    });
-    main.querySelector('#pp_gd_ev_back').addEventListener('click', () => { step = 'collect'; renderMain(container); });
 }
 
-function renderEvCard(out) {
-    const e = ev.event;
-    const options = Array.isArray(e.options) ? e.options : [];
-    const layers = clampInjectLayers(ev.injectLayers);
-    ev.injectLayers = layers;
-    out.innerHTML = `
-    <div class="pp-item pp-gd-evcard">
-        <div class="pp-gd-evtitle">${escapeHtml(e.title ?? '随机事件')}</div>
-        <div class="pp-gd-evdesc">${escapeHtml(e.description ?? '')}</div>
-        ${e.preview ? `<div class="pp-gd-evpreview pp-muted">预览走向：${escapeHtml(e.preview)}</div>` : ''}
+// 当前勾选中的导入单元（生成材料用；勾选后被对方清理的自动落空）
+function pickedImports(tool, picked) {
+    const st = unitsState();
+    const others = tool === 'event' ? st.reactionUnits : st.eventUnits;
+    return others.filter(u => picked.has(u.id) && unitImportable(u, tool));
+}
+
+// 随机事件工具面板：三路取材（大模型随机 / 掷骰管线 / 自己给意见立单元）+ 暂存池（≤3，
+// 满了禁生成先手删）。掷骰入口唯一化——页面底部工具区只管事件库与维度配置
+function openEvPanel(onChange) {
+    const body = openViewer('随机事件').querySelector('.pp-viewer-body');
+    const status = text => { const el = body.querySelector('#pp_gd_ev_status'); if (el) el.textContent = text; };
+    const rerender = () => { render(); onChange(); };
+    const render = () => {
+        const st = unitsState();
+        const pool = st.eventUnits;
+        const full = pool.length >= MAX_UNITS_PER_TOOL;
+        body.innerHTML = `
+        <div class="pp-gd-selp">
+            <label title="把事件库规则的名称与提示给模型参考，可从中选方向也可另起"><input type="checkbox" id="pp_gd_ev_lib" ${st.eventOpts.useLibrary ? 'checked' : ''}/> 参考事件库</label>
+            <label title="事件生成的同时让模型顺带出一版后续走向预览（仅供参考，正式走向以规划分析为准）"><input type="checkbox" id="pp_gd_ev_prev" ${st.eventOpts.wantPreview ? 'checked' : ''}/> 顺带出预览剧情</label>
+        </div>
+        <div class="pp-btn-row">
+            <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰，直接让模型即兴生成一个事件单元；生成材料自动带第 1 步同一批，勾选的导入单元一并作参考">大模型随机</span>
+            <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：先在勾选的掷骰板块（事件条目/维度随机/AI自主）里按板块权重抽一个——条目板块按权重×概率抽一条（必出），维度随机按维度权重抽方向，AI自主由模型看剧情挑维度；板块开关与权重在页面底部「事件库设置」">掷骰</span>
+            <span id="pp_gd_ev_clear" class="menu_button" title="清空随机事件名下的全部暂存单元（路人反应的不动；已转隐身注入的不受影响）；采纳规划不会清池，清理只在这里">清空暂存</span>
+        </div>
+        ${importRowHtml('event', evImports)}
+        <label class="pp-label">或自己给意见</label>
+        <textarea id="pp_gd_ev_manual" class="text_pole textarea_compact" rows="2" placeholder="不掷骰，直接写下你的事件或走向想法"></textarea>
+        <div class="pp-btn-row"><span id="pp_gd_ev_manual_add" class="menu_button" title="把写下的意见立成一个事件单元（只有事件标），与生成的单元同样可参与规划/转注入/被对方导入">立为单元</span></div>
+        <div id="pp_gd_ev_status" class="pp-muted">${full ? `暂存已满 ${MAX_UNITS_PER_TOOL}/${MAX_UNITS_PER_TOOL}，先删一个再生成` : ''}</div>
+        <div id="pp_gd_ev_pool"></div>`;
+
+        body.querySelector('#pp_gd_ev_lib').addEventListener('change', e => { st.eventOpts.useLibrary = e.target.checked; persistUnits(); });
+        body.querySelector('#pp_gd_ev_prev').addEventListener('change', e => { st.eventOpts.wantPreview = e.target.checked; persistUnits(); });
+        const manualEl = body.querySelector('#pp_gd_ev_manual');
+        manualEl.value = st.eventNote;
+        manualEl.addEventListener('input', () => { st.eventNote = manualEl.value; persistUnits(); });   // 只回存不重画，输入不掉焦点
+
+        const poolBox = body.querySelector('#pp_gd_ev_pool');
+        poolBox.innerHTML = pool.length ? pool.map(u => evUnitCardHtml(u)).join('')
+            : '<div class="pp-muted" title="本工具的产物先暂存在这里：单元不论徽章数都能勾「参与规划」随分析发送、可转隐身注入、可被路人反应工具导入再加工；每边最多 3 个，满了先删">暂存池还是空的——生成或立个单元</div>';
+        poolBox.querySelectorAll('[data-uid]').forEach((cardEl, i) => wireEvUnit(cardEl, pool[i], rerender));
+
+        body.querySelectorAll('[data-imp]').forEach(cb => cb.addEventListener('change', () => {
+            if (cb.checked) evImports.add(cb.dataset.imp); else evImports.delete(cb.dataset.imp);
+        }));
+        body.querySelector('#pp_gd_ev_clear').addEventListener('click', () => {
+            clearUnits('event');
+            evImports.clear();
+            rerender();
+            toastr.success('已清空事件暂存（路人反应的不动；已转隐身注入的不受影响）');
+        });
+        body.querySelector('#pp_gd_ev_manual_add').addEventListener('click', () => {
+            const note = manualEl.value.trim();
+            if (!note) { toastr.warning('先写下事件或走向想法'); return; }
+            if (!addUnit(newEventUnit({ mode: 'manual', title: '', description: note }))) {
+                toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个`);
+                return;
+            }
+            rerender();
+            toastr.success('已立为事件单元');
+        });
+        body.querySelector('#pp_gd_ev_llm').addEventListener('click', async () => {
+            if (evBusy) return;
+            if (unitsState().eventUnits.length >= MAX_UNITS_PER_TOOL) { toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个再生成`); return; }
+            const imports = pickedImports('event', evImports);
+            evBusy = true;
+            status('大模型随机生成中……');
+            try {
+                const gen = await generateFreeRandomEvent({ useLibrary: st.eventOpts.useLibrary, wantPreview: st.eventOpts.wantPreview, materials: { ...wizardMaterials(), importedUnits: imports } });
+                if (!addUnit(newEventUnit({ ...gen, mode: 'llm' }, imports.length > 0))) {
+                    toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，生成结果没有入池`);
+                } else {
+                    rerender();   // 面板整面重画：暂存卡上桌、满员提示复位
+                    status('已生成（点选项选定走向，也可都不选只当参考）');
+                }
+            } catch (err) {
+                status('');
+                toastr.error(String(err.message ?? err));
+            } finally {
+                evBusy = false;
+            }
+        });
+        body.querySelector('#pp_gd_ev_roll').addEventListener('click', async () => {
+            if (evBusy) return;
+            if (unitsState().eventUnits.length >= MAX_UNITS_PER_TOOL) { toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个再生成`); return; }
+            const r = rollEventPipeline();
+            if (r.mode === 'none') {
+                status(`本次未掷出事件（${r.reason}），可再掷或改用「大模型随机」`);
+                return;
+            }
+            const imports = pickedImports('event', evImports);
+            evBusy = true;
+            status(r.mode === 'library'
+                ? `掷中「${r.rule.name}」，生成中……`
+                : r.mode === 'ai'
+                    ? 'AI 自主挑维度中，生成中……'
+                    : `维度「${r.dimension.name}」自由生成中……`);
+            try {
+                let gen;
+                if (r.mode === 'library') {
+                    gen = await generateRandomEvent(r.rule, { ...wizardMaterials(), importedUnits: imports });
+                    commitRolledEvent({ rule: r.rule, dimension: r.dimension, title: gen.title, source: 'library' });
+                    status(`来自事件库「${r.rule.name}」`);
+                } else if (r.mode === 'ai') {
+                    gen = await generateAiChoiceRandomEvent({ dimensions: r.dimensions, materials: { ...wizardMaterials(), importedUnits: imports } });
+                    const dim = r.dimensions.find(d => d.name === gen?.dimension) ?? null;
+                    commitRolledEvent({ dimension: dim, title: gen.title, source: 'ai' });
+                    status(`来自 AI 自主${dim ? `·维度「${dim.name}」` : ''}`);
+                } else {
+                    gen = await generateFreeRandomEvent({ dimension: r.dimension, useLibrary: st.eventOpts.useLibrary, wantPreview: st.eventOpts.wantPreview, materials: { ...wizardMaterials(), importedUnits: imports } });
+                    commitRolledEvent({ dimension: r.dimension, title: gen.title, source: 'free' });
+                    status(`来自维度「${r.dimension.name}」自由生成`);
+                }
+                if (!addUnit(newEventUnit({ ...gen, mode: r.mode === 'library' ? 'lib' : r.mode }, imports.length > 0))) {
+                    toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，生成结果没有入池`);
+                } else {
+                    rerender();
+                }
+            } catch (err) {
+                status('');
+                toastr.error(String(err.message ?? err));
+            } finally {
+                evBusy = false;
+            }
+        });
+    };
+    render();
+}
+
+// 事件单元卡：卡头徽章 + 标题/描述/预览 + 走向选项（点选定向）+ 操作（参与规划 / 转注入 / 删除）
+function evUnitCardHtml(unit) {
+    const p = unit.payload ?? {};
+    const options = Array.isArray(p.options) ? p.options : [];
+    const manual = p.mode === 'manual';
+    return `
+    <div class="pp-item pp-gd-evcard" data-uid="${escapeHtml(unit.id)}">
+        ${unitHeadHtml(unit)}
+        <div class="pp-gd-evdesc">${escapeHtml(p.description ?? '')}</div>
+        ${!manual && p.preview ? `<div class="pp-gd-evpreview pp-muted">预览走向：${escapeHtml(p.preview)}</div>` : ''}
         ${options.length ? `
         <div class="pp-label pp-gd-evoptlabel">走向选项（点选一个定向，再点一次取消；都不选＝只作参考）</div>
         ${options.map((o, i) => `
-            <div class="menu_button pp-option ${ev.choiceIdx === i ? 'pp-gd-sel' : ''}" data-evopt="${i}">
+            <div class="menu_button pp-option ${p.choiceIdx === i ? 'pp-gd-sel' : ''}" data-evopt="${i}">
                 <span class="pp-option-label">${escapeHtml(o.label ?? '')}</span>
                 ${o.hint ? `<span class="pp-option-hint">幕后提示：${escapeHtml(o.hint ?? '')}</span>` : ''}
             </div>`).join('')}
-        ${ev.choiceIdx == null ? '' : `<div class="pp-muted">已选：${escapeHtml(options[ev.choiceIdx]?.label ?? '')}</div>`}` : ''}
+        ${p.choiceIdx == null ? '' : `<div class="pp-muted">已选：${escapeHtml(options[p.choiceIdx]?.label ?? '')}</div>`}` : ''}
         <div class="pp-btn-row pp-gd-evops">
+            <span data-evu-plan="1" class="menu_button${unit.inPlan ? ' pp-gd-sel' : ''}" title="把这个单元随分析发给规划模型（进「随机事件」小节，规划为其留出融入空间）；与转注入可并用">${unit.inPlan ? '已参与规划，点此取消' : '参与规划'}</span>
             <label title="隐身注入多少层后自动撤下；一层 = 一条角色回复（user 消息不计）">注入层数
-                <input type="number" class="text_pole" id="pp_gd_ev_layers" min="1" max="200" step="1" value="${layers}" />
+                <input type="number" class="text_pole" data-evu-layers="1" min="1" max="200" step="1" value="${p.injectLayers ?? 20}" />
             </label>
-            <span id="pp_gd_ev_inject" class="menu_button" title="把事件与已选走向直接写成一条隐身注入（模型可见、聊天界面不显示），按所填层数到期自动撤下；不经过第 3 步分析，也不影响事件作为材料融入本次规划">转为隐身注入</span>
+            <span data-evu-inject="1" class="menu_button" title="把事件与已选走向直接写成一条隐身注入（模型可见、聊天界面不显示），按所填层数到期自动撤下；不经过分析，也不影响这个单元继续参与规划">转为隐身注入</span>
+            <span data-evu-del="1" class="menu_button fa-solid fa-trash" title="从暂存池删除这个单元（已转隐身注入的不受影响）"></span>
         </div>
     </div>`;
-    out.querySelectorAll('[data-evopt]').forEach(el => el.addEventListener('click', () => {
+}
+
+// 事件单元卡接线：rerender = 面板整面重画（选项选中态刷新）
+function wireEvUnit(cardEl, unit, rerender) {
+    const p = unit.payload ?? (unit.payload = {});
+    cardEl.querySelectorAll('[data-evopt]').forEach(el => el.addEventListener('click', () => {
         const i = Number(el.dataset.evopt);
-        ev.choiceIdx = ev.choiceIdx === i ? null : i;
-        persistWizard();
-        renderEvCard(out);
+        p.choiceIdx = p.choiceIdx === i ? null : i;
+        unit.text = eventUnitText(unit);   // 走向变了，材料正文跟着变
+        persistUnits();
+        rerender();
     }));
-    const layersEl = out.querySelector('#pp_gd_ev_layers');
+    const layersEl = cardEl.querySelector('[data-evu-layers]');
     // 点选走向会整卡重渲染，input 事件实时回存，重渲染后数值不丢
     layersEl.addEventListener('input', () => {
         const v = Number(layersEl.value);
-        if (Number.isFinite(v)) { ev.injectLayers = v; persistWizard(); }
+        if (Number.isFinite(v)) { p.injectLayers = v; persistUnits(); }
     });
     layersEl.addEventListener('change', () => {
-        const v = clampInjectLayers(Number(layersEl.value));
-        ev.injectLayers = v;
-        persistWizard();
-        layersEl.value = String(v);
+        p.injectLayers = clampInjectLayers(p.injectLayers);
+        persistUnits();
+        layersEl.value = String(p.injectLayers);
     });
-    out.querySelector('#pp_gd_ev_inject').addEventListener('click', () => {
-        const opt = ev.choiceIdx != null ? options[ev.choiceIdx] : null;
+    cardEl.querySelector('[data-evu-plan]').addEventListener('click', () => {
+        unit.inPlan = !unit.inPlan;
+        persistUnits();
+        rerender();
+    });
+    cardEl.querySelector('[data-evu-inject]').addEventListener('click', () => {
+        const opt = Number.isInteger(p.choiceIdx) ? (p.options ?? [])[p.choiceIdx] : null;
         if (!opt) {
             toastr.warning('先点选一个走向再注入（都不选则只把事件当参考）');
             return;
         }
-        const injLayers = clampInjectLayers(ev.injectLayers);
+        const injLayers = clampInjectLayers(p.injectLayers);
         addInjection({
             id: newId('inj-'),
-            label: `事件：${e.title ?? ''} · ${opt.label ?? ''}`,
+            label: `事件：${p.title ?? ''} · ${opt.label ?? ''}`,
             mode: 'open',
-            content: `【随机事件·${e.title ?? ''}】${e.description ?? ''}\n已选定走向：${opt.label ?? ''}\n幕后提示：${opt.hint ?? ''}`,
+            content: `【随机事件·${p.title ?? ''}】${p.description ?? ''}\n已选定走向：${opt.label ?? ''}\n幕后提示：${opt.hint ?? ''}`,
             depth: 4,
             role: 'system',
             scope: 'chat',
             enabled: true,
             source: 'event',
+            unitId: unit.id,
             createdAt: Date.now(),
             expires: { type: 'layers', layers: injLayers },
         });
         toastr.success(`已注入，${injLayers} 层后自动撤下（设置页底部可提前撤下）`);
     });
+    cardEl.querySelector('[data-evu-del]').addEventListener('click', () => {
+        removeUnit(unit.id);
+        rerender();
+    });
+}
+
+// 路人反应工具面板：指导意见生成 + 暂存池（≤3）。产物 = 反应单元，两路（参与规划 /
+// 转隐身注入）互斥；转注入后规划与检查经生效注入自动附带同一口径
+function openRxPanel(onChange) {
+    const body = openViewer('路人反应').querySelector('.pp-viewer-body');
+    const rerender = () => { render(); onChange(); };
+    const render = () => {
+        const st = unitsState();
+        const pool = st.reactionUnits;
+        body.innerHTML = `
+        <label class="pp-label" title="写给生成模型的指导意见：期望烈度、余波方向、要避开什么">指导意见（可选）</label>
+        <textarea id="pp_gd_rx_note" class="text_pole textarea_compact" rows="2" placeholder="期望烈度、余波方向、要避开什么"></textarea>
+        <div class="pp-btn-row">
+            <span id="pp_gd_rx_gen" class="menu_button" title="生成一个反应单元入池；材料自动带第 1 步同一批（记忆表格档位与标签、玩法勾选、世界书、进行中剧情），勾选的导入单元一并作参考">生成反应卡</span>
+            <span id="pp_gd_rx_clear" class="menu_button" title="清空路人反应名下的全部暂存单元（随机事件的不动；已转隐身注入的不受影响）；采纳规划不会清池，清理只在这里">清空暂存</span>
+        </div>
+        ${importRowHtml('reaction', rxImports)}
+        <div id="pp_gd_rx_pool"></div>`;
+        const noteEl = body.querySelector('#pp_gd_rx_note');
+        noteEl.value = st.reactionNote;
+        noteEl.addEventListener('input', () => { st.reactionNote = noteEl.value; persistUnits(); });   // 只回存不重画，输入不掉焦点
+
+        const poolBox = body.querySelector('#pp_gd_rx_pool');
+        poolBox.innerHTML = pool.length ? pool.map(u => rxUnitCardHtml(u)).join('')
+            : '<div class="pp-muted" title="产物先暂存在这里：单元不论徽章数都能勾「参与规划」、可转隐身注入、可被随机事件工具导入再加工；每边最多 3 个，满了先删">暂存池还是空的——生成一张卡</div>';
+        poolBox.querySelectorAll('[data-uid]').forEach((cardEl, i) => wireRxUnit(cardEl, pool[i], rerender, onChange));
+
+        body.querySelectorAll('[data-imp]').forEach(cb => cb.addEventListener('change', () => {
+            if (cb.checked) rxImports.add(cb.dataset.imp); else rxImports.delete(cb.dataset.imp);
+        }));
+        body.querySelector('#pp_gd_rx_clear').addEventListener('click', () => {
+            clearUnits('reaction');
+            rxImports.clear();
+            rerender();
+            toastr.success('已清空反应暂存（随机事件的不动；已转隐身注入的不受影响）');
+        });
+        body.querySelector('#pp_gd_rx_gen').addEventListener('click', async () => {
+            if (rxBusy) return;
+            if (unitsState().reactionUnits.length >= MAX_UNITS_PER_TOOL) { toastr.warning(`反应暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个再生成`); return; }
+            const imports = pickedImports('reaction', rxImports);
+            rxBusy = true;
+            const btn = body.querySelector('#pp_gd_rx_gen');
+            btn.textContent = '生成中……';
+            try {
+                const gen = await generateReactionCard({
+                    note: st.reactionNote,
+                    materials: { ...wizardMaterials(), importedUnits: imports },
+                    activePlan: activeStory()?.planText ?? '',
+                });
+                if (!addUnit(newReactionUnit(gen, imports.length > 0))) {
+                    toastr.warning(`反应暂存已满 ${MAX_UNITS_PER_TOOL} 个，生成结果没有入池`);
+                } else {
+                    rerender();   // 面板整面重画：按钮文案复位、卡片上桌
+                }
+            } catch (err) {
+                toastr.error(String(err.message ?? err));
+                btn.textContent = '生成反应卡';
+            } finally {
+                rxBusy = false;
+            }
+        });
+    };
+    render();
 }
 
 function clampInjectLayers(v) {
@@ -1297,12 +1415,13 @@ async function startAnalyze(container, { revise = false } = {}) {
     run.hadActive = Boolean(activePlan.trim());
     renderMain(container);
     try {
+        const ut = wizardUnitTexts();   // 勾了「参与规划」的单元正文：事件与反应各自合并成小节材料
         const data = await runPlotGuidance({
             userNote: run.note,
             previousPlan: revise ? run.planText : '',
             revisionNote: revise ? run.reviseNote : '',
-            eventText: run.eventText,
-            reactionText: wizardReactionText(),
+            eventText: ut.eventText,
+            reactionText: ut.reactionText,
             activePlan,
             historySummaries: historySummaries(),
             memoryTags: wizardMemoryTags(),
@@ -1443,18 +1562,17 @@ function renderResult(container, main) {
             planText: run.planText,
             summary: run.result?.plan?.summary ?? '',
             note: run.note,
-            event: run.event,
+            event: adoptedEventMeta(),
         });
         syncStoryInjection(run.planText, run.result?.plan?.summary ?? '');
         toastr.success('已存为进行中剧情并自动注入（原剧情自动归档，可在历史回看）');
         step = '';
-        // 第 1 步勾选存在对话记忆里，下一轮进第 1 步自动恢复，这里照常清工作副本
+        // 第 1 步勾选存在对话记忆里，下一轮进第 1 步自动恢复，这里照常清工作副本。
+        // 单元池不随采用清空（DESIGN §2.5）：清理由各工具面板的一键清理键手动执行
         Object.assign(run, {
-            note: '', gpIds: null, event: null, eventText: '', result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
-            memModes: null, memTags: [], memRecent: 0, rxNote: '', reaction: null, readyFrom: 'event', research: null,
+            note: '', gpIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+            memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
         });
-        // 第 2 步闸口状态一并清空：上一轮的事件卡/走向/意见不带进新一轮规划（「不保存，回到第 1 步」才保留）
-        Object.assign(ev, { mode: null, event: null, choiceIdx: null, opinion: '', useLibrary: true, wantPreview: false, busy: false });
         report = null;
         clearWizard();   // 已采用：快照清空，刷新页面不再回到第 4 步
         renderStoryBar(container);
@@ -1526,15 +1644,23 @@ async function reviewStory(container) {
     }
 }
 
+// 采用时往剧情条目上记的事件元信息（历史列表显示用）：取最新一个勾了「参与规划」的事件单元
+function adoptedEventMeta() {
+    const u = unitsState().eventUnits.find(x => x.inPlan);
+    if (!u) return null;
+    const p = u.payload ?? {};
+    const opt = Number.isInteger(p.choiceIdx) ? (p.options ?? [])[p.choiceIdx] : null;
+    return { mode: p.mode ?? 'llm', title: p.title ?? '', choice: opt?.label ?? '' };
+}
+
 function rewriteByAdvice(container) {
     const active = activeStory();
     if (!active || !report?.advice) return;
     run.note = '';
-    // 第 1 步勾选从本对话的记忆恢复，重写与正常规划用同一批材料（与 startCollect 同一套口径）
+    // 第 1 步勾选从本对话的记忆恢复，重写与正常规划用同一批材料（与 startCollect 同一套口径）；
+    // 勾了「参与规划」的单元也照常随材料进入重写（单元池与向导进度各自独立）
     applyPicks();
     if (run.gpIds == null) run.gpIds = storageItemsInEffect().map(i => i.id);   // 与第 1 步同默认：生效中的玩法条目
-    run.event = null;
-    run.eventText = '';
     run.planText = active.planText;   // 上一版 = 当前剧情
     run.reviseNote = report.advice;   // 报告建议即修改意见
     startAnalyze(container, { revise: true });

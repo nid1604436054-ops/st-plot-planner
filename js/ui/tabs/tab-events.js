@@ -1,8 +1,8 @@
 // 随机事件工具区（挂在剧情指导页下部）：底部「事件库设置」「AI 建库」两个折叠区。
-// 掷骰入口只有分步规划向导第 2 步（随机事件闸口），这里不再放独立的掷骰按钮；
-// 「事件库设置」里调掷骰三板块（事件条目 / 维度随机 / AI 自主）的开关与权重，供向导第 2 步的掷骰用。
-// 路人反应校准已并入向导第 1 步，与规划共用同一批材料（生成/转注入/计入规划材料都在那边，
-// 见 tab-guidance.js 与 reactions.js）；旧版反应区自己的「材料勾选」（chatdata 的 reaction 块）已退役
+// 掷骰入口只有随机事件工具面板（第 1 步入口键进的悬浮面板），这里只放事件库/维度配置；
+// 「事件库设置」里调掷骰三板块（事件条目 / 维度随机 / AI 自主）的开关与权重，供工具面板的掷骰用。
+// 路人反应与随机事件两工具的产物都是「单元」（暂存池在 units.js），与规划共用同一批材料
+// （见 tab-guidance.js / units.js / reactions.js）；旧版反应区自己的「材料勾选」（chatdata 的 reaction 块）已退役
 import { settings, save, newId } from "../../settings.js";
 import { defaultEventRules, generateEventEntries, dimNameOf } from "../../randomEvents.js";
 import { currentFloor } from "../../context.js";

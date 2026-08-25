@@ -53,8 +53,13 @@ export async function generateReactionCard({ note = '', materials = {}, activePl
             activePlan: '## 进行中剧情（正在执行的规划，反应口径与其方向一致）',
         },
     });
+    // 单元制口径：跨工具影响只走显式导入（materials.importedUnits，唯一影响通道）；
+    // 已生效注入不自动进工具生成（防双算）
+    const imported = (materials.importedUnits ?? [])
+        .map(u => String(u?.text ?? '').trim()).filter(Boolean);
     const user = [
         ...parts,
+        ...(imported.length ? ['## 导入单元（来自随机事件工具的暂存产物，仅作参考材料）', imported.join('\n\n')] : []),
         '## 任务',
         '从最近对话里找出最近一件最引人注目的事，围绕它生成反应卡；实在没有就按日常被注视处理，salience 取 1。',
         note.trim() ? `## 指导意见\n${note.trim()}` : '',

@@ -712,6 +712,36 @@
     white-space: nowrap;
 }
 
+/* 单元卡头：加工史徽章（左＝先经过的工具，右＝后经过的；空位占位保持多卡标题对齐）+ 标题。
+   两工具面板（随机事件/路人反应）的暂存单元卡共用；查看器不在 .pp-drawer 里，
+   数字框小尺寸由 .pp-viewer-body input[type="number"] 兜底 */
+.pp-unit-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.pp-unit-mark {
+    flex: 0 0 auto;
+    padding: 1px 8px;
+    border-radius: 10px;
+    border: 1px solid currentColor;
+    font-size: 0.78em;
+}
+
+.pp-unit-mark-empty {
+    visibility: hidden;
+}
+
+/* 查看器里的单元卡不吃 .pp-drawer 作用域的 evops label 规则——同款补一份，防层数输入行散架 */
+.pp-viewer-body .pp-gd-evcard .pp-gd-evops label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+
 .pp-gd-sel {
     border: 1px solid currentColor;
     opacity: 1;

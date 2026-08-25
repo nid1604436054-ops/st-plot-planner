@@ -1,4 +1,5 @@
-// 每聊天数据的统一存取层：记忆表格镜像库 / 剧情档案 / 向导勾选 / 对话书单 / 向导进度快照。
+// 每聊天数据的统一存取层：记忆表格镜像库 / 剧情档案 / 向导勾选 / 对话书单 / 向导进度快照 /
+// 单元池（两工具暂存单元，units.js）。
 // （旧版「反应卡勾选」reaction 块已随反应区并入向导第 1 步退役：不再读写，存量数据留着无害）
 // 这些数据原先存 chatMetadata（跟聊天文件走），每次改动都要 saveChat——几千层的大聊天
 // 一序列化就是上百毫秒，插件里点一下卡一下。现改双层存储：
@@ -46,7 +47,7 @@ function lsKey(key, name) { return LS_PREFIX + key + ':' + name; }
 
 /**
  * 读当前聊天的某块数据（带缓存）。
- * @param {string} name  数据名：memory / story / picks / reaction / books
+ * @param {string} name  数据名：memory / story / picks / reaction / books / units / wizard
  * @param {Function|null} makeDefaults  全新聊天时的初始值工厂；传 null = 没存过就返回 null（调用方按未配置处理）
  */
 export function loadChatData(name, makeDefaults) {
