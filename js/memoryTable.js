@@ -123,7 +123,7 @@ export function memoryState() {
         backups: [],                            // 原表库历史快照 [{ at, sheets }]，每个聊天各自留 3 份
         tombstones: {},                         // { [源指纹]: { at, sheetUid, sheetName, columns, cells } }
         tags: {},                               // { [rid]: ['战斗','背叛'] }
-        sheetRecall: {},                        // { [sheetUid]: { enabled, columns:[原列下标] } }
+        sheetRecall: {},                        // { [sheetUid]: { columns:[原列下标] } }：召回列选择（每表「参与召回」开关已退役，向导档位是唯一口径）
         matchTags: [],                          // 标签匹配词表（剧情指导向导）：[{name, note}]
         matchSheets: [],                        // 打标区域：表 uid；空 = 全部镜像表
         seen: [],                               // 已看过的行 rid，用于「新」标
@@ -134,6 +134,8 @@ export function memoryState() {
     state.matchTags ??= [];
     state.matchSheets ??= [];
     delete state.recallTags;   // 旧版「召回设置」面板的标签筛选已删（与向导标签过滤/标签检索重合）：残留值不能继续悄悄过滤检查报告
+    state.sheetRecall ??= {};
+    for (const rc of Object.values(state.sheetRecall)) delete rc.enabled;   // 「参与召回」开关已退役：读取时清残留，旧值不能再悄悄藏表
     if (state.backups.length > MAX_BACKUPS) state.backups.length = MAX_BACKUPS;   // 备份上限 20→3 的一次性收紧
     return state;
 }
@@ -509,15 +511,14 @@ export function buildMemoryContext({ tagFilter = null, sheetUids = null, sheetMo
     // tagFilter：null/[] = 不筛（全量）；数组 = 按标签筛。
     // sheetModes：{ [表uid]: 'off' | 'tags' | 'always' }；传了它档位优先——常驻表无视标签全量带出、
     // 停用表整张不带、标签档的表只带命中行（没勾任何标签时退化为只走表尾最新窗口）；
-    // 不传 = 全部表统一全量（检查报告 / 老口径走这条）
+    // 不传 = 全部表统一全量（老口径；检查报告现在也带向导第 1 步的档位/标签参数）
     const want = (tagFilter ?? []).filter(Boolean);
     const recent = Math.max(0, Math.round(Number(latestPerSheet) || 0));
     const only = Array.isArray(sheetUids) ? new Set(sheetUids) : null;   // null = 全部；空数组 = 一张表都不带
     const blocks = [];
     for (const sheet of state.mirror.sheets) {
-        const recall = state.sheetRecall[sheet.uid] ?? {};
-        if (recall.enabled === false) continue;
         if (only && !only.has(sheet.uid)) continue;
+        const recall = state.sheetRecall[sheet.uid] ?? {};   // 只剩召回列选择，不再有启停开关
         const mode = sheetModes ? (sheetModes[sheet.uid] ?? 'always') : null;
         if (mode === 'off') continue;
         const colIdx = Array.isArray(recall.columns) ? recall.columns : null;

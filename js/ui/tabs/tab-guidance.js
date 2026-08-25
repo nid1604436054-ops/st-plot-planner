@@ -249,9 +249,7 @@ function normalizeMemModes(m) {
 function memModesFromLegacy(r) {
     if (r.memSheets === undefined && r.memMatch === undefined) return null;
     const state = memoryState();
-    const uids = state.mirror.sheets
-        .filter(s => (state.sheetRecall[s.uid] ?? {}).enabled !== false)
-        .map(s => s.uid);
+    const uids = state.mirror.sheets.map(s => s.uid);
     const picked = Array.isArray(r.memSheets) ? new Set(r.memSheets) : null;
     const out = {};
     for (const uid of uids) out[uid] = picked && !picked.has(uid) ? 'off' : (r.memMatch ? 'tags' : 'always');
@@ -349,19 +347,25 @@ function wireRxCard(body, card, { onChange, onDrop }) {
     body.querySelector('#pp_gd_rx_drop_v').addEventListener('click', onDrop);
 }
 
-function applyPicks() {
+// 第 1 步口径读回（不动 run）：检查报告也用它继承向导口径——报告不依赖向导正在不在第 1 步，
+// 读的就是这份按对话存的勾选（第 1 步每次变动立即写回，永远与所见一致）
+function readMemPicks() {
     const p = loadChatData('picks', null);
-    if (!p) {
-        run.memModes = null;
-        run.memTags = [];
-        run.memRecent = 0;
-        run.gpIds = null;
-        return;
-    }
-    run.memModes = normalizeMemModes(p.memModes) ?? memModesFromLegacy(p);
-    run.memTags = Array.isArray(p.memTags) ? p.memTags : [];
-    run.memRecent = Math.max(0, Math.round(Number(p.memRecent) || 0));
-    run.gpIds = Array.isArray(p.gpIds) ? p.gpIds : null;
+    if (!p) return { memModes: null, memTags: [], memRecent: 0, gpIds: null };
+    return {
+        memModes: normalizeMemModes(p.memModes) ?? memModesFromLegacy(p),
+        memTags: Array.isArray(p.memTags) ? p.memTags : [],
+        memRecent: Math.max(0, Math.round(Number(p.memRecent) || 0)),
+        gpIds: Array.isArray(p.gpIds) ? p.gpIds : null,
+    };
+}
+
+function applyPicks() {
+    const p = readMemPicks();
+    run.memModes = p.memModes;
+    run.memTags = p.memTags;
+    run.memRecent = p.memRecent;
+    run.gpIds = p.gpIds;
 }
 
 function savePicks() {
@@ -459,7 +463,7 @@ function renderStoryBar(container) {
         </div>
         <div class="pp-item-ops">
             <span class="menu_button" id="pp_gd_story_show">${showActive ? '隐藏' : '查看'}</span>
-            <span class="menu_button" id="pp_gd_story_review">检查当前剧情</span>
+            <span class="menu_button" id="pp_gd_story_review" title="对照最近对话检查执行情况；记忆表格按向导第 1 步勾的档位与标签召回（口径存在本对话记忆里，与「按建议重写」用的同一份）">检查当前剧情</span>
             <span class="menu_button" id="pp_gd_story_new">重新规划</span>
             <span class="menu_button" id="pp_gd_story_end" title="剧情完结：退出进行中状态，归档保留，剧情注入自动撤下">结束剧情</span>
         </div>
@@ -697,8 +701,8 @@ function goReady(container, from) {
 function renderCollect(container, main) {
     const presets = settings.guidance?.presets ?? [];
     const state = memoryState();
-    // 第一层只列开了「参与召回」的表（与记忆表格页的召回开关取交集）
-    const recallSheets = state.mirror.sheets.filter(s => (state.sheetRecall[s.uid] ?? {}).enabled !== false);
+    // 表格档位列全部镜像表——「参与召回」开关已退役，档位（停用/标签/常驻）是唯一口径
+    const recallSheets = state.mirror.sheets;
     // 表格档位：没进映射的表 = 常驻（默认全量，与旧版「全部勾选 + 不按标签」一致）
     const modeOf = uid => (run.memModes ?? {})[uid] ?? 'always';
     const sheetRowHtml = s => `
@@ -742,7 +746,7 @@ function renderCollect(container, main) {
             </div>
         </div>` : `
         <div class="pp-gd-layhead"><label class="pp-label">记忆表格召回</label></div>
-        <div class="pp-muted">没有开启「参与召回」的记忆表，本次不附带</div>`}
+        <div class="pp-muted">镜像里还没有记忆表，本次不附带</div>`}
         <label class="pp-label" title="勾选的玩法规则随分析发给模型，规划须按其约束设计；勾选随当前对话记忆，首轮默认勾当前生效中的条目。条目的添加与 AI 咨询生成在页面底部「游戏玩法」折叠区">游戏玩法</label>
         <div class="pp-gd-selp">
             ${gpItems.map(i => `<label title="勾选后该条玩法规则作为材料发给规划模型（不影响它注入主对话）"><input type="checkbox" data-c1g="${i.id}" ${(run.gpIds ?? []).includes(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
@@ -1040,7 +1044,7 @@ function renderReady(container, main) {
     const stat = collectStats({ memoryTags: wizardMemoryTags(), memoryModes: wizardMemoryModes(), memoryRecent: wizardMemoryRecent() });
     // 档位口径与第 1 步状态行同一套：常驻 X 表 · 标签 Y 表（…）· 停用 Z 表
     const memState = memoryState();
-    const sheets = memState.mirror.sheets.filter(s => (memState.sheetRecall[s.uid] ?? {}).enabled !== false);
+    const sheets = memState.mirror.sheets;
     const modeOf = uid => (run.memModes ?? {})[uid] ?? 'always';
     const always = sheets.filter(s => modeOf(s.uid) === 'always').length;
     const tagsN = sheets.filter(s => modeOf(s.uid) === 'tags').length;
@@ -1492,8 +1496,14 @@ async function reviewStory(container) {
     step = 'reviewing';
     renderMain(container);
     try {
+        // 记忆口径继承向导第 1 步：读对话记忆里的 picks（「按建议重写」恢复的也是同一份，
+        // 检查与重写天然同口径）；本对话没存过勾选 = 全量召回，与单人卡的老行为一致
+        const picks = readMemPicks();
         const data = await runStoryReview({
             planText: active.planText,
+            memoryTags: picks.memTags,
+            memoryModes: picks.memModes,
+            memoryRecent: picks.memRecent,
             onDelta: t => { streamText = t; updateStreamView(token); },
             onStage: s => { streamStage = s; updateStreamView(token); },
         });

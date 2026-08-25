@@ -7,7 +7,7 @@ import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
 import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
-import { materialSections as baseMaterialSections, gameplaySection } from "./materials.js";
+import { materialSections as baseMaterialSections, gameplaySection, memorySectionHeader } from "./materials.js";
 import { extractJson, fingerprint } from "./utils.js";
 
 // 输出 schema 两套变体：存在进行中剧情时才要求 progress（推进到哪个阶段 + 约百分比）。
@@ -386,15 +386,20 @@ export async function runPlotGuidance(options = {}) {
 /**
  * 检查报告：对照进行中剧情与最近对话，输出完成度/推进/文风/OOC/其他问题/建议。
  * 当前生效的游戏玩法条目与路人反应卡自动附带（与主对话注入同一判定），检查执行情况时对照它们。
+ * 记忆表格口径继承向导第 1 步（调用方从对话记忆的 picks 块读来传入）：单人卡全量无感；
+ * 群像卡只查同类事件重复、无关事件不计入；不带参数 = 全量（老口径兜底）。
  * @param {object} [options]
- * @param {string} options.planText   进行中剧情全文
- * @param {string} [options.userNote] 补充说明
+ * @param {string} options.planText        进行中剧情全文
+ * @param {string} [options.userNote]      补充说明
+ * @param {*}      [options.memoryTags]    第 1 步勾的标签（数组；null/[] 语义同 buildMemoryContext）
+ * @param {object} [options.memoryModes]   第 1 步的每表档位 { [uid]: 'off'|'tags'|'always' }
+ * @param {number} [options.memoryRecent]  「标签」档每表另附的表尾最新行数
  */
-export async function runStoryReview({ planText = '', userNote = '', onDelta, onStage } = {}) {
+export async function runStoryReview({ planText = '', userNote = '', memoryTags = null, memoryModes = null, memoryRecent = 0, onDelta, onStage } = {}) {
     const { chatList, hits } = collectPlanningContext();
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
-    const memoryText = buildMemoryContext();
+    const memoryText = buildMemoryContext({ tagFilter: memoryTags, sheetModes: memoryModes, latestPerSheet: memoryRecent });
 
     const userContent = [
         '## 角色设定摘要',
@@ -405,7 +410,7 @@ export async function runStoryReview({ planText = '', userNote = '', onDelta, on
         formatChatLog(chatList),
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
-        ...(memoryText ? ['## 记忆表格（已有剧情事件记录，用于查重与推新参考；全量召回）', memoryText] : []),
+        ...(memoryText ? [memorySectionHeader(memoryTags, '已有剧情事件记录，用于查重与推新参考', memoryRecent, memoryModes), memoryText] : []),
         ...gameplaySection(storageItemsInEffect(), '## 游戏玩法（当前生效的玩法规则，检查执行情况时对照它）'),
         ...reactionSection('## 路人反应（当前生效的反应卡，检查执行情况时对照它）'),
         ...(userNote ? ['## 用户补充说明', userNote] : []),

@@ -425,7 +425,6 @@ function renderSheets(container) {
                 <div class="pp-item-main"><b>${escapeHtml(sheet.name)}</b></div>
                 <div class="pp-item-ops">
                     <span class="menu_button" data-mtoggle="${escapeHtml(sheet.uid)}">行 ${sheet.rows.length} <i class="fa-solid fa-chevron-${open ? 'down' : 'right'}"></i></span>
-                    <label title="勾掉后这张表不参与剧情召回"><input type="checkbox" data-mrecall="${escapeHtml(sheet.uid)}" ${recall.enabled === false ? '' : 'checked'} /> 参与召回</label>
                     <span class="menu_button fa-solid fa-trash" data-mdelsheet="${escapeHtml(sheet.uid)}" title="从镜像删除整类（进「已删除内容」页；原表不动，内容不变不会再回来）"></span>
                 </div>
             </div>
@@ -529,12 +528,6 @@ function bindSheetEvents(container, list) {
         const uid = el.dataset.mtoggle;
         closedSheets.has(uid) ? closedSheets.delete(uid) : closedSheets.add(uid);
         renderSheets(container);
-    }));
-    list.querySelectorAll('[data-mrecall]').forEach(el => el.addEventListener('change', () => {
-        const s = memoryState();
-        const rc = (s.sheetRecall[el.dataset.mrecall] ??= {});
-        rc.enabled = el.checked;
-        persistMemory();
     }));
     list.querySelectorAll('.pp-book').forEach(book => {
         const uid = book.dataset.muid;

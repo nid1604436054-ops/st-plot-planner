@@ -8,12 +8,11 @@ import { buildLoreContext } from "./lorebook.js";
 import { buildMemoryContext, memoryState } from "./memoryTable.js";
 
 // 档位统计（记忆小节标题的口径文字用）：与 buildMemoryContext 同一集合——
-// 开了「参与召回」的镜像表按 sheetModes 数档，没进映射的表算常驻
+// 镜像表按 sheetModes 数档，没进映射的表算常驻
 function sheetModeCounts(sheetModes) {
     const state = memoryState();
     const counts = { always: 0, tags: 0, off: 0 };
     for (const s of state.mirror.sheets) {
-        if ((state.sheetRecall[s.uid] ?? {}).enabled === false) continue;
         counts[sheetModes[s.uid] ?? 'always']++;
     }
     return counts;
