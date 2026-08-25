@@ -809,13 +809,31 @@ function renderCollect(container, main) {
         }
         const tags = [...counts.entries()].sort((a, b) => b[1] - a[1]);
         chipsBox.innerHTML = tags.length
-            ? tags.map(([t, n]) => `<label class="pp-mem-chip" title="带这个标签的记忆行"><input type="checkbox" data-mtag="${escapeHtml(t)}" ${run.memTags.includes(t) ? 'checked' : ''}/> ${escapeHtml(t)} (${n})</label>`).join('')
+            ? `<label class="pp-mem-chip" title="没全勾时勾上=一键勾选全部标签；已全勾时点掉=一键全清"><input type="checkbox" id="pp_gd_c1_all" /> 全选</label>`
+                + tags.map(([t, n]) => `<label class="pp-mem-chip" title="带这个标签的记忆行"><input type="checkbox" data-mtag="${escapeHtml(t)}" ${run.memTags.includes(t) ? 'checked' : ''}/> ${escapeHtml(t)} (${n})</label>`).join('')
             : '<span class="pp-muted">所选表格里还没有带标签的行：到「记忆表格」页打标签</span>';
-        chipsBox.querySelectorAll('[data-mtag]').forEach(cb => cb.addEventListener('change', () => {
+        const applyTags = () => {
             run.memTags = [...chipsBox.querySelectorAll('[data-mtag]:checked')].map(x => x.dataset.mtag);
             savePicks();
             persistWizard();
             refreshMem();
+        };
+        const allBox = chipsBox.querySelector('#pp_gd_c1_all');
+        // 全选框跟随当前勾选态（半勾显示不确定态）；点它 = 未全勾→全勾、已全勾→全清
+        const syncAll = () => {
+            if (!allBox) return;
+            const boxes = [...chipsBox.querySelectorAll('[data-mtag]')];
+            allBox.checked = boxes.length > 0 && boxes.every(b => b.checked);
+            allBox.indeterminate = !allBox.checked && boxes.some(b => b.checked);
+        };
+        syncAll();
+        allBox?.addEventListener('change', () => {
+            chipsBox.querySelectorAll('[data-mtag]').forEach(cb => { cb.checked = allBox.checked; });
+            applyTags();
+        });
+        chipsBox.querySelectorAll('[data-mtag]').forEach(cb => cb.addEventListener('change', () => {
+            applyTags();
+            syncAll();
         }));
     };
     renderChips();

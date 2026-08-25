@@ -5,7 +5,7 @@
 import {
     memoryState, syncMemory, mergeMirrorFromSource, persistMemory,
     deleteMirrorRow, deleteMirrorSheet, undeleteRow, purgeMootTombstones,
-    setRowTags, markSeen, newRowCount, allTags, buildMemoryContext,
+    setRowTags, markSeen, newRowCount,
     restoreFromBackup, editMirrorRow, acceptSourceRow, addMirrorRow, autoTagByVocabulary,
 } from "../../memoryTable.js";
 import { parseKeys } from "../../lorebook.js";
@@ -65,15 +65,13 @@ export const memoryTab = {
             <div class="pp-section">
                 <div class="pp-btn-row">
                     <div id="pp_mem_sync" class="menu_button" title="从记忆表格插件读取最新数据：更新原表库、归档备份，并把新增/改动合并进镜像（你编辑过的行不覆盖，删除过的不复活）">同步记忆表格</div>
-                    <div id="pp_mem_tag_btn" class="menu_button" title="配置标签词表与打标区域，用 AI 给镜像的行批量打标签；召回和剧情指导的「按标签匹配」用的就是这些标签">打标签</div>
+                    <div id="pp_mem_tag_btn" class="menu_button" title="配置标签词表与打标区域，用 AI 给镜像的行批量打标签；剧情指导第 1 步的「按标签匹配」用的就是这些标签">打标签</div>
                     <div id="pp_mem_bk_btn" class="menu_button">备份与恢复</div>
-                    <div id="pp_mem_rc_btn" class="menu_button">召回设置</div>
                 </div>
                 <div id="pp_mem_status" class="pp-muted"></div>
                 <div id="pp_mem_wipe"></div>
                 <div id="pp_mem_tagai" style="display:none"></div>
                 <div id="pp_mem_backups" style="display:none"></div>
-                <div id="pp_mem_recall" style="display:none"></div>
             </div>
             <div class="pp-group-head">
                 <b class="pp-group-title">镜像 · 剧情召回用（随意编辑，不影响原表）</b>
@@ -105,10 +103,6 @@ export const memoryTab = {
         });
         container.querySelector('#pp_mem_bk_btn').addEventListener('click', () => {
             const el = container.querySelector('#pp_mem_backups');
-            el.style.display = el.style.display === 'none' ? '' : 'none';
-        });
-        container.querySelector('#pp_mem_rc_btn').addEventListener('click', () => {
-            const el = container.querySelector('#pp_mem_recall');
             el.style.display = el.style.display === 'none' ? '' : 'none';
         });
         container.querySelector('#pp_mem_delbtn').addEventListener('click', () => {
@@ -147,7 +141,6 @@ function renderAll(container) {
     renderWipe(container);
     renderTagging(container);
     renderBackups(container);
-    renderRecall(container);
     renderSheets(container);
     renderSource(container);
 }
@@ -208,7 +201,7 @@ function renderTagging(container) {
     const sheets = state.mirror.sheets;
 
     el.innerHTML = `
-    <b title="把镜像里还没标签的行分批交给「设置」页配置的 API，按下方的词表自动打标签（模型只能从词表里选，不能自拟）；一行可以同时命中多个标签——只要符合词表就都会打上，符合与否由模型按注释自行判断。之后「召回设置」和剧情指导第 1 步的「按标签匹配」用的就是这些标签">打标签</b>
+    <b title="把镜像里还没标签的行分批交给「设置」页配置的 API，按下方的词表自动打标签（模型只能从词表里选，不能自拟）；一行可以同时命中多个标签——只要符合词表就都会打上，符合与否由模型按注释自行判断。之后剧情指导第 1 步的「按标签匹配」用的就是这些标签">打标签</b>
     <label class="pp-label" title="打标时模型只能从这些名字里选；注释可选，帮模型判断什么内容算这个标签——一行可同时命中多个标签，全都符合就全打上">标签词表（一行一个，注释可选）</label>
     <div id="pp_mem_vocab"></div>
     <div class="pp-btn-row">
@@ -276,10 +269,10 @@ function renderTagging(container) {
                 onProgress: (a, b) => { status.textContent = `打标中…… ${a}/${b}`; },
             });
             status.textContent = r.total
-                ? `完成：${r.tagged}/${r.total} 行打上标签${r.failed ? `（${r.failed} 行所在批次失败被跳过，再点一次只补这些）` : ''}（下方「召回设置」与剧情指导里就能按这些标签筛选）`
+                ? `完成：${r.tagged}/${r.total} 行打上标签${r.failed ? `（${r.failed} 行所在批次失败被跳过，再点一次只补这些）` : ''}（剧情指导第 1 步里就能按这些标签筛选）`
                 : '没有需要打标的行（都有标签了？勾「覆盖已有标签」重打）';
             toastr.success(`打标完成：${r.tagged} 行${r.failed ? `，${r.failed} 行失败跳过` : ''}`);
-            renderAll(container);   // 刷新召回设置区的标签
+            renderAll(container);
         } catch (err) {
             status.textContent = '';
             toastr.error(String(err.message ?? err));
@@ -323,35 +316,6 @@ function renderBackups(container) {
         const sheets = findSheets(btn.dataset.export);
         if (sheets) downloadJson(`memory-backup-${btn.dataset.export}.json`, sheets);
     }));
-}
-
-function renderRecall(container) {
-    const state = memoryState();
-    const el = container.querySelector('#pp_mem_recall');
-    const tags = allTags(state);
-    el.innerHTML = `
-    <b title="剧情规划注入时使用镜像里未删除的行。不勾任何标签 = 全部行；勾选后只注入带这些标签的行">召回设置</b>
-    <div class="pp-mem-tagbar">
-        ${tags.length ? tags.map(([t, n]) => `
-        <label class="pp-mem-chip"><input type="checkbox" data-rtag="${escapeHtml(t)}" ${state.recallTags.includes(t) ? 'checked' : ''} /> ${escapeHtml(t)} (${n})</label>
-        `).join('') : '<span class="pp-muted">还没有任何标签，手动在行旁输入，或点上方「打标签」按词表批量打</span>'}
-    </div>
-    <div class="pp-btn-row"><span id="pp_mem_rc_preview" class="menu_button">预览召回内容</span></div>
-    <pre id="pp_mem_rc_out" class="pp-muted" style="display:none"></pre>`;
-
-    el.querySelectorAll('[data-rtag]').forEach(box => box.addEventListener('change', () => {
-        const t = box.dataset.rtag;
-        const set = new Set(state.recallTags);
-        box.checked ? set.add(t) : set.delete(t);
-        state.recallTags = [...set];
-        persistMemory();
-    }));
-    el.querySelector('#pp_mem_rc_preview').addEventListener('click', () => {
-        const out = el.querySelector('#pp_mem_rc_out');
-        const text = buildMemoryContext();
-        out.style.display = '';
-        out.textContent = text || '（没有可召回的内容）';
-    });
 }
 
 // ---------------------------------------------------------------------------
@@ -513,7 +477,6 @@ function bindRow(container, tr, uid) {
         setRowTags(rid, tags);
         ev.target.value = tags.join(',');
         renderStatus(container);
-        renderRecall(container);
     });
     tr.querySelector('[data-medit]')?.addEventListener('click', () => {
         editingRow = rid;

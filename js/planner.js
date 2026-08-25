@@ -405,7 +405,7 @@ export async function runStoryReview({ planText = '', userNote = '', onDelta, on
         formatChatLog(chatList),
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
-        ...(memoryText ? ['## 记忆表格（已有剧情事件记录，用于查重与推新参考；按记忆表格页召回标签筛选）', memoryText] : []),
+        ...(memoryText ? ['## 记忆表格（已有剧情事件记录，用于查重与推新参考；全量召回）', memoryText] : []),
         ...gameplaySection(storageItemsInEffect(), '## 游戏玩法（当前生效的玩法规则，检查执行情况时对照它）'),
         ...reactionSection('## 路人反应（当前生效的反应卡，检查执行情况时对照它）'),
         ...(userNote ? ['## 用户补充说明', userNote] : []),

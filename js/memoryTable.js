@@ -125,7 +125,6 @@ export function memoryState() {
         tombstones: {},                         // { [源指纹]: { at, sheetUid, sheetName, columns, cells } }
         tags: {},                               // { [rid]: ['战斗','背叛'] }
         sheetRecall: {},                        // { [sheetUid]: { enabled, columns:[原列下标] } }
-        recallTags: [],                         // 召回命中的标签；空 = 全部行
         matchTags: [],                          // 标签匹配词表（剧情指导向导）：[{name, note}]
         matchSheets: [],                        // 打标区域：表 uid；空 = 全部镜像表
         seen: [],                               // 已看过的行 rid，用于「新」标
@@ -135,6 +134,7 @@ export function memoryState() {
     if (state.version !== 2) migrateV1(state);
     state.matchTags ??= [];
     state.matchSheets ??= [];
+    delete state.recallTags;   // 旧版「召回设置」面板的标签筛选已删（与向导标签过滤/标签检索重合）：残留值不能继续悄悄过滤检查报告
     if (state.backups.length > MAX_BACKUPS) state.backups.length = MAX_BACKUPS;   // 备份上限 20→3 的一次性收紧
     return state;
 }
@@ -166,7 +166,6 @@ function migrateV1(state) {
     state.seen ??= [];
     state.tombstones ??= {};
     state.sheetRecall ??= {};
-    state.recallTags ??= [];
     state.backups ??= [];
     state.tagStandard ??= '';
     state.wipeAlert ??= null;
@@ -410,14 +409,6 @@ export function newRowCount(state) {
         n + s.rows.filter(r => !seen.has(r.rid)).length, 0);
 }
 
-export function allTags(state) {
-    const counts = new Map();
-    for (const list of Object.values(state.tags)) {
-        for (const t of list) counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-}
-
 // ---------------------------------------------------------------------------
 // AI 打标签（记忆表格页「打标签」区）：闭集词表 + 打标区域，给镜像行打标签。
 // 标签只能从词表里选（不自拟），可限定只处理某些表；
@@ -515,11 +506,11 @@ function pickColumns(values, indices) {
 
 export function buildMemoryContext({ tagFilter = null, sheetUids = null, sheetModes = null, latestPerSheet = 0, maxChars } = {}) {
     const state = memoryState();
-    // tagFilter：null = 按记忆表格页召回标签；数组 = 按标签筛（空数组 = 不筛）。
+    // tagFilter：null/[] = 不筛（全量）；数组 = 按标签筛。
     // sheetModes：{ [表uid]: 'off' | 'tags' | 'always' }；传了它档位优先——常驻表无视标签全量带出、
     // 停用表整张不带、标签档的表只带命中行（没勾任何标签时退化为只走表尾最新窗口）；
-    // 不传 = 老口径：全部表统一按 tagFilter 筛（记忆表格页预览 / 检查报告 / 反应卡走这条）
-    const want = (tagFilter ?? state.recallTags).filter(Boolean);
+    // 不传 = 全部表统一全量（检查报告 / 老口径走这条）
+    const want = (tagFilter ?? []).filter(Boolean);
     const recent = Math.max(0, Math.round(Number(latestPerSheet) || 0));
     const only = Array.isArray(sheetUids) ? new Set(sheetUids) : null;   // null = 全部；空数组 = 一张表都不带
     const blocks = [];

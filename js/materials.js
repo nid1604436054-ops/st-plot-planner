@@ -35,9 +35,7 @@ export function memorySectionHeader(memoryTags, purpose = '已有剧情事件记
             c.off ? `停用 ${c.off} 表` : '',
         ].filter(Boolean).join('，') || '全部停用';
     } else {
-        mode = memoryTags == null
-            ? '按记忆表格页召回标签筛选'
-            : (Array.isArray(memoryTags) && memoryTags.length ? `按标签召回：${memoryTags.join('、')}` : '全量召回');
+        mode = Array.isArray(memoryTags) && memoryTags.length ? `按标签召回：${memoryTags.join('、')}` : '全量召回';
         if (recent > 0 && Array.isArray(memoryTags) && memoryTags.length) mode += `，无论标签另附每表最新 ${recent} 行`;
     }
     return `## 记忆表格（${purpose}；${mode}）`;
@@ -62,9 +60,9 @@ export function gameplaySection(items, header) {
  * 组装共用的材料小节：角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 进行中剧情 / 历史摘要。
  * 各小节标题带用途说明；调用方用途不同时可用 headers 覆写对应小节的口径文字。
  * 记忆行行尾自带标签（buildMemoryContext），同标签同类事件的防复刻由规划系统提示词一句话约束，不做专门功能
- * @param {*}      [options.memoryTags]        记忆表格召回方式：null=按记忆表格页召回标签,
- *                                             []/['a','b']=按标签, false=本次不附带（带 memoryModes
- *                                             时标签只作用于「标签」档的表）
+ * @param {*}      [options.memoryTags]        记忆表格召回方式：null/[]=全量（带 memoryModes 时
+ *                                             标签只作用于「标签」档的表）, ['a','b']=按标签,
+ *                                             false=本次不附带
  * @param {*}      [options.memorySheets]      记忆表格表范围：null=全部（开了召回的表），数组=只带勾选的表（空数组=不带）
  * @param {object} [options.memoryModes]       每表召回档位 { [uid]: 'off' 停用 | 'tags' 按标签 | 'always' 常驻全量 }；
  *                                             传了它档位优先（memorySheets 让位），常驻表无视标签全量、

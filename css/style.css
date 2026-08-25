@@ -512,9 +512,8 @@
     font-size: 12px;
 }
 
-/* 召回列筛选 / 标签筛选条 */
-.pp-mem-cols,
-.pp-mem-tagbar {
+/* 召回列筛选条 */
+.pp-mem-cols {
     display: flex;
     flex-wrap: wrap;
     gap: 6px 12px;
@@ -533,8 +532,7 @@
     margin: 6px 0 0;
 }
 
-.pp-mem-cols label,
-.pp-mem-tagbar label {
+.pp-mem-cols label {
     display: inline-flex;
     align-items: center;
     gap: 4px;
