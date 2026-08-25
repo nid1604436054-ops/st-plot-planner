@@ -922,7 +922,7 @@
     text-align: center;
 }
 
-/* 统计行：token 规模 / 材料构成 / 复制按钮，贴在标题栏下 */
+/* 统计行：token 规模 / 检索框 / 命中数 / 展开收起 / 复制，贴在标题栏下（可换行） */
 .pp-viewer-stat {
     display: flex;
     flex-wrap: wrap;
@@ -933,9 +933,78 @@
     font-size: 0.9em;
 }
 
+/* 按钮不许收缩不许折行——被长统计文字挤窄后文字会竖排（一个字一行的教训） */
 .pp-viewer-stat .menu_button {
     margin: 0;
     padding: 3px 10px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+
+/* 检索框：占中间富余宽度，封顶不抢按钮的位 */
+.pp-viewer-stat input[type="text"] {
+    flex: 1 1 140px;
+    min-width: 100px;
+    max-width: 260px;
+    margin: 0;
+    box-sizing: border-box;
+}
+
+/* 提示词分块：每个材料小节一个 <details> 折叠块（世界书/记忆表格/最近对话…各一块），
+   块头 = 小节名 + 精确字数（检索时再加命中数），点开看该块正文 */
+.pp-viewer-block {
+    border: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
+    border-radius: 6px;
+    overflow: hidden;   /* 圆角裁住块头与正文 */
+}
+
+.pp-viewer-block > summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    align-items: baseline;
+    padding: 6px 10px;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;   /* 藏原生三角，用 ::before 的箭头替代 */
+}
+
+.pp-viewer-block > summary::-webkit-details-marker { display: none; }
+
+.pp-viewer-block > summary::before {
+    content: '▸';
+    opacity: 0.6;
+}
+
+.pp-viewer-block[open] > summary::before { content: '▾'; }
+
+.pp-viewer-block[open] > summary {
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
+}
+
+.pp-viewer-btitle {
+    font-weight: bold;
+    overflow-wrap: anywhere;
+}
+
+.pp-viewer-block > summary .pp-muted { font-weight: normal; }
+
+/* 检索命中数徽标 */
+.pp-viewer-hitn {
+    border: 1px solid currentColor;
+    border-radius: 8px;
+    padding: 0 6px;
+    font-size: 0.85em;
+}
+
+/* 块内正文的贴边留白（.pp-viewer-pre 本体在下面统一给） */
+.pp-viewer-block .pp-viewer-pre { padding: 8px 10px; }
+
+/* 检索高亮：固定亮黄底深字，深浅主题都看得清 */
+.pp-viewer mark {
+    background: #ffd54f;
+    color: #1f1b12;
+    border-radius: 2px;
 }
 
 /* 正文区：整窗唯一的滚动容器，窗高封顶时长内容在这里滚 */

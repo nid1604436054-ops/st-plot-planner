@@ -207,6 +207,22 @@ async function copyText(text) {
     return ok;
 }
 
+// 检索高亮：原文按命中切开逐段转义、命中段包 <mark>（在转义后文本上匹配会踩中转义序列的坑），
+// 大小写不敏感；返回拼好的 html 与命中数
+function markMatches(text, q) {
+    const lower = text.toLowerCase();
+    const lq = q.toLowerCase();
+    let html = '', i = 0, count = 0;
+    for (;;) {
+        const j = lower.indexOf(lq, i);
+        if (j < 0) { html += escapeHtml(text.slice(i)); break; }
+        html += escapeHtml(text.slice(i, j)) + '<mark>' + escapeHtml(text.slice(j, j + q.length)) + '</mark>';
+        count++;
+        i = j + q.length;
+    }
+    return { html, count };
+}
+
 // ---------------------------------------------------------------------------
 // 第 1 步勾选按对话记忆（chatdata.js 的 picks 块）：记忆表格的每表档位/标签/最新行数、
 // 游戏玩法的勾选都按对话各自记住——同一对话做完一轮规划回来不用重勾，换对话各用各的。
@@ -917,8 +933,9 @@ function renderCollect(container, main) {
         }
     });
 
-    // 完整提示词预览走悬浮查看器：全文在窗里滚着看（标题栏下带规模统计与「复制全文」），
-    // 不再往页面底部展开——不用翻大半个面板找输出
+    // 完整提示词预览走悬浮查看器：按材料类型分块折叠（系统提示词 + 世界书/记忆表格/
+    // 最近对话…各一块，块头显示小节名与精确字数），统计行带检索（命中的块自动展开高亮、
+    // 没命中的临时藏起）、「全部展开/收起」与「复制全文」
     main.querySelector('#pp_gd_c1_preview').addEventListener('click', () => {
         try {
             const s = storyState();
@@ -943,13 +960,53 @@ function renderCollect(container, main) {
             const usrTok = estimateTokens(usrMsg.content);
             const { sections = [] } = built;
             const totalChars = sections.reduce((n, x) => n + x.chars, 0);
-            const secLine = sections.map(x => `${x.title} ${x.chars.toLocaleString()} 字`).join(' · ');
             const fullText = `【系统提示词】\n${sysMsg.content}\n\n【用户消息】\n${usrMsg.content}`;
+            // 块 = 系统提示词（含全局预设）+ 用户消息里的每个材料小节（planner 逐节带回正文）
+            const blocks = [
+                { title: '系统提示词', header: '系统提示词（「设置」页启用的全局预设已拼在末尾）', body: sysMsg.content, chars: sysMsg.content.length },
+                ...sections.map(x => ({ title: x.title, header: x.header, body: x.body, chars: x.chars })),
+            ];
             const mask = openViewer('完整提示词预览',
                 `<span title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考；实际分词通常更省（中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：分析前先轻量判断是否需要现实信息（只发剧情简报，纯虚构默认不检索），判需要才检索，纪要追加为附加小节，不在此预览内' : ''}">材料共 ${totalChars.toLocaleString()} 字 · 粗估约 ${(sysTok + usrTok).toLocaleString()} tokens</span>`
-                + `<span class="pp-muted" title="逐小节的精确字符数（非估算）。世界书一节只含关键词命中或状态为「常驻」的条目，不是全部词条——想让重要词条每次都带上，到「世界书」页把状态切到「常驻」">材料构成：${escapeHtml(secLine)}</span>`
+                + `<input type="text" id="pp_gd_pv_search" class="text_pole" placeholder="检索…" title="在全部块里检索（大小写不敏感）：命中的块自动展开并高亮、没命中的临时藏起，清空恢复全览" />`
+                + `<span id="pp_gd_pv_hits" class="pp-muted"></span>`
+                + `<span class="menu_button" id="pp_gd_pv_expand" title="把当前看得见的块全部展开/收起（检索时只作用于命中的块）">全部展开</span>`
                 + `<span class="menu_button" id="pp_gd_pv_copy" style="margin-left:auto" title="复制系统提示词与用户消息全文，可直接粘到别处调试"><i class="fa-regular fa-copy"></i> 复制全文</span>`);
-            mask.querySelector('.pp-viewer-body').innerHTML = `<pre class="pp-viewer-pre">${escapeHtml(fullText)}</pre>`;
+            const bodyEl = mask.querySelector('.pp-viewer-body');
+            const hitsEl = mask.querySelector('#pp_gd_pv_hits');
+            const expandEl = mask.querySelector('#pp_gd_pv_expand');
+            const renderBlocks = () => {
+                const query = mask.querySelector('#pp_gd_pv_search').value.trim();
+                let hitBlocks = 0, hitCount = 0;
+                bodyEl.innerHTML = blocks.map(b => {
+                    let bodyHtml, count = 0;
+                    if (query) {
+                        const m = markMatches(b.body, query);
+                        bodyHtml = m.html;
+                        count = m.count;
+                        if (!count) return '';   // 检索时没命中的块不渲染
+                        hitBlocks++;
+                        hitCount += count;
+                    } else {
+                        bodyHtml = escapeHtml(b.body);
+                    }
+                    return `
+                    <details class="pp-viewer-block"${query ? ' open' : ''}>
+                        <summary title="${escapeHtml(b.header)}"><span class="pp-viewer-btitle">${escapeHtml(b.title)}</span><span class="pp-muted">${b.chars.toLocaleString()} 字</span>${count ? ` <span class="pp-viewer-hitn">${count} 处</span>` : ''}</summary>
+                        <pre class="pp-viewer-pre">${bodyHtml}</pre>
+                    </details>`;
+                }).join('') || `<div class="pp-muted">没有命中「${escapeHtml(query)}」的块，换个词或清空检索</div>`;
+                hitsEl.textContent = query ? `命中 ${hitCount} 处 · ${hitBlocks}/${blocks.length} 块` : '';
+                expandEl.textContent = '全部展开';   // 重画后都回到折叠态，按钮文案同步归位
+            };
+            renderBlocks();
+            mask.querySelector('#pp_gd_pv_search').addEventListener('input', renderBlocks);
+            expandEl.addEventListener('click', () => {
+                const items = [...bodyEl.querySelectorAll('details')];
+                const anyClosed = items.some(d => !d.open);
+                items.forEach(d => { d.open = anyClosed; });
+                expandEl.textContent = anyClosed ? '全部收起' : '全部展开';
+            });
             mask.querySelector('#pp_gd_pv_copy').addEventListener('click', async () => {
                 if (await copyText(fullText)) toastr.success('已复制到剪贴板');
                 else toastr.error('复制失败：浏览器未授权剪贴板');

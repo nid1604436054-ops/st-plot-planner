@@ -339,11 +339,14 @@ export function buildGuidanceMessages(options = {}) {
     const userContent = all.join('\n\n');
 
     // 逐小节精确字数（「查看完整提示词」预览展示用）：数组按「标题、正文」交替排布。
-    // 统计的是字符数不是 token 估算——世界书一节偏小，说明大部分词条没被关键词带出
+    // 统计的是字符数不是 token 估算——世界书一节偏小，说明大部分词条没被关键词带出。
+    // header/body 随条带回：预览的悬浮查看器按小节分块折叠，每块要有自己的正文
     const sections = [];
     for (let i = 0; i < all.length; i += 2) {
         sections.push({
             title: all[i].replace(/^## /, '').replace(/（.*$/, ''),
+            header: all[i],
+            body: all[i + 1] ?? '',
             chars: all[i].length + (all[i + 1]?.length ?? 0),
         });
     }
