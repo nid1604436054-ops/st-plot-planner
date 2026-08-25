@@ -126,6 +126,20 @@
     align-items: center;
 }
 
+/* 按钮文字横排铁则（多次返工的坑，全局一次治死）：插件内按钮一律不许折行、不许被
+   flex 挤窄——挤窄后文字会一个字一行竖着排；容器放不下靠容器自己的 wrap 换行解决。
+   例外 .pp-option：它是「选项名 + 幕后提示」靠换行排布的两行结构（规则放后面同权重胜出） */
+.pp-drawer .menu_button,
+.pp-viewer .menu_button {
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.pp-drawer .pp-option,
+.pp-viewer .pp-option {
+    white-space: normal;
+}
+
 .pp-grid2 {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -659,9 +673,12 @@
 
 .pp-gd-rv { overflow-wrap: anywhere; }
 
-/* 事件卡（竖排布局的 pp-item 变体）：随机事件闸口与第 1 步路人反应卡共用；pp-gd-sel = 选中态描边 */
+/* 事件卡（竖排布局的 pp-item 变体）：随机事件闸口与第 1 步路人反应卡共用；pp-gd-sel = 选中态描边。
+   列方向必须关掉从 .pp-item 继承的 wrap：wrap 叠加 column 后，卡片高度一受限子项会被
+   拆成多个一字符宽的窄列——反应卡整卡文字竖排的真正根凶 */
 .pp-gd-evcard {
     flex-direction: column;
+    flex-wrap: nowrap;
     align-items: stretch;
     gap: 6px;
 }

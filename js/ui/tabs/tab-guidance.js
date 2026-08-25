@@ -1,6 +1,6 @@
 // 剧情指导页签：分步规划向导 + 随机事件工具区 + 游戏玩法工具区（均挂在页面底部）
 // ① 收集确认（本地检索材料 + 记忆表格档位（停用/标签/常驻）+ 标签勾选与每表最新行补底 + 游戏玩法勾选
-// + 路人反应（与规划共用本页同一批材料：生成反应卡弹悬浮窗编辑→转隐身注入 或 计入本次规划材料，两路互斥，可放弃）+ 剧情构思；
+// + 路人反应（整个板块住悬浮面板，第 1 步只留一个入口键：面板内生成/编辑→转隐身注入 或 计入本次规划材料，两路互斥，可放弃）+ 剧情构思；
 // 这些勾选按对话记忆存聊天文件，同一对话做完一轮回来不用重勾；预设不在本页勾——已全局化，
 // 「设置」页启用后插件发给大模型的任何调用都自动带上）
 // → ② 随机事件闸口（可跳过）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（打回重写 / 确认采用 / 不保存）
@@ -748,14 +748,7 @@ function renderCollect(container, main) {
             ${gpItems.map(i => `<label title="勾选后该条玩法规则作为材料发给规划模型（不影响它注入主对话）"><input type="checkbox" data-c1g="${i.id}" ${(run.gpIds ?? []).includes(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
             || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
-        <label class="pp-label" title="材料＝本页上方同一批（记忆表格档位与标签、玩法勾选、世界书、进行中剧情），不是旧版反应区那套独立勾选。生成完弹悬浮窗查看编辑，两路任选：转隐身注入挂到主对话（生效期间规划与检查自动附带同一口径），或计入本次规划材料、随第 3 步分析发给规划模型；两路互斥，重新生成会重置，不要可随时放弃">路人反应（与规划共用本页材料）</label>
-        <textarea id="pp_gd_rx_note" class="text_pole textarea_compact" rows="2" placeholder="指导意见（可选：期望烈度、余波方向、要避开什么）"></textarea>
-        <div class="pp-btn-row">
-            <span id="pp_gd_rx_gen" class="menu_button">生成反应卡</span>
-            <span id="pp_gd_rx_open" class="menu_button" hidden title="重新打开悬浮窗，查看/编辑当前这张反应卡">查看反应卡</span>
-            <span id="pp_gd_rx_drop" class="menu_button" hidden title="丢弃当前反应卡（已转隐身注入的不受影响）">放弃反应卡</span>
-        </div>
-        <div class="pp-muted" id="pp_gd_rx_state" hidden></div>
+        <div class="pp-btn-row"><span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见、生成反应卡（材料自动带本页上方同一批：记忆表格档位与标签、玩法勾选、世界书、进行中剧情）、编辑卡面，然后两路任选——转隐身注入挂主对话（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径）或计入本次规划材料随分析发给模型，两路互斥；不要了随时放弃，重新生成会重置">路人反应</span></div>
         <label class="pp-label">剧情构思方向</label>
         <textarea id="pp_gd_note" class="text_pole textarea_compact" rows="3" placeholder="已有的想法、约束或重点（可选，随分析发给模型）"></textarea>
         <div class="pp-btn-row">
@@ -867,71 +860,65 @@ function renderCollect(container, main) {
         refreshMem();
     }));
 
-    // 路人反应卡：材料＝本页同一批（wizardMaterials：记忆表格档位/标签/最新行 + 玩法勾选；
-    // 世界书沿用本对话书单，进行中剧情与分析同源），生成结果随向导快照留底、跳步/刷新不丢。
-    // 卡片整张住悬浮窗：生成完自动弹窗，「查看反应卡」随时再开，页面只留一行状态——
-    // 第 1 步不被撑长，下面的规划操作不被压下去；不要就「放弃反应卡」清掉。
+    // 路人反应整套住悬浮面板：第 1 步只留一个入口按钮，指导意见/生成/编辑/两路操作/放弃
+    // 全在面板里（面板套卡片），页面不被这个板块占一行以外的地盘。
+    // 材料＝本页同一批（wizardMaterials：记忆表格档位/标签/最新行 + 玩法勾选；世界书沿用
+    // 本对话书单，进行中剧情与分析同源），生成结果随向导快照留底、跳步/刷新不丢。
     // 两路互斥：转注入后规划与检查经 activeReactionInjections 自动附带同一口径，
     // 「计入规划材料」只在未注入时才有意义——注入即自动取消计入，防同文重复进提示词
-    const rxNoteEl = main.querySelector('#pp_gd_rx_note');
-    rxNoteEl.value = run.rxNote;
-    rxNoteEl.addEventListener('input', () => { run.rxNote = rxNoteEl.value; persistWizard(); });
-    const rxOpenEl = main.querySelector('#pp_gd_rx_open');
-    const rxDropEl = main.querySelector('#pp_gd_rx_drop');
-    const rxStateEl = main.querySelector('#pp_gd_rx_state');
-    const renderRxState = () => {
-        const card = run.reaction;
-        rxOpenEl.hidden = rxDropEl.hidden = rxStateEl.hidden = !card;
-        if (!card) return;
-        const stars = '★'.repeat(card.salience) + '☆'.repeat(5 - card.salience);
-        rxStateEl.textContent = `已生成反应卡 · 显著性 ${stars}（${card.salience}/5）${card.inPlan ? ' · 已计入本次规划材料' : ''}`;
-    };
-    const dropReaction = () => {
-        run.reaction = null;
-        persistWizard();
-        closeViewer();
-        renderRxState();
-        refreshMem();
-        toastr.info('已放弃反应卡（已转隐身注入的不受影响）');
-    };
-    const openRxViewer = () => {
-        const card = run.reaction;
-        if (!card) return;
-        if (!card.text) card.text = composeReactionText(card, 0);   // 老快照没存 text：按卡面重算
-        const body = openViewer('路人反应卡').querySelector('.pp-viewer-body');
+    const rxBtnEl = main.querySelector('#pp_gd_rx_panel');
+    const syncRxBtn = () => { rxBtnEl.textContent = run.reaction ? '路人反应（已有卡，点开处理）' : '路人反应'; };
+    const openRxPanel = () => {
+        const body = openViewer('路人反应').querySelector('.pp-viewer-body');
         const render = () => {
-            body.innerHTML = rxCardHtml(card);
-            wireRxCard(body, card, { onChange: rerender, onDrop: dropReaction });
+            const card = run.reaction;
+            if (card && !card.text) card.text = composeReactionText(card, 0);   // 老快照没存 text：按卡面重算
+            body.innerHTML = `
+            <label class="pp-label" title="写给生成模型的指导意见：期望烈度、余波方向、要避开什么">指导意见（可选）</label>
+            <textarea id="pp_gd_rx_note" class="text_pole textarea_compact" rows="2" placeholder="期望烈度、余波方向、要避开什么"></textarea>
+            <div class="pp-btn-row">
+                <span id="pp_gd_rx_gen" class="menu_button">生成反应卡</span>
+            </div>
+            ${card ? rxCardHtml(card) : '<div class="pp-muted" title="材料自动带第 1 步上方同一批：记忆表格档位与标签、玩法勾选、世界书、进行中剧情">还没生成过卡——材料自动带本页上方同一批，生成完在下方编辑与选择去向</div>'}`;
+            const noteEl = body.querySelector('#pp_gd_rx_note');
+            noteEl.value = run.rxNote;
+            noteEl.addEventListener('input', () => { run.rxNote = noteEl.value; persistWizard(); });   // 只回存不重画，输入不掉焦点
+            if (card) wireRxCard(body, card, { onChange: rerender, onDrop: dropCard });
+            const genBtn = body.querySelector('#pp_gd_rx_gen');
+            genBtn.addEventListener('click', async () => {
+                if (rxBusy) return;
+                rxBusy = true;
+                genBtn.textContent = '生成中……';
+                try {
+                    const gen = await generateReactionCard({
+                        note: run.rxNote,
+                        materials: wizardMaterials(),
+                        activePlan: activeStory()?.planText ?? '',
+                    });
+                    run.reaction = { ...gen, text: composeReactionText(gen, 0), edited: false, inPlan: false };
+                    persistWizard();
+                    rerender();   // 面板整面重画：按钮文案复位、卡片上桌
+                } catch (err) {
+                    toastr.error(String(err.message ?? err));
+                    genBtn.textContent = '生成反应卡';
+                } finally {
+                    rxBusy = false;
+                }
+            });
+            syncRxBtn();
         };
-        const rerender = () => { render(); renderRxState(); refreshMem(); };
+        const dropCard = () => {
+            run.reaction = null;
+            persistWizard();
+            render();   // 面板留着开（回到未生成状态），关不关窗交给用户
+            refreshMem();
+            toastr.info('已放弃反应卡（已转隐身注入的不受影响）');
+        };
+        const rerender = () => { render(); refreshMem(); };
         render();
     };
-    renderRxState();
-    rxOpenEl.addEventListener('click', openRxViewer);
-    rxDropEl.addEventListener('click', dropReaction);
-    main.querySelector('#pp_gd_rx_gen').addEventListener('click', async () => {
-        if (rxBusy) return;
-        rxBusy = true;
-        const btn = main.querySelector('#pp_gd_rx_gen');
-        btn.textContent = '生成中……';
-        try {
-            const card = await generateReactionCard({
-                note: run.rxNote,
-                materials: wizardMaterials(),
-                activePlan: activeStory()?.planText ?? '',
-            });
-            run.reaction = { ...card, text: composeReactionText(card, 0), edited: false, inPlan: false };
-            persistWizard();
-            renderRxState();
-            refreshMem();
-            openRxViewer();
-        } catch (err) {
-            toastr.error(String(err.message ?? err));
-        } finally {
-            rxBusy = false;
-            btn.textContent = '生成反应卡';
-        }
-    });
+    syncRxBtn();
+    rxBtnEl.addEventListener('click', openRxPanel);
 
     // 完整提示词预览走悬浮查看器：按材料类型分块折叠（系统提示词 + 世界书/记忆表格/
     // 最近对话…各一块，块头显示小节名与精确字数），统计行带检索（命中的块自动展开高亮、
