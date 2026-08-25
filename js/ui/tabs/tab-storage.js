@@ -21,15 +21,15 @@ export function renderStorageTools(container) {
     fold.dataset.fold = 'storage';
     if (stFold) fold.open = true;
     fold.innerHTML = `
-        <summary><i class="fa-solid fa-gamepad"></i> 游戏玩法（条目库 · 按触发注入主对话）</summary>
+        <summary title="条目库 · 按触发注入主对话"><i class="fa-solid fa-gamepad"></i> 游戏玩法</summary>
         <div class="pp-grid2">
             <div>
                 <label class="pp-label">名称</label>
                 <input id="pp_st_name" class="text_pole textarea_compact" />
             </div>
             <div>
-                <label class="pp-label">触发词（逗号分隔，留空则需勾常驻）</label>
-                <input id="pp_st_keys" class="text_pole textarea_compact" placeholder="扑克,德扑,牌局" />
+                <label class="pp-label" title="多个词用逗号分隔。留空时自动勾上常驻；有触发词时常驻可自行勾选或取消">触发词（逗号分隔）</label>
+                <input id="pp_st_keys" class="text_pole textarea_compact" />
             </div>
         </div>
         <div class="pp-grid2">
@@ -38,10 +38,10 @@ export function renderStorageTools(container) {
                 <input id="pp_st_depth" class="text_pole textarea_compact" type="number" min="0" max="16" value="6" />
             </div>
             <div style="align-self:end">
-                <label><input type="checkbox" id="pp_st_const" /> 常驻（无条件注入）</label>
+                <label title="无条件注入"><input type="checkbox" id="pp_st_const" /> 常驻</label>
             </div>
         </div>
-        <textarea id="pp_st_content" class="text_pole textarea_compact" rows="5" placeholder="内容，如扑克规则、地下城地图……"></textarea>
+        <textarea id="pp_st_content" class="text_pole textarea_compact" rows="5"></textarea>
         <div class="pp-btn-row">
             <div id="pp_st_add" class="menu_button">添加</div>
             <div id="pp_st_replay" class="menu_button" title="立刻按最近对话重查各条目的触发词：命中的注入、未命中的撤下。平时切对话/收到新消息会自动做；自己编辑或删除消息后用它手动对齐">立即重扫注入</div>
@@ -49,8 +49,8 @@ export function renderStorageTools(container) {
             <label class="menu_button" for="pp_st_import">导入</label>
             <input id="pp_st_import" type="file" accept=".json,application/json" hidden />
         </div>
-        <label class="pp-label" title="AI 咨询：填一句大概思路，花一次模型调用扩写成完整可执行的玩法规则，草案可改，入库后出现在下方条目列表。材料固定带角色摘要、最近对话与世界书命中（本地检索，不花调用），下面两个勾选按需追加——记忆表格那类既往事件流水对玩法设计没用，一律不带；思路与草案随全局设置留底，刷新不丢">AI 咨询（把思路写成完整玩法）</label>
-        <textarea id="pp_st_c_idea" class="text_pole textarea_compact" rows="2" placeholder="大概思路（如：加一个牌局赌注玩法，输家要答应赢家一个要求）"></textarea>
+        <label class="pp-label" title="AI 玩法创作：填一句大概思路，花一次模型调用扩写成完整可执行的玩法规则，草案可改，入库后出现在下方条目列表。材料固定带角色摘要、最近对话与世界书命中（本地检索，不花调用），下面两个勾选按需追加——记忆表格那类既往事件流水对玩法设计没用，一律不带；思路与草案随全局设置留底，刷新不丢">AI 玩法创作</label>
+        <textarea id="pp_st_c_idea" class="text_pole textarea_compact" rows="2"></textarea>
         <div class="pp-gd-selp">
             <label title="带上进行中剧情全文：生成的玩法贴合当前剧情阶段、不与其走向冲突"><input type="checkbox" id="pp_st_c_plan" /> 附进行中剧情</label>
             <label title="带当前注入生效中的玩法条目：新玩法与现有规则不冲突、能衔接"><input type="checkbox" id="pp_st_c_gp" /> 附生效中的玩法</label>
@@ -88,6 +88,14 @@ export function renderStorageTools(container) {
         toastr.success('已添加并按当前剧情注入');
         renderList(fold);
     });
+
+    // 触发词留空 → 自动勾上常驻（空触发词 + 非常驻的条目永远不生效）；
+    // 有触发词时不强动，常驻勾不勾由用户自己定
+    const keysEl = fold.querySelector('#pp_st_keys');
+    const constEl = fold.querySelector('#pp_st_const');
+    const syncConstByKeys = () => { if (!keysEl.value.trim()) constEl.checked = true; };
+    keysEl.addEventListener('input', syncConstByKeys);
+    syncConstByKeys();
 
     fold.querySelector('#pp_st_replay').addEventListener('click', () => {
         scanAndApplyStorage();
@@ -253,8 +261,8 @@ function renderList(root) {
                         <input class="text_pole textarea_compact" data-st-name value="${escapeHtml(i.name)}" />
                     </div>
                     <div>
-                        <label class="pp-label">触发词（逗号分隔，留空则需勾常驻）</label>
-                        <input class="text_pole textarea_compact" data-st-keys value="${escapeHtml((i.keys ?? []).join(','))}" placeholder="扑克,德扑,牌局" />
+                        <label class="pp-label" title="多个词用逗号分隔。留空时自动勾上常驻；有触发词时常驻可自行勾选或取消">触发词（逗号分隔）</label>
+                        <input class="text_pole textarea_compact" data-st-keys value="${escapeHtml((i.keys ?? []).join(','))}" />
                     </div>
                 </div>
                 <div class="pp-grid2">
@@ -263,7 +271,7 @@ function renderList(root) {
                         <input class="text_pole textarea_compact" data-st-depth type="number" min="0" max="16" value="${i.depth ?? 6}" />
                     </div>
                     <div style="align-self:end">
-                        <label><input type="checkbox" data-st-const ${i.constant ? 'checked' : ''} /> 常驻（无条件注入）</label>
+                        <label title="无条件注入"><input type="checkbox" data-st-const ${i.constant ? 'checked' : ''} /> 常驻</label>
                     </div>
                 </div>
                 <textarea class="text_pole textarea_compact" rows="5" data-st-content>${escapeHtml(i.content)}</textarea>
@@ -281,6 +289,12 @@ function renderList(root) {
         save();
         scanAndApplyStorage();
     }));
+    // 编辑框里的触发词同样留空自动勾常驻（与添加表单同一规则：空触发词 + 非常驻 = 死条目）
+    list.querySelectorAll('[data-st-editbox]').forEach(box => {
+        const keysInput = box.querySelector('[data-st-keys]');
+        const constInput = box.querySelector('[data-st-const]');
+        keysInput.addEventListener('input', () => { if (!keysInput.value.trim()) constInput.checked = true; });
+    });
     // 编辑框展开/收起：一个条目一个框，打开几个互不影响
     list.querySelectorAll('[data-st-edit]').forEach(el => el.addEventListener('click', () => {
         const box = list.querySelector(`[data-st-editbox="${el.dataset.stEdit}"]`);

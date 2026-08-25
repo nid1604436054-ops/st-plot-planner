@@ -197,9 +197,14 @@
 }
 
 /* 酒馆全局把勾选框设为 display:grid（块级），裸 label 里文字会被挤到下一行；
-   抽屉内改回行内网格，勾选框与文字同行（.pp-gd-selp label 等行内弹性容器不受影响） */
-.pp-drawer input[type="checkbox"] {
+   抽屉内改回行内网格，勾选框与文字同行（.pp-gd-selp label 等行内弹性容器不受影响）。
+   边框必须自己给：酒馆画框用主题 BodyColor 填充 + BorderColor 描边，深底主题下
+   未勾选的框与区块背景同色，「分析前联网判断」「关闭思考」曾因此整框隐身——
+   换强调色描边（默认灰），任何主题下都看得见 */
+.pp-drawer input[type="checkbox"],
+.pp-viewer input[type="checkbox"] {
     display: inline-grid;
+    border: 1px solid var(--SmartThemeEmColor, #909090);
 }
 
 /* 世界书条目勾选区：书行下方展开；右下角手柄可拉高（默认随内容长高，80vh 封顶内部滚动） */

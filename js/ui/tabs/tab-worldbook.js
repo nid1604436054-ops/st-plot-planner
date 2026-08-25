@@ -59,12 +59,12 @@ export const worldbookTab = {
                 <div id="pp_wb_trash" class="menu_button" title="删除的书和条目先进回收站（最多 30 条，超出丢最旧）：可恢复或彻底删除。恢复的书按原样放回、各对话原有的启用勾选随之恢复；恢复条目回原书、原书没了会提示先恢复那本书；「彻底删除」和「清空」才真的不可恢复">回收站</div>
             </div>
             <div id="pp_wb_txt_editor" style="display:none">
-                <label class="pp-label">书名</label>
-                <input id="pp_wb_txt_name" class="text_pole textarea_compact" type="text" placeholder="文本世界书名称" />
-                <label class="pp-label">本条关键词（可选，逗号分隔；之后可随时在条目旁修改）</label>
-                <input id="pp_wb_txt_keys" class="text_pole textarea_compact" type="text" placeholder="扑克,德扑" />
-                <label class="pp-label">内容（整块作为一条条目导入，不分块）</label>
-                <textarea id="pp_wb_txt_content" class="text_pole textarea_compact" rows="8" placeholder="粘贴这一条的完整内容……"></textarea>
+                <label class="pp-label">世界书名称</label>
+                <input id="pp_wb_txt_name" class="text_pole textarea_compact" type="text" />
+                <label class="pp-label" title="可选；多个词用逗号分隔。保存后可随时在条目旁修改">本条关键词（可选，逗号分隔）</label>
+                <input id="pp_wb_txt_keys" class="text_pole textarea_compact" type="text" />
+                <label class="pp-label" title="整块作为一条条目导入，不分块">内容</label>
+                <textarea id="pp_wb_txt_content" class="text_pole textarea_compact" rows="8"></textarea>
                 <div class="pp-btn-row">
                     <div id="pp_wb_txt_confirm" class="menu_button">确认导入</div>
                     <div id="pp_wb_txt_cancel" class="menu_button">取消</div>

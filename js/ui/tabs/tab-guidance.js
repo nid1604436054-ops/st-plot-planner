@@ -764,7 +764,6 @@ function renderCollect(container, main) {
             <b>第 1 步 · 收集确认</b>
             <span class="menu_button" id="pp_gd_c1_preview">查看完整提示词</span>
         </div>
-        <div class="pp-gd-stat"><span id="pp_gd_c1_stat"></span><span class="pp-muted" id="pp_gd_c1_count" title="预设全局生效：「设置」页勾选启用的预设会拼进插件发给大模型的每一次调用的系统提示词（规划分析/检查报告/随机事件/路人反应/AI 打标/AI 建库/联网判断），开关在「设置」页"> · 预设 ${presets.filter(p => p.enabled).length}/${presets.length} 全局生效${activeStory() ? ' · 已附进行中剧情' : ''}</span></div>
         ${recallSheets.length ? `
         <div>
             <div class="pp-gd-layhead">
@@ -781,7 +780,7 @@ function renderCollect(container, main) {
                 <div>
                     <b class="pp-gd-layname">标签过滤</b>
                     <div class="pp-gd-selp" id="pp_gd_c1_chips"></div>
-                    <label class="pp-gd-recentrow" id="pp_gd_c1_recent_wrap" title="标签过滤会漏掉近期发生但没打标签的事件：这里填 N，「标签」档的每张表无论行上有没有标签、命没命中勾选的标签，都把表尾最新的 N 行一并带给模型——比如「重要事件」表在标签档、这里填 30，它最新 30 条一定在材料里。「常驻」档本来就全量、用不上本项。记忆行没有时间戳，按表内顺序新记录追加在表尾，「最新」即表尾；0 = 不另附">「标签」档每表另附最新 <input type="number" class="text_pole" id="pp_gd_c1_recent" min="0" step="1" value="${run.memRecent}" /> 行（无论标签）</label>
+                    <label class="pp-gd-recentrow" id="pp_gd_c1_recent_wrap" title="标签过滤会漏掉近期发生但没打标签的事件：这里填 N，「标签」档的每张表无论行上有没有标签、命没命中勾选的标签，都把表尾最新的 N 行一并带给模型——比如「重要事件」表在标签档、这里填 30，它最新 30 条一定在材料里。「常驻」档本来就全量、用不上本项。记忆行没有时间戳，按表内顺序新记录追加在表尾，「最新」即表尾；0 = 不另附">「标签」启用时每表另附最新 <input type="number" class="text_pole" id="pp_gd_c1_recent" min="0" step="1" value="${run.memRecent}" /> 行</label>
                     <span class="pp-muted" id="pp_gd_c1_memtip"></span>
                 </div>
             </div>
@@ -797,8 +796,8 @@ function renderCollect(container, main) {
             <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内三路取材（大模型随机 / 掷骰 / 自己给意见立单元），产物是暂存单元（本工具最多 3 个，满了先删）。生成材料自动带本页上方同一批（记忆表格档位与标签、玩法勾选、世界书、进行中剧情），也可勾选导入路人反应的暂存单元做参考（已生效注入不自动带，防双算）。单元不论徽章数都能勾「参与规划」随分析发送、可转隐身注入、可被路人反应工具导入再加工；采纳规划后暂存不清空，清理用面板里的清空键">随机事件</span>
             <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见、生成反应单元（材料自动带本页上方同一批，也可导入随机事件的暂存单元做参考）、编辑卡面，然后两路任选——转隐身注入挂主对话（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径）或勾「参与规划」随分析发给模型，两路互斥；产物最多暂存 3 个，清理用面板里的清空键">路人反应</span>
         </div>
-        <label class="pp-label">剧情构思方向</label>
-        <textarea id="pp_gd_note" class="text_pole textarea_compact" rows="3" placeholder="已有的想法、约束或重点（可选，随分析发给模型）"></textarea>
+        <label class="pp-label" title="已有的想法、约束或重点（可选，随分析发给模型）">剧情构思方向</label>
+        <textarea id="pp_gd_note" class="text_pole textarea_compact" rows="3"></textarea>
         <div class="pp-btn-row">
             <span id="pp_gd_c1_next" class="menu_button">下一步</span>
             <span id="pp_gd_c1_cancel" class="menu_button">取消</span>
@@ -821,6 +820,18 @@ function renderCollect(container, main) {
             tagPart,
         ].filter(Boolean).join(' · ');
     };
+    // 材料概览整行（第 1 步页面不再常驻显示，点「查看完整提示词」在弹窗开头看）
+    const c1StatText = () => {
+        const st = collectStats({ memoryTags: wizardMemoryTags(), memoryModes: wizardMemoryModes(), memoryRecent: wizardMemoryRecent() });
+        const memSeg = !recallSheets.length ? '记忆表格 不附带'
+            : `记忆表格 ${st.memChars} 字（${memScopeDesc()}）`;
+        const gpDesc = gpItems.length ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
+        const us = unitsState();
+        const evN = us.eventUnits.filter(u => u.inPlan).length;
+        const rxN = us.reactionUnits.filter(u => u.inPlan).length;
+        const unitSeg = `${evN ? ` · 事件单元 ${evN}` : ''}${rxN ? ` · 反应单元 ${rxN}` : ''}`;
+        return `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}${unitSeg}`;
+    };
     // 标签列下方的即时提示：只在该说话时出现（档位/标签没配对上、或标签档要空手）
     const memTipText = () => {
         const modes = recallSheets.map(s => modeOf(s.uid));
@@ -831,16 +842,6 @@ function renderCollect(container, main) {
         return '';
     };
     const refreshMem = () => {
-        const st = collectStats({ memoryTags: wizardMemoryTags(), memoryModes: wizardMemoryModes(), memoryRecent: wizardMemoryRecent() });
-        const memSeg = !recallSheets.length ? '记忆表格 不附带'
-            : `记忆表格 ${st.memChars} 字（${memScopeDesc()}）`;
-        const gpDesc = gpItems.length ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
-        const us = unitsState();
-        const evN = us.eventUnits.filter(u => u.inPlan).length;
-        const rxN = us.reactionUnits.filter(u => u.inPlan).length;
-        const unitSeg = `${evN ? ` · 事件单元 ${evN}` : ''}${rxN ? ` · 反应单元 ${rxN}` : ''}`;
-        main.querySelector('#pp_gd_c1_stat').textContent =
-            `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}${unitSeg}`;
         const tipEl = main.querySelector('#pp_gd_c1_memtip');
         if (tipEl) tipEl.textContent = memTipText();
     };
@@ -977,7 +978,8 @@ function renderCollect(container, main) {
                 ...sections.map(x => ({ title: x.title, header: x.header, body: x.body, chars: x.chars })),
             ];
             const mask = openViewer('完整提示词预览',
-                `<span title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考；实际分词通常更省（中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：分析前先轻量判断是否需要现实信息（只发剧情简报，纯虚构默认不检索），判需要才检索，纪要追加为附加小节，不在此预览内' : ''}">材料共 ${totalChars.toLocaleString()} 字 · 粗估约 ${(sysTok + usrTok).toLocaleString()} tokens</span>`
+                `<span class="pp-muted" style="flex-basis:100%" title="本行 = 本次分析实际携带的材料概览。预设全局生效：「设置」页勾选启用的预设会拼进插件发给大模型的每一次调用的系统提示词（规划分析/检查报告/随机事件/路人反应/AI 打标/AI 建库/联网判断），开关在「设置」页">${escapeHtml(c1StatText())} · 预设 ${presets.filter(p => p.enabled).length}/${presets.length} 全局生效${activeStory() ? ' · 已附进行中剧情' : ''}</span>`
+                + `<span title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考；实际分词通常更省（中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? '；已开联网搜索：分析前先轻量判断是否需要现实信息（只发剧情简报，纯虚构默认不检索），判需要才检索，纪要追加为附加小节，不在此预览内' : ''}">材料共 ${totalChars.toLocaleString()} 字 · 粗估约 ${(sysTok + usrTok).toLocaleString()} tokens</span>`
                 + `<input type="text" id="pp_gd_pv_search" class="text_pole" placeholder="检索…" title="在全部块里检索（大小写不敏感）：命中的块自动展开并高亮、没命中的临时藏起，清空恢复全览" />`
                 + `<span id="pp_gd_pv_hits" class="pp-muted"></span>`
                 + `<span class="menu_button" id="pp_gd_pv_expand" title="把当前看得见的块全部展开/收起（检索时只作用于命中的块）">全部展开</span>`

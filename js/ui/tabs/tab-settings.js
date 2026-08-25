@@ -13,6 +13,8 @@ import { escapeHtml, clamp, fingerprint, readFileAsText } from "../../utils.js";
 let modelIds = [];
 // true = 手动填模型名（拉取的列表里没有时用），false = 下拉选择
 let manualModel = false;
+// 大区块折叠状态（页签会话内保留）：大模型连接默认展开，其余默认收起
+const secFolds = { conn: true, search: false, advanced: false, backup: false };
 
 // 重建模型下拉框；当前已保存的模型若不在列表里，作为「当前自定义」置顶保留
 function rebuildModelSelect(container) {
@@ -60,8 +62,9 @@ export const settingsTab = {
     render(container) {
         container.innerHTML = `
         <div class="pp-section">
-            <b>大模型连接</b>
-            <label class="pp-label" title="把不同供应商的连接各存一套（地址+密钥+模型），下拉一键切换，测试不同供应商不用反复粘贴；温度等其余参数全局共用">供应商方案（多套连接快速切换）</label>
+            <details class="pp-fold" data-secfold="conn" ${secFolds.conn ? 'open' : ''}>
+                <summary><i class="fa-solid fa-plug"></i> 大模型连接</summary>
+                <label class="pp-label" title="把不同供应商的连接各存一套（地址+密钥+模型），下拉一键切换，测试不同供应商不用反复粘贴；温度等其余参数全局共用">供应商方案</label>
             <div class="pp-model-row">
                 <select id="pp_set_prof" class="text_pole" title="选择已保存的方案立即整套启用（地址、密钥、模型一起换过来）；切换后模型下拉显示「当前自定义」，点「获取模型列表」可刷新成新供应商的列表"></select>
                 <div id="pp_set_prof_save" class="menu_button" title="把当前地址、密钥、模型存成一个方案：名字自动取地址域名；同一地址+密钥再次保存只更新模型，同域名不同密钥会另存一条（名字带 -2 -3 区分）">存当前</div>
@@ -82,10 +85,12 @@ export const settingsTab = {
                 <div id="pp_set_test" class="menu_button">测试连接</div>
             </div>
             <div id="pp_set_test_result" class="pp-muted"></div>
+            </details>
         </div>
         <div class="pp-section">
-            <b>联网搜索（Tavily）</b>
-            <label class="pp-label">搜索 API 密钥（tvly- 开头，tavily.com 注册）</label>
+            <details class="pp-fold" data-secfold="search" ${secFolds.search ? 'open' : ''}>
+                <summary><i class="fa-solid fa-globe"></i> 联网搜索（Tavily）</summary>
+                <label class="pp-label">搜索 API 密钥（tvly- 开头，tavily.com 注册）</label>
             <input id="pp_set_skey" class="text_pole textarea_compact" type="password" placeholder="tvly-..." autocomplete="off" />
             <div class="pp-grid2">
                 <div>
@@ -97,16 +102,18 @@ export const settingsTab = {
                     <input id="pp_set_stool" type="checkbox" />
                 </div>
             </div>
-            <label class="pp-label">试搜（验证搜索真的能用）</label>
+            <label class="pp-label" title="验证搜索真的能用">试搜</label>
             <input id="pp_set_stestq" class="text_pole textarea_compact" type="text" placeholder="输入关键词，如：最近的新闻" autocomplete="off" />
             <div class="pp-btn-row">
                 <div id="pp_set_stest" class="menu_button">测试搜索</div>
             </div>
             <div id="pp_set_stest_result" class="pp-muted"></div>
+            </details>
         </div>
         <div class="pp-section">
-            <b>高级设置（保持默认即可）</b>
-            <div class="pp-grid2">
+            <details class="pp-fold" data-secfold="advanced" ${secFolds.advanced ? 'open' : ''}>
+                <summary title="保持默认即可"><i class="fa-solid fa-gear"></i> 高级设置</summary>
+                <div class="pp-grid2">
                 <div>
                     <label class="pp-label" title="越低输出越稳定，越高越发散">温度</label>
                     <input id="pp_set_temp" class="text_pole textarea_compact" type="number" min="0" max="2" step="0.1" />
@@ -140,6 +147,7 @@ export const settingsTab = {
             <hr class="pp-hr" />
             <label class="pp-label" title="「剧情指导 / 随机事件」调用大模型时，附带最近几层对话当上下文（只影响本插件的规划请求，不影响主对话）；0 = 不限（有多少层带多少层）">规划时附带最近几层对话（0 = 不限）</label>
             <input id="pp_set_ctx" class="text_pole textarea_compact" type="number" min="0" max="200" />
+            </details>
         </div>
         <div class="pp-section" id="pp_set_preset"></div>
         <div class="pp-section">
@@ -314,6 +322,9 @@ export const settingsTab = {
         renderPreset(container);
         renderInjList(container);
         renderBackup(container);
+        // 折叠状态记忆（toggle 事件不冒泡，逐个绑定；备份区在 renderBackup 里渲染，放它后面）
+        container.querySelectorAll('details[data-secfold]').forEach(el =>
+            el.addEventListener('toggle', () => { secFolds[el.dataset.secfold] = el.open; }));
     },
 };
 
@@ -328,16 +339,18 @@ function renderBackup(container) {
     const el = container.querySelector('#pp_set_backup');
     if (!el) return;
     el.innerHTML = `
-    <div class="pp-item-main"><b>数据备份与搬家</b></div>
-    <div class="pp-btn-row">
-        <div id="pp_set_export" class="menu_button" title="把插件的全部数据导出成一个 JSON 文件，存到你选的位置：全局设置（连接/预设/世界书/事件库/玩法/注入）+ 每个聊天各自的数据（记忆表格镜像、剧情档案、各类勾选、书单）。换电脑、重装酒馆前的救命备份">一键导出全部数据</div>
-        <label class="menu_button" for="pp_set_import_file" title="选一个之前导出的备份文件恢复：全局设置整份覆盖，各聊天的数据按聊天身份合并回来；导入后建议刷新一次页面">导入备份</label>
-        <input id="pp_set_import_file" type="file" accept=".json,application/json" hidden />
-    </div>
-    <div class="pp-btn-row">
-        <select id="pp_set_transfer_from" class="text_pole" title="聊天身份 = 角色头像｜聊天文件名。开分支、改聊天名、换新聊天文件都会被认成新聊天（数据不自动跟过去）——从列表里选旧身份，点旁边按钮把它的数据整个搬过来"></select>
-        <div id="pp_set_transfer" class="menu_button" title="把左边选中的聊天的全部插件数据（记忆表格镜像、剧情档案、勾选、书单）复制给当前聊天；当前聊天已有的数据会被覆盖。适合：旧聊天太卡换了新的、开分支、改名后找回数据">过户到当前聊天</div>
-    </div>`;
+    <details class="pp-fold" data-secfold="backup" ${secFolds.backup ? 'open' : ''}>
+        <summary><i class="fa-solid fa-box-archive"></i> 数据备份与搬家</summary>
+        <div class="pp-btn-row">
+            <div id="pp_set_export" class="menu_button" title="把插件的全部数据导出成一个 JSON 文件，存到你选的位置：全局设置（连接/预设/世界书/事件库/玩法/注入）+ 每个聊天各自的数据（记忆表格镜像、剧情档案、各类勾选、书单）。换电脑、重装酒馆前的救命备份">一键导出全部数据</div>
+            <label class="menu_button" for="pp_set_import_file" title="选一个之前导出的备份文件恢复：全局设置整份覆盖，各聊天的数据按聊天身份合并回来；导入后建议刷新一次页面">导入备份</label>
+            <input id="pp_set_import_file" type="file" accept=".json,application/json" hidden />
+        </div>
+        <div class="pp-btn-row">
+            <select id="pp_set_transfer_from" class="text_pole" title="聊天身份 = 角色头像｜聊天文件名。开分支、改聊天名、换新聊天文件都会被认成新聊天（数据不自动跟过去）——从列表里选旧身份，点旁边按钮把它的数据整个搬过来"></select>
+            <div id="pp_set_transfer" class="menu_button" title="把左边选中的聊天的全部插件数据（记忆表格镜像、剧情档案、勾选、书单）复制给当前聊天；当前聊天已有的数据会被覆盖。适合：旧聊天太卡换了新的、开分支、改名后找回数据">过户到当前聊天</div>
+        </div>
+    </details>`;
 
     el.querySelector('#pp_set_export').addEventListener('click', () => {
         const { chatData, ...global } = settings;
@@ -498,7 +511,7 @@ function presetRow(p, i, total) {
         <label class="pp-label">预设名</label>
         <input type="text" class="text_pole" data-pname="${p.id}" value="${escapeHtml(p.name)}" />
         <label class="pp-label">内容（固定要求：内容格式、文风、篇幅、侧重点等；全局生效，改动即时保存）</label>
-        <textarea class="text_pole textarea_compact" rows="6" data-pcontent="${p.id}" placeholder="例：&#10;1. 用中文写，文风克制、不堆形容词；&#10;2. 每个阶段 content 至少两句话，写清幕后安排和动因；&#10;3. beats 按「铺垫→推进→转折→收束」组织。">${escapeHtml(p.content ?? '')}</textarea>
+        <textarea class="text_pole textarea_compact" rows="6" data-pcontent="${p.id}">${escapeHtml(p.content ?? '')}</textarea>
     </div>` : ''}`;
 }
 

@@ -46,7 +46,7 @@ function renderSettings(container) {
 
     wrap.innerHTML = `
     <details class="pp-fold pp-fold-root" data-fold="settings" ${folds.settings ? 'open' : ''}>
-        <summary><i class="fa-solid fa-gear"></i> 事件库设置（掷骰板块 · 条目 · 维度）</summary>
+        <summary title="掷骰板块 · 条目 · 维度"><i class="fa-solid fa-gear"></i> 事件库设置</summary>
         <div class="pp-fold-toggles">
             ${branchRow('entries', '事件条目', '掷骰走事件库：从合格条目里按权重×概率抽一条')}
             ${branchRow('free', '维度随机', '掷骰随机抽一个维度，让模型按它的气质即兴')}
@@ -60,7 +60,7 @@ function renderSettings(container) {
             <div class="pp-btn-row"><span id="pp_ev_dim_add" class="menu_button"><i class="fa-solid fa-plus"></i> 新建维度</span></div>`)}
     </details>
     <details class="pp-fold pp-fold-root" data-fold="ailib" ${folds.ailib ? 'open' : ''}>
-        <summary><i class="fa-solid fa-robot"></i> AI 建库（出条目草稿，勾选后导入事件库）</summary>
+        <summary title="出条目草稿，勾选后导入事件库"><i class="fa-solid fa-robot"></i> AI 建库</summary>
         <div class="pp-grid2">
             <div>
                 <label class="pp-label">维度</label>
@@ -71,8 +71,8 @@ function renderSettings(container) {
                 <input id="pp_ev_libcount" class="text_pole textarea_compact" type="number" min="1" max="10" />
             </div>
         </div>
-        <label class="pp-label">补充说明（可选：想要的题材、烈度、要避开什么）</label>
-        <textarea id="pp_ev_libnote" class="text_pole textarea_compact" rows="2" placeholder="例：偏日常向，不要涉及警察；重事件占一半"></textarea>
+        <label class="pp-label" title="可选：想要的题材、烈度、要避开什么">补充说明</label>
+        <textarea id="pp_ev_libnote" class="text_pole textarea_compact" rows="2"></textarea>
         <div class="pp-btn-row"><span id="pp_ev_libgen" class="menu_button">生成条目草稿</span></div>
         <div id="pp_ev_libprev"></div>
     </details>`;
@@ -287,7 +287,7 @@ function renderRules(container) {
                 </div>
             </div>
             <label class="pp-label">触发关键词（逗号分隔，留空=不限；填了则最近对话出现才算候选）</label>
-            <input type="text" class="text_pole" data-rkw="${r.id}" value="${escapeHtml(r.keywords ?? '')}" placeholder="例：酒吧, 夜店, 买醉" />
+            <input type="text" class="text_pole" data-rkw="${r.id}" value="${escapeHtml(r.keywords ?? '')}" />
             <label class="pp-label">方向提示（给模型的一句话：触发情境与张力方向）</label>
             <textarea class="text_pole textarea_compact" rows="2" data-rhint="${r.id}">${escapeHtml(r.promptHint ?? '')}</textarea>
         </div>` : ''}`).join('') || '<div class="pp-muted">事件库为空：掷骰会全走维度自由生成；可点下面新建或用「AI 建库」批量导入</div>';
