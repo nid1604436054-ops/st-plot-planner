@@ -269,12 +269,12 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
 }
 
 // 本地检索统计（向导第 1 步展示用；纯本地，不调模型）
-// memoryTags 语义与 buildGuidanceMessages 相同：null 默认召回 / [] 全量 / 数组按标签 / 'none' 只走最新窗口 / false 不附带
+// memoryTags / memoryModes / memoryRecent 语义与 buildGuidanceMessages 相同：
+// 标签数组（只作用于「标签」档的表）、每表档位 {uid:'off'|'tags'|'always'}、标签档表尾最新窗口行数
 // memorySheets：null = 全部（开了召回的表）；数组 = 只算勾选的表（空数组 = 一张都不带）
-// memoryRecent：每表无论标签另附的表尾最新行数（0 = 不另附）
-export function collectStats({ memoryTags = null, memorySheets = null, memoryRecent = 0 } = {}) {
+export function collectStats({ memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0 } = {}) {
     const { chatList, hits } = collectPlanningContext();
-    const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets, latestPerSheet: memoryRecent }).length;
+    const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets, sheetModes: memoryModes, latestPerSheet: memoryRecent }).length;
     return { layers: chatList.length, hits: hits.length, memChars };
 }
 
@@ -297,12 +297,14 @@ function reactionSection(header) {
  * @param {string} [options.eventText]           随机事件闸口选定的事件/走向文本
  * @param {string} [options.activePlan]          进行中剧情全文（查重与进度对照）
  * @param {string[]} [options.historySummaries]  历史剧情摘要（查重用）
- * @param {*}      [options.memoryTags]          记忆表格召回方式：null/缺省=按记忆表格页召回标签，
- *                                               []=全量, ['a','b']=按标签, 'none'=不按标签只走最新窗口,
- *                                               false=本次不附带
+ * @param {*}      [options.memoryTags]          记忆表格召回标签：['a','b']=按标签（只作用于「标签」档的表），
+ *                                               空数组=没勾标签, false=本次不附带
  * @param {*}      [options.memorySheets]        记忆表格表范围：null/缺省=全部（开了召回的表），
  *                                               数组=只带勾选的表（空数组=一张都不带）
- * @param {number} [options.memoryRecent]        每表无论标签都另附的表尾最新行数；0=不另附（全量召回时无意义）
+ * @param {object} [options.memoryModes]         每表召回档位 { [uid]: 'off' 停用 | 'tags' 按标签 | 'always' 常驻全量 }：
+ *                                               传了它档位优先，常驻表无视标签全量、停用表整张不带、
+ *                                               标签档只带命中行（没勾标签时只走最新窗口）
+ * @param {number} [options.memoryRecent]        「标签」档每表无论标签都另附的表尾最新行数；0=不另附
  * @param {Array}  [options.storageItems]        游戏玩法条目（{name, content}）：勾选后作为
  *                                               「游戏玩法」小节发给模型，规划须在其约束内设计
  */
@@ -319,8 +321,8 @@ export function materialSections(opts = {}) {
 }
 
 export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryRecent = 0, storageItems = [] } = options;
-    const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryRecent, storageItems, activePlan, historySummaries });
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [] } = options;
+    const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries });
     const all = [
         ...parts,
         ...(eventText ? ['## 随机事件（本次规划需要融入的事件与走向）', eventText] : []),

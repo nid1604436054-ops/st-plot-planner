@@ -139,6 +139,7 @@ function contextSections(materials = {}) {
     const { parts } = materialSections({
         memoryTags: materials.memoryTags ?? null,
         memorySheets: materials.memorySheets ?? null,
+        memoryModes: materials.memoryModes ?? null,
         memoryRecent: materials.memoryRecent ?? 0,
         storageItems: materials.storageItems ?? [],
         activePlan: activeStory()?.planText ?? '',

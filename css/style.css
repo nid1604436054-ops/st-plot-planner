@@ -241,6 +241,11 @@
 
 .pp-seg-opt.on[data-state="const"] { color: #7fd18a; }
 
+/* 记忆表格档位三段（停用/标签/常驻，剧情指导第 1 步）：配色对齐世界书——标签淡蓝、常驻绿 */
+.pp-seg-opt.on[data-state="tags"] { color: #7fb3ff; }
+
+.pp-seg-opt.on[data-state="always"] { color: #7fd18a; }
+
 .pp-entry-keys {
     flex: 1 1 200px;
     min-width: 120px;
@@ -818,7 +823,7 @@
     flex: 0 0 auto;
 }
 
-/* 剧情指导第 1 步：记忆召回两层选择（表格范围 → 标签过滤），纵向排开互不挤压 */
+/* 剧情指导第 1 步：记忆召回两层（表格档位 → 标签过滤），纵向排开互不挤压 */
 .pp-gd-memlay {
     display: flex;
     flex-direction: column;
@@ -832,6 +837,28 @@
     gap: 6px;
     padding: 6px 10px;
     border-left: 3px solid var(--SmartThemeBorderColor, #666);
+}
+
+/* 表格档位行：表名 + 三段选择器同行，表名过长省略（完整名在悬浮） */
+.pp-gd-sheetlist {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pp-gd-sheetrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.pp-gd-sheetname {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .pp-gd-layname {

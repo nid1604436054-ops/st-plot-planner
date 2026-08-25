@@ -497,8 +497,10 @@ export async function autoTagByVocabulary({ vocab = [], sheetUids = [], overwrit
 }
 
 // ---------------------------------------------------------------------------
-// 召回：按标签筛选镜像行，输出沿用记忆表格插件的提示词格式。
-// latestPerSheet：每张表无论标签都追加带上的表尾最新行数（行没有时间戳，
+// 召回：按档位与标签筛选镜像行，输出沿用记忆表格插件的提示词格式。
+// sheetModes：每张表一个档位——'off' 停用 / 'tags' 按标签 / 'always' 常驻全量
+// （不看标签），没进映射的表按 'always'；不打标签的表用常驻档就不会被标签过滤漏掉。
+// latestPerSheet：「标签」档每张表无论标签都追加带上的表尾最新行数（行没有时间戳，
 // 记忆表格插件把新记录追加在表尾，「最新」即表尾）——按标签筛会把没打标签的
 // 近期事件漏掉，这个窗口保证最近的剧情发展始终在材料里
 // ---------------------------------------------------------------------------
@@ -511,12 +513,13 @@ function pickColumns(values, indices) {
     return indices ? indices.map(i => values[i]).filter(v => v !== undefined) : values;
 }
 
-export function buildMemoryContext({ tagFilter = null, sheetUids = null, latestPerSheet = 0, maxChars } = {}) {
+export function buildMemoryContext({ tagFilter = null, sheetUids = null, sheetModes = null, latestPerSheet = 0, maxChars } = {}) {
     const state = memoryState();
-    // tagFilter：null = 按记忆表格页召回标签；数组 = 按标签筛（空数组 = 不筛全量）；
-    // 'none' = 完全不按标签，只走 latestPerSheet 最新窗口（向导勾了标签匹配但一个标签没勾时用）
-    const noTags = tagFilter === 'none';
-    const want = noTags ? [] : (tagFilter ?? state.recallTags).filter(Boolean);
+    // tagFilter：null = 按记忆表格页召回标签；数组 = 按标签筛（空数组 = 不筛）。
+    // sheetModes：{ [表uid]: 'off' | 'tags' | 'always' }；传了它档位优先——常驻表无视标签全量带出、
+    // 停用表整张不带、标签档的表只带命中行（没勾任何标签时退化为只走表尾最新窗口）；
+    // 不传 = 老口径：全部表统一按 tagFilter 筛（记忆表格页预览 / 检查报告 / 反应卡走这条）
+    const want = (tagFilter ?? state.recallTags).filter(Boolean);
     const recent = Math.max(0, Math.round(Number(latestPerSheet) || 0));
     const only = Array.isArray(sheetUids) ? new Set(sheetUids) : null;   // null = 全部；空数组 = 一张表都不带
     const blocks = [];
@@ -524,12 +527,15 @@ export function buildMemoryContext({ tagFilter = null, sheetUids = null, latestP
         const recall = state.sheetRecall[sheet.uid] ?? {};
         if (recall.enabled === false) continue;
         if (only && !only.has(sheet.uid)) continue;
+        const mode = sheetModes ? (sheetModes[sheet.uid] ?? 'always') : null;
+        if (mode === 'off') continue;
         const colIdx = Array.isArray(recall.columns) ? recall.columns : null;
         const total = sheet.rows.length;
         const rows = sheet.rows
-            .filter((r, i) => (!noTags && want.length === 0)                    // 全量
-                || want.some(t => (state.tags[r.rid] ?? []).includes(t))        // 标签命中
-                || (recent > 0 && i >= total - recent))                         // 表尾最新窗口：无论标签
+            .filter((r, i) => mode === 'always'                             // 常驻：无视标签全量
+                || (!sheetModes && want.length === 0)                       // 老口径：空筛选 = 全量
+                || want.some(t => (state.tags[r.rid] ?? []).includes(t))    // 标签命中
+                || (recent > 0 && i >= total - recent))                     // 表尾最新窗口：无论标签
             .map(r => {
                 const cells = pickColumns(r.cells, colIdx);
                 // 行尾带上这行的标签：模型能看见「同标签的同类事件已有多条」，配合规划提示词防流程复刻
