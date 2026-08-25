@@ -189,6 +189,14 @@ export function syncMemory({ force = false } = {}) {
     const srcRows = totalRows(source);
     const libRows = totalRows(state.source.sheets);
 
+    // 聊天本体还没加载出来（重载/切聊天初期 ctx.chat 是空的）：源头读到的「空表」只是
+    // 未就绪，不是真被清空——本轮放弃，等下一个同步时机（聊天加载完的事件/用户再点）。
+    // 原表库走双层存储即时可读、比大聊天文件先就绪，这个窗口里贸然比对必出清空误报
+    const chatArr = getTavernContext().chat;
+    if (!(Array.isArray(chatArr) && chatArr.length > 0) && !force) {
+        return { wiped: false, changed: false, state, notReady: true };
+    }
+
     // 清空保护：源头空了而库里有内容 → 判定清空事故，绝不拿空数据覆盖原表库/备份
     if (srcRows === 0 && libRows > 0 && !force) {
         if (!state.wipeAlert) state.wipeAlert = { at: Date.now(), rows: libRows, notified: false };
@@ -203,6 +211,11 @@ export function syncMemory({ force = false } = {}) {
         rows: s.rows.map(cells => ({ fp: rowFingerprint(s.uid, s.columns, cells), cells })),
     }));
     if (JSON.stringify(fingerprinted) === JSON.stringify(state.source.sheets)) {
+        // 源头有数据且与库一致 = 挂着的「疑似清空」显然是误报（如未就绪窗口立的案），就地解除
+        if (state.wipeAlert) {
+            state.wipeAlert = null;
+            persistMemory();
+        }
         return { wiped: false, changed: false, state };
     }
 

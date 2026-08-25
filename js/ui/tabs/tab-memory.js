@@ -88,7 +88,8 @@ export const memoryTab = {
 
         container.querySelector('#pp_mem_sync').addEventListener('click', () => {
             const r = syncMemory();
-            if (r.wiped) toastr.warning('检测到原表可能被清空：原表库和备份已保留，没有同步空数据');
+            if (r.notReady) toastr.info('聊天还没加载完，稍等一下再同步');
+            else if (r.wiped) toastr.warning('检测到原表可能被清空：原表库和备份已保留，没有同步空数据');
             else {
                 const m = mergeMirrorFromSource();
                 if (m.added) toastr.success(`已同步：镜像新进 ${m.added} 行`);
