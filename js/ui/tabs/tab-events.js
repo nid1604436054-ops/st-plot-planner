@@ -494,7 +494,7 @@ export function renderInjectionTools(wrap) {
     renderInjListInto(fold.querySelector('#pp_ev_injlist'));
 }
 
-// 向导第 4 步转注入、事件/反应卡注入、到期自动撤下……都发生在本页：列表当场跟着变
+// 向导第 3 步转注入、事件/反应卡注入、到期自动撤下……都发生在本页：列表当场跟着变
 document.addEventListener('pp-injections-changed', () => {
     renderInjListInto(document.querySelector('#pp_ev_injlist'));
 });

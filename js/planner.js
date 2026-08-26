@@ -11,7 +11,7 @@ import { materialSections as baseMaterialSections, gameplaySection, memorySectio
 import { extractJson, fingerprint } from "./utils.js";
 
 // 输出 schema 两套变体：存在进行中剧情时才要求 progress（推进到哪个阶段 + 约百分比）。
-// 首次规划没有可对照执行的剧情，不问进度——问了模型也会编一个出来（第 4 步曾出现
+// 首次规划没有可对照执行的剧情，不问进度——问了模型也会编一个出来（人工二检页曾出现
 // 「还没采用的规划先有完成度」，根源就是 schema 无条件要这个字段）
 const OUTPUT_SCHEMA_BASE = `{
   "checks": {

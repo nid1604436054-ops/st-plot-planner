@@ -1,16 +1,17 @@
-// 剧情指导页签：分步规划向导（四步：材料→确认→生成→结果）+ 随机事件工具区 + 游戏玩法工具区（底部）
+// 剧情指导页签：分步规划向导（三步：材料→确认→结果；分析实时输出页不占步骤，开始分析自动进）+ 随机事件工具区 + 游戏玩法工具区（底部）
 // ① 收集确认（本地检索材料 + 记忆表格档位（停用/标签/常驻）+ 标签勾选与每表最新行补底 + 游戏玩法勾选
 // + 随机事件/路人反应两个现场工具的入口键（板块各住一个悬浮面板，产物都是「单元」，见 units.js）
 // + 「插入单元」勾选（入池单元参不参与本次分析在这里定——单元是整块提示词，选不选是规划侧的事）
 // + 剧情构思；
 // 这些勾选按对话记忆存聊天数据，同一对话做完一轮回来不用重勾；预设不在本页勾——已全局化，
 // 「设置」页启用后插件发给大模型的任何调用都自动带上）
-// → ② 分析前确认（点「开始分析」才真正调模型）→ ③ 模型分析（OOC/剧情重复/文风重复/进度 + 设计剧情）→ ④ 人工二检（重新生成 / 确认采用 / 放弃保存）
+// → ② 分析前确认（逐行核对插入的单元/玩法/联网搜索，点「开始分析」才真正调模型，自动进分析实时输出页）
+// → ③ 人工二检（OOC/剧情重复/文风重复/进度 + 规划文本：重新生成 / 确认采用 / 放弃保存）
 // 确认采用的规划存为「进行中剧情」（story.js，跟聊天数据走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
 // 单元池不随采用清空，清理由各工具面板的一键清理键手动执行。
 // 向导进度留底 + 自由跳转（调试排版用）：进行中的向导状态实时快照存 chatdata 的 wizard 块
-// （按聊天身份走），刷新页面重开本页自动回到离开的那一步——已生成未处理的规划停在第 4 步等操作；
-// 页首常驻 ①②③④ 跳转条随时互跳（已填内容与生成结果保留），跳进没有生成结果的第 4 步可直接往规划框填字看排版。
+// （按聊天身份走），刷新页面重开本页自动回到离开的那一步——已生成未处理的规划停在第 3 步等操作；
+// 页首常驻 ①②③ 跳转条随时互跳（已填内容与生成结果保留），跳进没有生成结果的第 3 步可直接往规划框填字看排版。
 // 另有「检查当前剧情」：对照进行中剧情出执行报告（完成度/推进/文风/OOC/其他/建议）
 // 掷骰入口只有随机事件工具面板；页面下部工具区（tab-events.js）只放事件库配置与 AI 建库；
 // 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列（条目库管理 + AI 玩法咨询都在该区——
@@ -32,13 +33,13 @@ import { escapeHtml, estimateTokens } from "../../utils.js";
 import { searchToolReady, withGlobalPresets } from "../../api.js";
 import { unitsState, persistUnits, newEventUnit, newReactionUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, eventOriginText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
 
-// 向导状态机：'' 空闲 | collect ① | ready ② 分析前确认 | running ③ | result ④ | reviewing/report 检查报告
+// 向导状态机：'' 空闲 | collect ① | ready ② 分析前确认 | running 分析实时输出页（不占跳转条步骤）| result ③ | reviewing/report 检查报告
 let step = '';
 const run = {
     note: '',            // 剧情构思方向
     gpIds: null,         // 本次随分析发送的游戏玩法条目 id；null = 未初始化（进第 1 步时默认勾当前生效的）
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
-    hadActive: false,   // 本次分析发起时是否存在进行中剧情（第 4 步「剧情进度」行只在这种时候显示）
+    hadActive: false,   // 本次分析发起时是否存在进行中剧情（第 3 步「剧情进度」行只在这种时候显示）
     memModes: null,      // 第 1 步第一层：每张表的召回档位 { [uid]: 'off' 停用 | 'tags' 按标签 | 'always' 常驻全量 }；null = 未动过（全部常驻全量，与旧默认一致）
     memTags: [],         // 「标签」档的表按哪些标签召回（勾选的标签名，对所有标签档的表生效）
     memRecent: 0,        // 「标签」档的表无论标签都另附的表尾最新行数；0 = 不另附（行没有时间戳，新记录在表尾）
@@ -55,9 +56,9 @@ let report = null;      // 最近一次检查报告（内存缓存，正式存�
 
 // ---------------------------------------------------------------------------
 // 向导进度快照（chatdata 的 wizard 块，按聊天身份走）：刷新页面后从离开的那一步继续，
-// 已生成未处理的规划停在第 4 步等操作。每次重渲染与输入改动都落一次快照（数据量 KB 级，
+// 已生成未处理的规划停在第 3 步等操作。每次重渲染与输入改动都落一次快照（数据量 KB 级，
 // 只写 localStorage 热层，不碰聊天文件）；确认采用 / 取消向导时清空。检查报告流（reviewing/
-// report）不是向导状态，persistWizard 对非向导步骤直接跳过——第 4 步还没处理的生成结果
+// report）不是向导状态，persistWizard 对非向导步骤直接跳过——第 3 步还没处理的生成结果
 // 不会被一次检查报告冲掉。research 持有 Promise、busy 是进行中标志，都不入快照：
 // 恢复后进「分析前确认」页会按需重新预跑。随机事件/路人反应的单元与面板草稿不在快照里——
 // 它们存 chatdata 的 units 块（units.js），与向导进度各自独立、采用后也保留
@@ -141,20 +142,21 @@ function restoreWizard(container) {
 }
 
 // ---------------------------------------------------------------------------
-// 步骤跳转条：向导进行中页首常驻，①②③④随时互跳（已填内容与生成结果保留）。
-// 调试排版用——不跑流程也能进任意一步填字段看格式；正常流程照旧走各步自己的按钮
+// 步骤跳转条：向导进行中页首常驻，①②③随时互跳（已填内容与生成结果保留）。
+// 2026-08-26 用户拍板四步并三步——「生成」不是独立步骤（闲时点它也只是落回②确认页），
+// 分析中的实时输出页保留在状态机里（running：开始分析自动进入、分析在途点②回来、完账自动跳③），
+// 只是不再占用跳转条一格，运行中②格保持高亮
 // ---------------------------------------------------------------------------
 
 function stepNavHtml() {
     const cur = step;
     const items = [
         ['collect', '① 材料', '第 1 步 · 收集确认：材料与勾选（随机事件/路人反应两个工具在此进）'],
-        ['ready', '② 确认', '第 2 步 · 分析前确认：进去后点「开始分析」才调模型'],
-        ['running', '③ 生成', '第 3 步 · 分析中：实时输出页。分析在途时点这里回到输出页；没在跑时落到第 2 步的确认页'],
-        ['result', '④ 结果', '第 4 步 · 人工二检：检查结果与规划文本；没有生成结果时进去是空白二检页，可直接往规划框里填字试排版'],
+        ['ready', '② 确认', '第 2 步 · 分析前确认：核对随分析插入的单元、玩法与联网搜索开关，点「开始分析」才调模型；分析在途时点这里回到实时输出页'],
+        ['result', '③ 结果', '第 3 步 · 人工二检：检查结果与规划文本；没有生成结果时进去是空白二检页，可直接往规划框里填字试排版'],
     ];
     return `<div class="pp-gd-stepnav">${items.map(([id, label, tip]) =>
-        `<span class="menu_button${cur === id ? ' pp-gd-navcur' : ''}" data-goto="${id === 'running' ? 'ready' : id}" title="${tip}。四步随时互跳，已填内容与生成结果保留，刷新页面后也从这一步继续">${label}</span>`).join('')}</div>`;
+        `<span class="menu_button${cur === id || (id === 'ready' && cur === 'running') ? ' pp-gd-navcur' : ''}" data-goto="${id}" title="${tip}。三步随时互跳，已填内容与生成结果保留，刷新页面后也从这一步继续">${label}</span>`).join('')}</div>`;
 }
 
 function gotoStep(container, target) {
@@ -694,7 +696,11 @@ function renderMain(container) {
     const main = container.querySelector('#pp_gd_main');
     persistWizard();   // 重渲染即落快照：所有步骤切换都在这里过一遍（向导空闲 / 检查报告流不动快照）
     renderStepPage(container, main);
-    // 步骤跳转条：向导进行中常驻；分析中也能跳走，结果落地后不抢页面、只提示到第 4 步看
+    // 底部工具区（事件库设置/AI建库/游戏玩法/隐身注入）只在空闲页与第 1 步出现——
+    // 确认/分析中/结果/检查报告是运行页，不放设置与制作类（2026-08-26 用户拍板）
+    const toolsEl = container.querySelector('#pp_gd_events');
+    if (toolsEl) toolsEl.style.display = (step === '' || step === 'collect') ? '' : 'none';
+    // 步骤跳转条：向导进行中常驻；分析中也能跳走，结果落地后不抢页面、只提示到第 3 步看
     if (WIZARD_STEPS.includes(step)) {
         main.insertAdjacentHTML('afterbegin', stepNavHtml());
         main.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click', () => gotoStep(container, b.dataset.goto)));
@@ -706,9 +712,11 @@ function renderStepPage(container, main) {
     if (step === 'ready') return renderReady(container, main);
 
     if (step === 'running') {
+        // 分析实时输出页：不占跳转条一格（2026-08-26 三步化）——开始分析自动进入、
+        // 分析在途点②回来、完账自动跳③结果；标题不带步骤号，免得与新③结果撞号
         main.innerHTML = `
         <div class="pp-section">
-            <div class="pp-gd-stephead"><b>第 3 步 · 分析中</b><span class="pp-muted" id="pp_gd_run_stage"></span></div>
+            <div class="pp-gd-stephead"><b>分析中</b><span class="pp-muted" id="pp_gd_run_stage"></span></div>
             <pre id="pp_gd_run_stream" class="pp-gd-stream pp-muted">等待模型输出……</pre>
         </div>`;
         updateStreamView(analyzeToken);
@@ -1059,7 +1067,7 @@ function renderCollect(container, main) {
 
     // 完整提示词预览走悬浮查看器：按材料类型分块折叠（系统提示词 + 世界书/记忆表格/
     // 最近对话…各一块，块头显示小节名与精确字数），统计行带检索（命中的块自动展开高亮、
-    // 没命中的临时藏起）、「全部展开/收起」与「复制全文」
+    // 没命中的临时藏起）与「复制全文」；展开/收起逐块点块头（2026-08-26 用户拍板撤掉「全部展开」键）
     main.querySelector('#pp_gd_c1_preview').addEventListener('click', () => {
         try {
             const s = storyState();
@@ -1096,11 +1104,9 @@ function renderCollect(container, main) {
                 + `<span title="按「中日韩全角字符≈1 token、英文数字≈4字符=1 token」粗估，各家模型分词器不同，仅供规模参考；实际分词通常更省（中文约 1.4~1.6 字/token）；这是输入规模，不占「单次上限 tokens」${searchToolActive() ? `；已开联网搜索：${searchPreJudge() ? '分析前先轻量判断是否需要现实信息（只发剧情简报，纯虚构默认不检索），判需要才检索' : '分析前轻量取关键词后直接检索，不判断要不要搜'}，纪要追加为附加小节，不在此预览内` : ''}">材料共 ${totalChars.toLocaleString()} 字 · 粗估约 ${(sysTok + usrTok).toLocaleString()} tokens</span>`
                 + `<input type="text" id="pp_gd_pv_search" class="text_pole" placeholder="检索…" title="在全部块里检索（大小写不敏感）：命中的块自动展开并高亮、没命中的临时藏起，清空恢复全览" />`
                 + `<span id="pp_gd_pv_hits" class="pp-muted"></span>`
-                + `<span class="menu_button" id="pp_gd_pv_expand" title="把当前看得见的块全部展开/收起（检索时只作用于命中的块）">全部展开</span>`
                 + `<span class="menu_button" id="pp_gd_pv_copy" style="margin-left:auto" title="复制系统提示词与用户消息全文，可直接粘到别处调试"><i class="fa-regular fa-copy"></i> 复制全文</span>`);
             const bodyEl = mask.querySelector('.pp-viewer-body');
             const hitsEl = mask.querySelector('#pp_gd_pv_hits');
-            const expandEl = mask.querySelector('#pp_gd_pv_expand');
             const renderBlocks = () => {
                 const query = mask.querySelector('#pp_gd_pv_search').value.trim();
                 let hitBlocks = 0, hitCount = 0;
@@ -1123,16 +1129,9 @@ function renderCollect(container, main) {
                     </details>`;
                 }).join('') || `<div class="pp-muted">没有命中「${escapeHtml(query)}」的块，换个词或清空检索</div>`;
                 hitsEl.textContent = query ? `命中 ${hitCount} 处 · ${hitBlocks}/${blocks.length} 块` : '';
-                expandEl.textContent = '全部展开';   // 重画后都回到折叠态，按钮文案同步归位
             };
             renderBlocks();
             mask.querySelector('#pp_gd_pv_search').addEventListener('input', renderBlocks);
-            expandEl.addEventListener('click', () => {
-                const items = [...bodyEl.querySelectorAll('details')];
-                const anyClosed = items.some(d => !d.open);
-                items.forEach(d => { d.open = anyClosed; });
-                expandEl.textContent = anyClosed ? '全部收起' : '全部展开';
-            });
             mask.querySelector('#pp_gd_pv_copy').addEventListener('click', async () => {
                 if (await copyText(fullText)) toastr.success('已复制到剪贴板');
                 else toastr.error('复制失败：浏览器未授权剪贴板');
@@ -1150,32 +1149,22 @@ function renderCollect(container, main) {
     });
 }
 
-// 分析前确认：这页只核对随分析插入的单元，对话/世界书等其余材料清单在第 1 步「查看完整提示词」弹窗里
+// 分析前确认（2026-08-26 用户拍板改版）：材料细账第 1 步已确认过，这里只逐行核对随分析
+// 插入的内容——单元名单（显示名称不显示数量）、玩法条目名单、联网搜索开关；
+// 记忆表格/对话层数/世界书等其余材料清单在第 1 步「查看完整提示词」弹窗里，不在此重复
 function renderReady(container, main) {
-    const stat = collectStats({ memoryTags: wizardMemoryTags(), memoryModes: wizardMemoryModes(), memoryRecent: wizardMemoryRecent() });
-    // 档位口径与第 1 步状态行同一套：常驻 X 表 · 标签 Y 表（…）· 停用 Z 表
-    const memState = memoryState();
-    const sheets = memState.mirror.sheets;
-    const modeOf = uid => (run.memModes ?? {})[uid] ?? 'always';
-    const always = sheets.filter(s => modeOf(s.uid) === 'always').length;
-    const tagsN = sheets.filter(s => modeOf(s.uid) === 'tags').length;
-    const memDesc = !sheets.length ? '无可召回的表'
-        : !always && !tagsN ? '不附带（全部停用）'
-        : [
-            always ? `常驻 ${always} 表` : '',
-            tagsN ? `标签 ${tagsN} 表${run.memTags.length ? `按 ${run.memTags.length} 类${run.memRecent ? ` + 每表最新 ${run.memRecent} 行` : ''}` : (run.memRecent ? `（未勾标签·只带每表最新 ${run.memRecent} 行）` : '（未勾标签·不带）')}` : '',
-            sheets.length - always - tagsN ? `停用 ${sheets.length - always - tagsN} 表` : '',
-        ].filter(Boolean).join(' · ');
-    const gpOn = settings.storageItems.some(i => i.enabled);
     const us = unitsState();
-    const evInPlan = us.eventUnits.filter(u => u.inPlan).length;
-    const rxInPlan = us.reactionUnits.filter(u => u.inPlan).length;
+    const evNames = us.eventUnits.filter(u => u.inPlan).map(u => u.title || '(未命名)');
+    const rxNames = us.reactionUnits.filter(u => u.inPlan).map(u => u.title || '(未命名)');
+    const gpNames = wizardStorageItems().map(i => i.name || '(未命名)');
     const ut = wizardUnitTexts();
     main.innerHTML = `
     <div class="pp-section">
-        <div class="pp-gd-stephead"><b>第 2 步 · 分析前确认</b></div>
-        <div class="pp-gd-stat" title="随分析发给模型的插入内容：第 1 步「插入单元」勾选的随机事件与路人反应单元、勾选的游戏玩法条目。对话层数、世界书命中、预设等其余材料清单在第 1 步「查看完整提示词」弹窗开头">插入单元：随机事件 ${evInPlan ? `${evInPlan} 单元` : '无'} · 玩法 ${gpOn ? `${(run.gpIds ?? []).length} 条` : '无'} · 路人反应 ${rxInPlan ? `${rxInPlan} 单元` : '无'}</div>
-        <div class="pp-gd-stat pp-muted">记忆表格：${memDesc}${stat.memChars ? `，${stat.memChars} 字` : ''}${activeStory() ? ' · 附进行中剧情' : ''}${searchToolActive() ? ` · 联网搜索：开（${searchPreJudge() ? '先轻量判断，需要才检索' : '直接检索，不判断'}）` : ''}</div>
+        <div class="pp-gd-stephead" title="记忆表格、对话层数、世界书命中、预设等其余材料清单在第 1 步「查看完整提示词」弹窗开头"><b>第 2 步 · 分析前确认</b></div>
+        <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的随机事件单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 随机事件：${evNames.length ? escapeHtml(evNames.join('、')) : '无'}</div>
+        <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的路人反应单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 路人反应：${rxNames.length ? escapeHtml(rxNames.join('、')) : '无'}</div>
+        <div class="pp-gd-stat" title="第 1 步勾选的游戏玩法条目，作为材料随分析发送，规划按这些规则设计">玩法：${gpNames.length ? escapeHtml(gpNames.join('、')) : '无'}</div>
+        <div class="pp-gd-stat" title="联网搜索总开关在「设置」页；开着时分析前先轻量判断是否需要现实信息（或直接检索），纪要附进分析材料">联网搜索：${searchToolActive() ? '开' : '关'}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">开始分析</span>
             <span id="pp_gd_ready_back" class="menu_button">返回</span>
@@ -1242,7 +1231,7 @@ function openEvPanel(onChange) {
         const st = unitsState();
         const full = st.eventUnits.length >= MAX_UNITS_PER_TOOL;
         body.innerHTML = `
-        <label class="pp-label" title="写下事件或走向想法，点「按意见生成」让大模型遵循它即兴（意见是方向不是剧本，仍会生成走向选项）；与随机二选一——框里有字时掷骰/大模型随机灰置，清空恢复">或自己给意见（有字 = 按意见生成，清空 = 随机两键）</label>
+        <label class="pp-label" title="写下事件或走向想法，点「按意见生成」让大模型遵循它即兴（意见是方向不是剧本，仍会生成走向选项）；与随机二选一——框里有字时掷骰/大模型随机灰置，清空恢复">指导意见</label>
         <textarea id="pp_gd_ev_manual" class="text_pole textarea_compact" rows="2" placeholder="想要什么样的事件或走向，写下想法"></textarea>
         <div class="pp-btn-row">
             <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：先在勾选的掷骰板块（事件条目/维度随机/AI自主）里按板块权重抽一个——条目板块按权重×概率抽一条（必出），维度随机按维度权重抽方向，AI自主由模型看剧情挑维度；板块开关与权重在页面底部「事件库设置」；结果先出草稿，点「立为单元」收进暂存">掷骰</span>
@@ -1383,7 +1372,7 @@ function evDraftCardHtml(unit) {
         ${unitHeadHtml(unit)}
         <div class="pp-gd-evdesc">${escapeHtml(p.description ?? '')}</div>
         ${options.length ? `
-        <div class="pp-label pp-gd-evoptlabel">走向选项（三选一或不选；都不选＝立卡后只作参考材料，选项会在立卡时裁掉）</div>
+        <div class="pp-label pp-gd-evoptlabel" title="三选一或不选；都不选＝立卡后只作参考材料，选项会在立卡时裁掉">走向选项</div>
         ${options.map((o, i) => `
             <div class="menu_button pp-option ${p.choiceIdx === i ? 'pp-gd-sel' : ''}" data-evopt="${i}">
                 <span class="pp-option-label">${escapeHtml(o.label ?? '')}</span>
@@ -1535,7 +1524,7 @@ function clampInjectLayers(v) {
 }
 
 // ---------------------------------------------------------------------------
-// ③ 分析调用 / ④ 人工二检 + 封装
+// 分析调用 / 第 3 步人工二检 + 封装
 // ---------------------------------------------------------------------------
 
 function historySummaries() {
@@ -1586,7 +1575,7 @@ async function startAnalyze(container, { revise = false } = {}) {
             step = 'result';
             renderMain(container);
         } else {
-            toastr.info('分析已完成，点上方「④ 二检」查看');
+            toastr.info('分析已完成，点上方「③ 结果」查看');
         }
     } catch (err) {
         if (token !== analyzeToken) return;
@@ -1618,7 +1607,7 @@ function renderResult(container, main) {
 
     main.innerHTML = `
     <div class="pp-section">
-        <div class="pp-gd-stephead"><b>第 4 步 · 人工二检</b><span class="pp-muted">世界书命中 ${run.hits} 条</span></div>
+        <div class="pp-gd-stephead"><b>第 3 步 · 人工二检</b><span class="pp-muted">世界书命中 ${run.hits} 条</span></div>
         ${checkRow('OOC', ooc?.found && items.length
             ? items.map(it => `<div class="pp-hit"><b>${escapeHtml(it.aspect ?? '')} · ${escapeHtml(it.severity ?? '')}</b><div>${escapeHtml(it.evidence ?? '')}</div><div class="pp-muted">建议：${escapeHtml(it.fix ?? '')}</div></div>`).join('')
             : '<span class="pp-muted">未发现明显 OOC</span>')}
@@ -1716,7 +1705,7 @@ function renderResult(container, main) {
             memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
         });
         report = null;
-        clearWizard();   // 已采用：快照清空，刷新页面不再回到第 4 步
+        clearWizard();   // 已采用：快照清空，刷新页面不再回到第 3 步
         renderStoryBar(container);
         renderMain(container);
     });
