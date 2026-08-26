@@ -124,8 +124,16 @@ function reactionStageAt(card, age) {
 export function composeReactionText(card, age) {
     const remain = card.floors - age;
     const head = `【路人反应校准｜显著性 ${card.salience}/5｜第 ${Math.min(age + 1, card.floors)}/${card.floors} 层（一层 = 一条角色回复）】`;
+    // 前因段（导入产物专属，E11）：导入的事件单元正文原样嵌进开头——原始单元删了链条也在，
+    // 下面那句「这件事」指的就是它。注入到期逐层重算也走这里，前因不会掉
+    const origin = String(card?.origin ?? '').trim();
     const lines = [
         head,
+        ...(origin ? [
+            '## 前因（来自导入的随机事件单元——既定方向：这件事将要且一定会发生，本卡定世界如何回应它）',
+            origin,
+            '',
+        ] : []),
         '这件事已经发生。下面的指导只管世界如何回应它：反应不是剧情，路人是背景不是主角；user 主动追问不算新触发。',
         '',
         '## 即时反应口径（每轮 1-3 句，织进当前场景；不切镜头、不写路人内心戏）',

@@ -3,7 +3,10 @@
 //   badges = 加工史（有序 ≤2，末位 = 当前所在工具；界面显示为卡左上/右上小标记，左 = 先经过的工具）；
 //   text   = 拼给模型的材料正文（事件 = 标题+描述+已选走向，反应 = 反应口径全文），选走向/改卡面时重算；
 //   payload = 工具原生数据（事件 {mode,title,description,options,choiceIdx,injectLayers}；
-//             反应 = 反应卡字段 title/salience/immediate/aftermath/boundaries/floors/edited）。
+//             反应 = 反应卡字段 title/salience/immediate/aftermath/boundaries/floors/edited）；
+//   payload.origin = 前因正文（导入产物专属，2026-08-26 E11）：生成时勾选的源单元 text 原样
+//             嵌进本单元正文开头——原始单元删了链条也在，随分析发送/转注入都能同时看到两个
+//             工具的内容（否则双徽章单元只剩最后一道工具的口径，「这件事」是什么模型无从得知）。
 // 单元定则（2026-08-26 用户拍板，后续一切修改的准则）：单元 = 带标签的纯文本提示词块，像生产材料一样
 // 作为纯粹提示词使用——立为单元时走向已裁剪（没选全砍、选了只留那个），入池后不可再改选。
 // inPlan（是否随规划分析发送）只在向导第 1 步「插入单元」勾选区读写——工具面板只管生成，不管查看。
@@ -81,25 +84,41 @@ export function unitImportable(u, targetTool) {
     return TOOL_IDS.has(targetTool) && !(u?.badges ?? []).includes(targetTool);
 }
 
+// 前因段（导入产物专属，E11）：源单元正文原样嵌进开头——删掉原始单元不丢链条。
+// 事件侧正文与事件转注入共用这一个措辞；反应侧的前因段在 reactions.js 自带
+// （units→reactions 已有依赖，反向会成环）
+export function eventOriginText(u) {
+    const origin = String(u?.payload?.origin ?? '').trim();
+    return origin
+        ? `【前因｜来自路人反应单元——本事件顺着它描述的世界状态发展，不复写同一件事】\n${origin}\n\n`
+        : '';
+}
+
 // 事件单元的材料正文：与旧版第 2 步拼进分析的同一格式（标题+描述+已选走向）；
-// 自己给意见立的单元（mode=manual 或无标题描述）走【事件指导意见】格式
+// 自己给意见立的单元（mode=manual 或无标题描述）走【事件指导意见】格式。
+// 导入产物前面带前因段（走向裁剪/重算都走这里，前因不会掉）
 export function eventUnitText(u) {
     const p = u?.payload ?? {};
+    let base;
     if (p.mode === 'manual' || (!String(p.title ?? '').trim() && !String(p.description ?? '').trim())) {
-        return `【事件指导意见】${String(p.description ?? '').trim()}`;
+        base = `【事件指导意见】${String(p.description ?? '').trim()}`;
+    } else {
+        const opt = Number.isInteger(p.choiceIdx) ? (Array.isArray(p.options) ? p.options[p.choiceIdx] : null) : null;
+        base = `【${p.title ?? ''}】${p.description ?? ''}`
+            + (opt ? `\n已选走向：${opt.label ?? ''}（幕后提示：${opt.hint ?? ''}）` : '');
     }
-    const opt = Number.isInteger(p.choiceIdx) ? (Array.isArray(p.options) ? p.options[p.choiceIdx] : null) : null;
-    return `【${p.title ?? ''}】${p.description ?? ''}`
-        + (opt ? `\n已选走向：${opt.label ?? ''}（幕后提示：${opt.hint ?? ''}）` : '');
+    return eventOriginText(u) + base;
 }
 
 // 事件单元出厂：payload 补 mode/choiceIdx 缺省，text 按当前走向算好。
-// imported = 本次生成导入了另一工具的单元（badges = [对方工具, 事件]，左 = 先）
-export function newEventUnit(payload, imported = false) {
+// sourceUnit = 本次生成导入的源单元（导入产物带双徽章 [对方工具, 事件]，左 = 先；
+// 其正文存进 payload.origin 作为前因——E11 起导入只收一个，导入产物正文自带前因）
+export function newEventUnit(payload, sourceUnit = null) {
+    const origin = sourceUnit ? String(sourceUnit.text ?? '').trim() : '';
     const unit = normalizeUnit({
         id: newId('unit-'),
         tool: 'event',
-        badges: imported ? ['reaction', 'event'] : ['event'],
+        badges: sourceUnit ? ['reaction', 'event'] : ['event'],
         title: String(payload?.title ?? '').slice(0, 60),
         text: '',
         payload: {
@@ -109,6 +128,7 @@ export function newEventUnit(payload, imported = false) {
             options: Array.isArray(payload?.options) ? payload.options : [],
             choiceIdx: Number.isInteger(payload?.choiceIdx) ? payload.choiceIdx : null,
             injectLayers: Number(payload?.injectLayers) || 20,
+            ...(origin ? { origin } : {}),
         },
         at: Date.now(),
         inPlan: false,
@@ -136,12 +156,15 @@ export function finalizeEventDraft(unit) {
 }
 
 // 反应单元出厂：payload = 反应卡字段（composeReactionText 的输入），text = 组装好的口径全文。
-// 标题优先用模型给的短标题（与事件同款）；旧卡没有 title 字段才退回拿即时口径开头硬切
-export function newReactionUnit(card, imported = false, inPlan = false) {
+// 标题优先用模型给的短标题（与事件同款）；旧卡没有 title 字段才退回拿即时口径开头硬切。
+// sourceUnit = 本次生成导入的事件单元（双徽章 + 前因存 payload.origin，正文由
+// composeReactionText 织入——到期逐层重算也走它，前因不会掉）
+export function newReactionUnit(card, sourceUnit = null, inPlan = false) {
+    const origin = sourceUnit ? String(sourceUnit.text ?? '').trim() : '';
     const unit = normalizeUnit({
         id: newId('unit-'),
         tool: 'reaction',
-        badges: imported ? ['event', 'reaction'] : ['reaction'],
+        badges: sourceUnit ? ['event', 'reaction'] : ['reaction'],
         title: String(card?.title ?? card?.immediate ?? '').slice(0, 60),
         text: '',
         payload: {
@@ -152,6 +175,7 @@ export function newReactionUnit(card, imported = false, inPlan = false) {
             boundaries: String(card?.boundaries ?? ''),
             floors: card?.floors,
             edited: Boolean(card?.edited),
+            ...(origin ? { origin } : {}),
         },
         at: Date.now(),
         inPlan,

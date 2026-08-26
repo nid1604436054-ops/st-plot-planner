@@ -30,7 +30,7 @@ import { getTavernContext } from "../../context.js";
 import { loadChatData, saveChatData } from "../../chatdata.js";
 import { escapeHtml, estimateTokens } from "../../utils.js";
 import { searchToolReady, withGlobalPresets } from "../../api.js";
-import { unitsState, persistUnits, newEventUnit, newReactionUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
+import { unitsState, persistUnits, newEventUnit, newReactionUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, eventOriginText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
 
 // 向导状态机：'' 空闲 | collect ① | ready ② 分析前确认 | running ③ | result ④ | reviewing/report 检查报告
 let step = '';
@@ -96,7 +96,7 @@ function migrateSnapshotV1(snap) {
         touched = addUnit(u) || touched;
     }
     const rx = normalizeReactionCard(r.reaction);
-    if (rx) touched = addUnit(newReactionUnit(rx, false, rx.inPlan)) || touched;
+    if (rx) touched = addUnit(newReactionUnit(rx, null, rx.inPlan)) || touched;
     if (touched) toastr.info('旧向导里的事件/反应已转成暂存单元（在两个工具面板里）');
     return {
         version: 2,
@@ -400,7 +400,7 @@ function wireUnitAreaCard(cardEl, unit, rerender, refreshCounts) {
                 id: newId('inj-'),
                 label: `事件：${p.title ?? ''} · ${opt.label ?? ''}`,
                 mode: 'open',
-                content: `【随机事件·${p.title ?? ''}】${p.description ?? ''}\n已选定走向：${opt.label ?? ''}\n幕后提示：${opt.hint ?? ''}`,
+                content: eventOriginText(unit) + `【随机事件·${p.title ?? ''}】${p.description ?? ''}\n已选定走向：${opt.label ?? ''}\n幕后提示：${opt.hint ?? ''}`,
                 depth: 4,
                 role: 'system',
                 scope: 'chat',
@@ -865,8 +865,8 @@ function renderCollect(container, main) {
             || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
         <div class="pp-btn-row">
-            <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内生成——掷骰 / 大模型随机 / 按意见生成三键与意见二选一（意见框有字时只剩「按意见生成」能点），生成先出草稿、点草稿上的「立为单元」入池，暂存最多 3 个。大模型随机无条件把事件库已有条目作为防复刻清单随行（不做勾选）。生成材料自动带本页上方同一批，也可勾选导入路人反应的暂存单元做既定方向（生成的事件必须与它咬合：顺着它描述的世界状态发展、不复写同一件事；仅随机两键生效；已生效注入不自动带，防双算）。入池单元在本页下方「插入单元」区点开查看、勾选随分析发送、转隐身注入；采纳规划后暂存不清空，清空键在「插入单元」区">随机事件</span>
-            <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见（可选）、点「生成反应卡」出草稿、点草稿上「立为单元」入池（材料自动带本页上方同一批，也可导入随机事件的暂存单元做既定方向——导入的事件按将要且一定会发生对待，反应卡围绕它出；模型会顺带给浓缩短标题作单元名）。入池单元在本页下方「插入单元」区点开查看与操作——勾选随分析发送 / 转隐身注入（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径，两路互斥）；产物最多暂存 3 个，清空键在「插入单元」区">路人反应</span>
+            <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内生成——掷骰 / 大模型随机 / 按意见生成三键与意见二选一（意见框有字时只剩「按意见生成」能点），生成先出草稿、点草稿上的「立为单元」入池，暂存最多 3 个。大模型随机无条件把事件库已有条目作为防复刻清单随行（不做勾选）。生成材料自动带本页上方同一批，也可勾选导入路人反应的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的；生成的事件必须与它咬合：顺着它描述的世界状态发展、不复写同一件事；仅随机两键生效；已生效注入不自动带，防双算；导入产物正文自带前因，删掉原始单元也不丢）。入池单元在本页下方「插入单元」区点开查看、勾选随分析发送、转隐身注入；采纳规划后暂存不清空，清空键在「插入单元」区">随机事件</span>
+            <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见（可选）、点「生成反应卡」出草稿、点草稿上「立为单元」入池（材料自动带本页上方同一批，也可导入随机事件的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的）——导入的事件按将要且一定会发生对待，反应卡围绕它出；导入产物正文自带前因，删掉原始单元也不丢；模型会顺带给浓缩短标题作单元名）。入池单元在本页下方「插入单元」区点开查看与操作——勾选随分析发送 / 转隐身注入（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径，两路互斥）；产物最多暂存 3 个，清空键在「插入单元」区">路人反应</span>
         </div>
         <div id="pp_gd_c1_units"></div>
         <label class="pp-label" title="已有的想法、约束或重点（可选，随分析发给模型）">剧情构思方向</label>
@@ -1217,7 +1217,7 @@ function importRowHtml(tool, picked) {
     <label class="pp-label">导入${otherName}单元做既定方向</label>
     <div class="pp-muted" title="加工史已含本工具（两标满）的单元不能再导入——套娃在结构上不可能">对方暂存里的单元都已经过本工具（两标满），不能再导入</div>`;
     return `
-    <label class="pp-label" title="跨工具导入是两工具间唯一影响通道：只能导入「加工史里还没有本工具」的单元（同工具回流禁、两标满禁）。导入＝既定方向——生成结果必须与导入单元咬合（顺着它发展、不复写同一件事），不是可有可无的参考。导入不消耗——原单元留在对方暂存里，勾着再生成一次就是重 roll；导入产物 = 带累积徽章的新单元（左＝先、右＝后）">导入${otherName}单元做既定方向</label>
+    <label class="pp-label" title="跨工具导入是两工具间唯一影响通道：只能导入「加工史里还没有本工具」的单元（同工具回流禁、两标满禁）。最多勾一项——勾了新的自动替掉旧的（2026-08-26 拍板）。导入＝既定方向——生成结果必须与导入单元咬合（顺着它发展、不复写同一件事），不是可有可无的参考。导入不消耗——原单元留在对方暂存里，勾着再生成一次就是重 roll；导入产物 = 带累积徽章的新单元（左＝先、右＝后），正文自带前因（源单元内容嵌在开头，删掉原始单元也不丢）">导入${otherName}单元做既定方向</label>
     <div class="pp-gd-selp">
         ${list.map(u => `<label title="${escapeHtml(String(u.text ?? '').slice(0, 300))}"><input type="checkbox" data-imp="${escapeHtml(u.id)}" ${picked.has(u.id) ? 'checked' : ''}/> ${escapeHtml(u.title || '(未命名)')}</label>`).join('')}
     </div>`;
@@ -1246,7 +1246,7 @@ function openEvPanel(onChange) {
         <textarea id="pp_gd_ev_manual" class="text_pole textarea_compact" rows="2" placeholder="想要什么样的事件或走向，写下想法"></textarea>
         <div class="pp-btn-row">
             <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：先在勾选的掷骰板块（事件条目/维度随机/AI自主）里按板块权重抽一个——条目板块按权重×概率抽一条（必出），维度随机按维度权重抽方向，AI自主由模型看剧情挑维度；板块开关与权重在页面底部「事件库设置」；结果先出草稿，点「立为单元」收进暂存">掷骰</span>
-            <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰直接让模型即兴；事件库已有条目无条件作为防复刻清单随行（生成的新事件不与库里撞内容，不做勾选）；生成材料自动带第 1 步同一批，勾选的导入单元作为既定方向随行（生成的事件必须与它咬合：顺着它发展、不复写同一件事）">大模型随机</span>
+            <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰直接让模型即兴；事件库已有条目无条件作为防复刻清单随行（生成的新事件不与库里撞内容，不做勾选）；生成材料自动带第 1 步同一批，勾选的导入单元（最多一项）作为既定方向随行（生成的事件必须与它咬合：顺着它发展、不复写同一件事；产物正文自带前因）">大模型随机</span>
             <span id="pp_gd_ev_note" class="menu_button" title="把上面的意见交给大模型，遵循意见即兴生成事件（意见路径独占材料位：不带掷骰、不带导入单元）；结果先出草稿，点「立为单元」收进暂存">按意见生成</span>
         </div>
         <div id="pp_gd_ev_imp">${importRowHtml('event', evImports)}</div>
@@ -1272,7 +1272,11 @@ function openEvPanel(onChange) {
         if (st.eventDraft) wireEvDraft(poolBox.querySelector('[data-draft]'), st.eventDraft, rerender);
 
         body.querySelectorAll('[data-imp]').forEach(cb => cb.addEventListener('change', () => {
-            if (cb.checked) evImports.add(cb.dataset.imp); else evImports.delete(cb.dataset.imp);
+            // 单选（2026-08-26 用户拍板）：导入最多勾一项——勾了新的自动替掉旧的。
+            // 只同步各框勾选态不重画（导入行没有输入框，重画也无碍，但少动 DOM 更稳）
+            if (cb.checked) { evImports.clear(); evImports.add(cb.dataset.imp); }
+            else evImports.delete(cb.dataset.imp);
+            body.querySelectorAll('[data-imp]').forEach(o => { if (o !== cb) o.checked = evImports.has(o.dataset.imp); });
         }));
         body.querySelector('#pp_gd_ev_llm').addEventListener('click', async () => {
             if (evBusy || manualEl.value.trim()) return;
@@ -1284,7 +1288,7 @@ function openEvPanel(onChange) {
             try {
                 const gen = await generateFreeRandomEvent({ materials: { ...wizardMaterials(), importedUnits: imports } });
                 const cur = unitsState();
-                cur.eventDraft = newEventUnit({ ...gen, mode: 'llm' }, imports.length > 0);
+                cur.eventDraft = newEventUnit({ ...gen, mode: 'llm' }, imports[0] ?? null);
                 persistUnits();
                 rerender();   // 面板整面重画：草稿卡上桌
                 status('草稿已生成——点「立为单元」收进暂存（再生成会换掉草稿）');
@@ -1306,7 +1310,7 @@ function openEvPanel(onChange) {
             try {
                 const gen = await generateFreeRandomEvent({ note, materials: { ...wizardMaterials() } });   // 意见路径独占材料位，不带导入单元
                 const cur = unitsState();
-                cur.eventDraft = newEventUnit({ ...gen, mode: 'opinion' }, false);
+                cur.eventDraft = newEventUnit({ ...gen, mode: 'opinion' }, null);
                 persistUnits();
                 rerender();
                 status('草稿已生成——点「立为单元」收进暂存（再生成会换掉草稿）');
@@ -1352,7 +1356,7 @@ function openEvPanel(onChange) {
                     msg = `来自维度「${r.dimension.name}」自由生成——点「立为单元」收进暂存`;
                 }
                 const cur = unitsState();
-                cur.eventDraft = newEventUnit({ ...gen, mode: r.mode === 'library' ? 'lib' : r.mode }, imports.length > 0);
+                cur.eventDraft = newEventUnit({ ...gen, mode: r.mode === 'library' ? 'lib' : r.mode }, imports[0] ?? null);
                 persistUnits();
                 rerender();   // 整面重画会清掉状态行，提示在重画后再落
                 status(msg);
@@ -1437,7 +1441,7 @@ function openRxPanel(onChange) {
         <label class="pp-label" title="写给生成模型的指导意见：期望烈度、余波方向、要避开什么">指导意见（可选）</label>
         <textarea id="pp_gd_rx_note" class="text_pole textarea_compact" rows="2" placeholder="期望烈度、余波方向、要避开什么"></textarea>
         <div class="pp-btn-row">
-            <span id="pp_gd_rx_gen" class="menu_button" title="生成一张反应卡先出草稿（材料自动带第 1 步同一批：记忆表格档位与标签、玩法勾选、世界书、进行中剧情，勾选的导入单元作为既定方向随行——反应卡围绕导入的事件出，没勾才从最近对话里找）；点草稿上的「立为单元」入池，模型会顺带给一个浓缩短标题作单元名">生成反应卡</span>
+            <span id="pp_gd_rx_gen" class="menu_button" title="生成一张反应卡先出草稿（材料自动带第 1 步同一批：记忆表格档位与标签、玩法勾选、世界书、进行中剧情，勾选的导入单元（最多一项）作为既定方向随行——反应卡围绕导入的事件出，没勾才从最近对话里找；产物正文自带前因，删掉原始单元也不丢）；点草稿上的「立为单元」入池，模型会顺带给一个浓缩短标题作单元名">生成反应卡</span>
         </div>
         ${importRowHtml('reaction', rxImports)}
         <div id="pp_gd_rx_status" class="pp-muted">${full ? `反应暂存已满 ${MAX_UNITS_PER_TOOL}/${MAX_UNITS_PER_TOOL}，先在第 1 步「插入单元」区删一个再生成` : ''}</div>
@@ -1475,7 +1479,10 @@ function openRxPanel(onChange) {
         }
 
         body.querySelectorAll('[data-imp]').forEach(cb => cb.addEventListener('change', () => {
-            if (cb.checked) rxImports.add(cb.dataset.imp); else rxImports.delete(cb.dataset.imp);
+            // 单选（与事件面板同款拍板）：导入最多勾一项，勾了新的自动替掉旧的
+            if (cb.checked) { rxImports.clear(); rxImports.add(cb.dataset.imp); }
+            else rxImports.delete(cb.dataset.imp);
+            body.querySelectorAll('[data-imp]').forEach(o => { if (o !== cb) o.checked = rxImports.has(o.dataset.imp); });
         }));
         body.querySelector('#pp_gd_rx_gen').addEventListener('click', async () => {
             if (rxBusy) return;
@@ -1493,7 +1500,7 @@ function openRxPanel(onChange) {
                     activePlan: activeStory()?.planText ?? '',
                 });
                 const cur = unitsState();
-                cur.reactionDraft = newReactionUnit(gen, imports.length > 0);
+                cur.reactionDraft = newReactionUnit(gen, imports[0] ?? null);
                 persistUnits();
                 rerender();   // 面板整面重画：按钮文案复位、草稿卡上桌
                 status('草稿已生成——点「立为单元」收进暂存（再生成会换掉草稿）');
