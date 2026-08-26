@@ -135,7 +135,8 @@ export function recentEventTitles(limit = 8) {
 // 玩法勾选用第 1 步的本次选择）；预设已全局化，由 chatCompletion 出口自动附带。
 // 单元制口径：已生效注入不自动进工具生成（防双算）——想让路人反应的单元影响本次事件，
 // 走显式导入（materials.importedUnits，唯一影响通道）；材料小节从 materials.js 直取，
-// 不再经 planner.js 的「路人反应」注入小节
+// 不再经 planner.js 的「路人反应」注入小节。导入＝既定方向（2026-08-26 定则）：导入的反应
+// 口径视为已定局的世界状态，新事件必须与它咬合——顺着它发展、不复写同一件事
 function contextSections(materials = {}) {
     const s = storyState();
     const { parts } = materialSections({
@@ -151,7 +152,11 @@ function contextSections(materials = {}) {
         .map(u => String(u?.text ?? '').trim()).filter(Boolean);
     const recent = recentEventTitles();
     return [...parts,
-        ...(imported.length ? ['## 导入单元（来自路人反应工具的暂存产物，仅作参考材料，不是既成事实）', imported.join('\n\n')] : []),
+        ...(imported.length ? [
+            '## 导入单元（用户指定的既定方向：新生成的事件必须与它咬合）',
+            '下面是用户导入的路人反应单元。它描述的世界状态（谁在注视、议论怎么传、烈度多大）视为已定局：新生成的事件要顺着这个方向发展，或与它正面咬合——不能与它无关，更不能与它矛盾；但不要把同一件事复写一遍，出这个方向上的下一件事，不是同一件事的重演。',
+            imported.join('\n\n'),
+        ] : []),
         '## 最近已出过的事件（不要重复相近情节）',
         recent.length ? recent.map(t => `- ${t}`).join('\n') : '（暂无记录）',
         '## 底线',
