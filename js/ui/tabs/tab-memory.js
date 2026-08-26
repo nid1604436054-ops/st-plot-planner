@@ -6,7 +6,7 @@ import {
     memoryState, syncMemory, mergeMirrorFromSource, persistMemory,
     deleteMirrorRow, deleteMirrorSheet, undeleteRow, purgeMootTombstones,
     setRowTags, markSeen, newRowCount,
-    restoreFromBackup, editMirrorRow, acceptSourceRow, addMirrorRow, autoTagByVocabulary,
+    restoreFromBackup, editMirrorRow, acceptSourceRow, autoTagByVocabulary,
 } from "../../memoryTable.js";
 import { parseKeys } from "../../lorebook.js";
 import { escapeHtml, clamp, downloadJson } from "../../utils.js";
@@ -389,21 +389,6 @@ function mirrorRowHtml(state, sheet, row, idx) {
     </tr>`;
 }
 
-// 添加行：临时插在表体顶部的编辑行
-function newRowEditorHtml(sheet) {
-    return `
-    <tr class="pp-grid-editing" data-new="1">
-        <td class="pp-grid-idx">＋</td>
-        ${sheet.columns.map((c, i) => `<td class="pp-grid-editcell"><textarea class="text_pole textarea_compact" rows="2" data-mcell="${i}" placeholder="${escapeHtml(c)}"></textarea></td>`).join('')}
-        <td class="pp-grid-tagscell"></td>
-        <td class="pp-grid-statecell"></td>
-        <td class="pp-grid-opscell">
-            <span class="menu_button" data-msave data-mode="add">添加</span>
-            <span class="menu_button" data-mcancel>取消</span>
-        </td>
-    </tr>`;
-}
-
 // ---------------------------------------------------------------------------
 // 镜像列表
 // ---------------------------------------------------------------------------
@@ -455,11 +440,10 @@ function renderSheets(container) {
                         ${gridHeadHtml(sheet.columns, '<th>标签</th><th>状态</th><th>操作</th>')}
                         <tbody>
                             ${pairs.map(([r, i]) => mirrorRowHtml(state, sheet, r, i)).join('')
-        || (!q ? `<tr><td colspan="${sheet.columns.length + 4}" class="pp-muted">没有行，点下方「添加行」</td></tr>` : '')}
+        || (!q ? `<tr><td colspan="${sheet.columns.length + 4}" class="pp-muted">没有行</td></tr>` : '')}
                         </tbody>
                     </table>
                 </div>
-                <div class="pp-btn-row"><span class="menu_button" data-maddrow="${escapeHtml(sheet.uid)}">添加行</span></div>
             </div>
         </div>`;
     }).join('');
@@ -508,29 +492,16 @@ function bindRow(container, tr, uid) {
 }
 
 function bindRowEditor(container, tr, uid, rid) {
-    const save = tr.querySelector('[data-msave]');
-    const mode = save?.dataset.mode;
-    save?.addEventListener('click', () => {
-        const cells = collectEditorCells(tr);
-        if (mode === 'add') {
-            addMirrorRow(uid, cells);
-            renderSheets(container);
-            renderStatus(container);
-            toastr.success('已添加行');
-        } else {
-            editMirrorRow(uid, rid, cells);
-            editingRow = null;
-            swapRow(container, uid, rid);
-            renderStatus(container);
-            toastr.success('已保存');
-        }
+    tr.querySelector('[data-msave]')?.addEventListener('click', () => {
+        editMirrorRow(uid, rid, collectEditorCells(tr));
+        editingRow = null;
+        swapRow(container, uid, rid);
+        renderStatus(container);
+        toastr.success('已保存');
     });
     tr.querySelector('[data-mcancel]')?.addEventListener('click', () => {
-        if (mode === 'add') tr.remove();
-        else {
-            editingRow = null;
-            swapRow(container, uid, rid);
-        }
+        editingRow = null;
+        swapRow(container, uid, rid);
     });
     tr.querySelector('[data-maccept]')?.addEventListener('click', () => {
         acceptSourceRow(uid, rid);
@@ -563,22 +534,6 @@ function bindSheetEvents(container, list) {
     list.querySelectorAll('tbody tr[data-rid]').forEach(tr => {
         bindRow(container, tr, tr.closest('.pp-book').dataset.muid);
     });
-
-    // 添加行：编辑行插在表体顶部，再点一次取消
-    list.querySelectorAll('[data-maddrow]').forEach(el => el.addEventListener('click', () => {
-        const uid = el.dataset.maddrow;
-        const tbody = el.closest('.pp-entries')?.querySelector('tbody');
-        if (!tbody) return;
-        const existing = tbody.querySelector('tr[data-new]');
-        if (existing) {
-            existing.remove();
-            return;
-        }
-        const sheet = memoryState().mirror.sheets.find(s => s.uid === uid);
-        if (!sheet) return;
-        tbody.insertAdjacentHTML('afterbegin', newRowEditorHtml(sheet));
-        bindRowEditor(container, tbody.querySelector('tr[data-new]'), uid, null);
-    }));
 
     list.querySelectorAll('[data-mdelsheet]').forEach(el => el.addEventListener('click', () => {
         const uid = el.dataset.mdelsheet;

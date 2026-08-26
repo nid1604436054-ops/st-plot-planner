@@ -11,7 +11,7 @@
 //     用户编辑过的行不被覆盖（原表改动只标「原表已更新」），删除过的行内容不变不复活（墓碑按内容指纹）
 import { getTavernContext } from "./context.js";
 import { chatCompletion, parseModelJson } from "./api.js";
-import { newId, settings } from "./settings.js";
+import { settings } from "./settings.js";
 import { loadChatData, saveChatData } from "./chatdata.js";
 
 const MAX_BACKUPS = 3;
@@ -327,17 +327,7 @@ export function acceptSourceRow(uid, rid) {
     persistMemory();
 }
 
-export function addMirrorRow(uid, cells) {
-    const state = memoryState();
-    const sheet = state.mirror.sheets.find(s => s.uid === uid);
-    if (!sheet) return;
-    const clean = cells.map(v => String(v ?? '').trim());
-    if (!clean.some(v => v)) return;
-    sheet.rows.push({ rid: newId('r_'), sfp: null, cells: clean, srcCells: null, edited: true });
-    persistMemory();
-}
-
-// 删行：源行记墓碑（原表内容不变就不复活）；手加行直接消失
+// 删行：源行记墓碑（原表内容不变就不复活）；无源指纹的行（旧版「添加行」留下的）直接消失
 export function deleteMirrorRow(uid, rid) {
     const state = memoryState();
     const sheet = state.mirror.sheets.find(s => s.uid === uid);
