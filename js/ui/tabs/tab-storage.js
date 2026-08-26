@@ -132,7 +132,9 @@ export function renderStorageTools(container) {
                     id: raw.id, name: raw.name ?? '未命名',
                     keys: Array.isArray(raw.keys) ? raw.keys.map(String) : [],
                     constant: Boolean(raw.constant),
-                    depth: Number(raw.depth) || 6,
+                    // 深度 0 是合法值（同添加表单），不能被 || 6 吞掉；缺失/非法才回退默认
+                    depth: raw.depth !== undefined && Number.isFinite(Number(raw.depth))
+                        ? Math.min(Math.max(Math.round(Number(raw.depth)), 0), 16) : 6,
                     content: String(raw.content),
                     enabled: raw.enabled !== false,
                 });

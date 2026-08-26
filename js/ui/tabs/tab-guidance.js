@@ -1739,6 +1739,12 @@ function renderResult(container, main) {
 async function reviewStory(container) {
     const active = activeStory();
     if (!active) return;
+    // 与 startAnalyze 同一道并发闸：检查与分析共用流式页与 token，混跑会静默作废一次计费调用
+    if (analyzeBusy) {
+        toastr.warning('上一轮分析/检查还在进行中，等它完成');
+        return;
+    }
+    analyzeBusy = true;
     const token = ++analyzeToken;
     streamText = '';
     streamStage = '';
@@ -1772,6 +1778,8 @@ async function reviewStory(container) {
             step = '';
             renderMain(container);
         }
+    } finally {
+        analyzeBusy = false;
     }
 }
 

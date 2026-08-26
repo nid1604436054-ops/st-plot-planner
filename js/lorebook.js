@@ -72,7 +72,7 @@ export function findEntry(bookId, uid) {
     return entry ?? null;
 }
 
-export function addEntry(bookId, { comment, keys, content, tags }) {
+export function addEntry(bookId, { comment, keys, content } = {}) {
     const book = settings.lorebooks.find(b => b.id === bookId);
     if (!book) return null;
     const uid = book.entries.reduce((m, e) => Math.max(m, Number(e.uid) || 0), -1) + 1;
@@ -80,7 +80,6 @@ export function addEntry(bookId, { comment, keys, content, tags }) {
         uid,
         comment: comment || `条目 ${book.entries.length + 1}`,
         keys: (keys ?? []).map(String).filter(Boolean),
-        tags: (tags ?? []).map(String).filter(Boolean),
         content: content ?? '',
         disabled: false,
         constant: false,

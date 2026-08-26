@@ -318,7 +318,7 @@ function renderBackups(container) {
         </span>
     </div>`;
     el.innerHTML = `
-    <b title="原表库每次内容变化归档上一版（最多 20 份）。恢复 = 把该版本里缺失的行插回原表，只增不改">备份与恢复</b>
+    <b title="原表库每次内容变化归档上一版（最多 3 份）。恢复 = 把该版本里缺失的行插回原表，只增不改">备份与恢复</b>
     ${item(`当前原表库（${fmtTime(state.source.syncedAt)} · ${rowsOf(state.source.sheets)} 行）`, state.source.sheets, 'live')}
     ${state.backups.map(b => item(`${fmtTime(b.at)} · ${rowsOf(b.sheets)} 行`, b.sheets, String(b.at))).join('')}`;
 

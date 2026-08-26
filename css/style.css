@@ -580,15 +580,6 @@
     white-space: nowrap;
 }
 
-/* 召回预览输出 */
-.pp-mem-rc-out,
-#pp_mem_rc_out {
-    white-space: pre-wrap;
-    max-height: 200px;
-    overflow-y: auto;
-    margin: 0;
-}
-
 /* 剧情指导：预设行下方的编辑区（名字 + 内容），虚线框区分于预设列表行 */
 .pp-gd-editor {
     margin-top: 4px;
@@ -1190,14 +1181,6 @@
 .pp-lib-txt {
     flex: 1 1 auto;
     min-width: 0;
-    word-break: break-word;
-}
-
-/* 随机事件页：旧版路人反应卡的扩散链分段（新卡不再渲染，样式保留给可能存在的旧界面残留） */
-.pp-rx-stage {
-    padding-left: 8px;
-    border-left: 3px solid var(--SmartThemeBorderColor, #666);
-    margin: 4px 0;
     word-break: break-word;
 }
 

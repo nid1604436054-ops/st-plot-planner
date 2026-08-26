@@ -75,13 +75,22 @@ export function loadChatData(name, makeDefaults) {
     return value;
 }
 
-// 读走旧键并从 chatMetadata 删除，防抖保存一次；没有旧键时零成本（一次属性查询）
+// 读走旧键并从 chatMetadata 删除，防抖保存一次；没有旧键时零成本（一轮属性查询）。
+// 扫全部旧键而不只看本次请求的：reaction 块退役后没人再读它，只有别的块读取时
+// 顺手把它的旧键也清出聊天文件，不然会永远留在里面
 function takeLegacy(name) {
     const meta = tavernCtx().chatMetadata;
+    if (!meta) return undefined;
     const legacyKey = LEGACY_META_KEYS[name];
-    if (!meta || !legacyKey || meta[legacyKey] === undefined) return undefined;
-    const value = meta[legacyKey];
-    delete meta[legacyKey];
+    let value;
+    let touched = false;
+    for (const k of Object.values(LEGACY_META_KEYS)) {
+        if (meta[k] === undefined) continue;
+        if (k === legacyKey) value = meta[k];
+        delete meta[k];
+        touched = true;
+    }
+    if (!touched) return undefined;
     clearTimeout(legacyTimer);
     legacyTimer = setTimeout(() => {
         try { tavernCtx().saveChat?.(); }

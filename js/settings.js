@@ -76,6 +76,7 @@ function ensureDefaults() {
             ? [{ id: newId('gd-'), name: '我的预设', content: store.guidance.customPrompt, enabled: true }]
             : [];
     }
+    delete store.guidance.customPrompt;   // 迁移完清残留旧键（§5：旧值不能留在设置文件里）
     // 顶层 ??= 只对新装用户生效，老安装的嵌套新字段在这里补
     store.api.profiles ??= [];        // 老安装补供应商方案列表
     store.retrieval.memChars ??= 4000;
