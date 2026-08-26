@@ -316,8 +316,42 @@ function unitPickRow(u) {
     </div>`;
 }
 
-// 单元区展开卡：单元 = 带标签的纯文本提示词块（2026-08-26 用户定则）——展开看到的就是发给模型的那份正文；
-// 转注入/层数/楼层预算/删除全在这里（工具面板只管生成，不存放单元）
+// 反应卡结构化卡面（草稿卡与单元区展开卡共用）：显著性星级 + 即时口径 + 余波口径 + 底线分栏 + 楼层预算 + 注入正文预览。
+// 2026-08-26 恢复 E7 原显示——定则的「单元 = 纯文本提示词块」管的是发给模型的材料语义，卡面展示保留生成结果的原有形态，
+// 不做整块纯文本替换（E8 一度替换成组装全文，用户点名退回）
+function rxCardFieldsHtml(unit) {
+    const card = unit.payload ?? {};
+    const stars = '★'.repeat(card.salience) + '☆'.repeat(5 - card.salience);
+    return `
+    <div>显著性 <span style="color:#e8c06a">${stars}</span>（${card.salience}/5）</div>
+    <label class="pp-label">即时反应口径（每轮 1-3 句，织进当前场景，写一次就够）</label>
+    <div>${escapeHtml(card.immediate)}</div>
+    <label class="pp-label">余波口径（消息传开/平息的方向，不写场面）</label>
+    <div>${escapeHtml(card.aftermath)}</div>
+    <label class="pp-label">底线</label>
+    <div>${escapeHtml(card.boundaries)}</div>
+    <label class="pp-label" title="转注入用的就是下面这份预览文本；改过就按这份固定，注入后只按层数过期。随分析发送走第 1 步「插入单元」勾选，用的也是这份文本">楼层预算（一层 = 一条角色回复，user 消息不计；到期自动撤下）</label>
+    <input data-rxu-floors="1" class="text_pole textarea_compact" type="number" min="2" max="30" value="${card.floors}" />
+    <label class="pp-label">注入正文预览（可改）</label>
+    <textarea data-rxu-text="1" class="text_pole textarea_compact" rows="10">${escapeHtml(unit.text)}</textarea>`;
+}
+
+// 结构化卡面字段接线（E7 原逻辑抽出共用）：楼层预算夹 2-30，未手改正文时按新预算重算预览；正文一改即冻结为手写版
+function wireRxCardFields(cardEl, unit) {
+    const floorsEl = cardEl.querySelector('[data-rxu-floors]');
+    const textEl = cardEl.querySelector('[data-rxu-text]');
+    floorsEl.addEventListener('change', () => {
+        unit.payload.floors = Math.min(Math.max(Number(floorsEl.value) || unit.payload.floors, 2), 30);
+        floorsEl.value = unit.payload.floors;
+        if (!unit.payload.edited) { unit.text = composeReactionText(unit.payload, 0); textEl.value = unit.text; }
+        persistUnits();
+    });
+    textEl.addEventListener('input', () => { unit.text = textEl.value; unit.payload.edited = true; persistUnits(); });
+    return { textEl };
+}
+
+// 单元区展开卡：事件卡＝描述正文；反应卡＝原结构化卡面（见 rxCardFieldsHtml）。
+// 转注入/层数/删除全在这里（工具面板只管生成，不存放单元）
 function unitAreaCardHtml(u) {
     if (u.tool === 'event') {
         return `<div class="pp-item pp-gd-evcard" data-ucard="${escapeHtml(u.id)}">
@@ -331,12 +365,8 @@ function unitAreaCardHtml(u) {
             </div>
         </div>`;
     }
-    const card = u.payload ?? {};
     return `<div class="pp-item pp-gd-evcard" data-ucard="${escapeHtml(u.id)}">
-        <label class="pp-label" title="转注入按这个层数到期自动撤下；一层 = 一条角色回复（user 消息不计）">楼层预算</label>
-        <input data-ua-floors="1" class="text_pole" type="number" min="2" max="30" value="${card.floors}" />
-        <label class="pp-label" title="这就是发给模型的整块提示词；改过就按这份固定，注入后只按层数过期。随分析发送走的也是这份文本">注入正文（可改）</label>
-        <textarea data-ua-text="1" class="text_pole textarea_compact" rows="10">${escapeHtml(u.text)}</textarea>
+        ${rxCardFieldsHtml(u)}
         <div class="pp-btn-row pp-gd-evops">
             <span data-ua-inject="1" class="menu_button" title="转为隐身注入（模型可见、聊天界面不显示），按楼层预算到期自动撤下；生效期间规划与检查自动附带同一口径，「插入单元」的勾选自动取消；本单元留在暂存里不消耗">转为隐身注入</span>
             <span data-ua-del="1" class="menu_button fa-solid fa-trash" title="从暂存池删除这个单元（已转隐身注入的不受影响）"></span>
@@ -383,15 +413,7 @@ function wireUnitAreaCard(cardEl, unit, rerender, refreshCounts) {
             toastr.success(`已注入，${injLayers} 层后自动撤下（页面底部「生效中的隐身注入」可提前撤下）`);
         });
     } else {
-        const floorsEl = cardEl.querySelector('[data-ua-floors]');
-        const textEl = cardEl.querySelector('[data-ua-text]');
-        floorsEl.addEventListener('change', () => {
-            unit.payload.floors = Math.min(Math.max(Number(floorsEl.value) || unit.payload.floors, 2), 30);
-            floorsEl.value = unit.payload.floors;
-            if (!unit.payload.edited) { unit.text = composeReactionText(unit.payload, 0); textEl.value = unit.text; }
-            persistUnits();
-        });
-        textEl.addEventListener('input', () => { unit.text = textEl.value; unit.payload.edited = true; persistUnits(); });
+        const { textEl } = wireRxCardFields(cardEl, unit);
         cardEl.querySelector('[data-ua-inject]').addEventListener('click', () => {
             const text = textEl.value.trim();
             if (!text) { toastr.warning('注入内容为空'); return; }
@@ -1431,6 +1453,7 @@ function openRxPanel(onChange) {
         const draft = st.reactionDraft;
         if (draft) {
             const draftEl = poolBox.querySelector('[data-draft]');
+            wireRxCardFields(draftEl, draft);   // 楼层预算/注入正文在草稿期就可改，改动随草稿存
             draftEl.querySelector('[data-rxu-keep]').addEventListener('click', () => {
                 const cur = unitsState();
                 if (cur.reactionUnits.length >= MAX_UNITS_PER_TOOL) {
@@ -1485,13 +1508,14 @@ function openRxPanel(onChange) {
     render();
 }
 
-// 反应草稿卡（面板内）：草稿标 + 卡头徽章 + 组装好的口径全文（纯文本块，就是发给模型的那份）+ 立为单元/丢弃
+// 反应草稿卡（面板内）：草稿标 + 卡头徽章 + 原结构化卡面（rxCardFieldsHtml）+ 立为单元/丢弃——
+// 草稿期就能改楼层预算与注入正文，立卡后带着改动原样入池
 function rxDraftCardHtml(unit) {
     return `
     <div class="pp-item pp-gd-evcard pp-gd-evdraft" data-draft="1" data-uid="${escapeHtml(unit.id)}">
         <div><span class="pp-badge" title="还没入暂存池；再生成一次会换掉这份草稿">草稿</span></div>
         ${unitHeadHtml(unit)}
-        <div class="pp-gd-evdesc">${escapeHtml(unit.text ?? '')}</div>
+        ${rxCardFieldsHtml(unit)}
         <div class="pp-btn-row pp-gd-evops">
             <span data-rxu-keep="1" class="menu_button" title="把这份草稿收进暂存池；收进后去第 1 步「插入单元」区查看与操作">立为单元</span>
             <span data-rxu-discard="1" class="menu_button" title="丢掉这份草稿（不影响暂存池里已立的单元）">丢弃</span>
