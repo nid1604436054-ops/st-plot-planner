@@ -3,12 +3,14 @@
 //   badges = 加工史（有序 ≤2，末位 = 当前所在工具；界面显示为卡左上/右上小标记，左 = 先经过的工具）；
 //   text   = 拼给模型的材料正文（事件 = 标题+描述+已选走向，反应 = 反应口径全文），选走向/改卡面时重算；
 //   payload = 工具原生数据（事件 {mode,title,description,options,choiceIdx,injectLayers}；
-//             反应 = 反应卡字段 salience/immediate/aftermath/boundaries/floors/edited）。
-// inPlan（是否随规划分析发送）只在向导第 1 步「插入单元」勾选区读写——工具面板的卡片上没有这个开关。
+//             反应 = 反应卡字段 title/salience/immediate/aftermath/boundaries/floors/edited）。
+// 单元定则（2026-08-26 用户拍板，后续一切修改的准则）：单元 = 带标签的纯文本提示词块，像生产材料一样
+// 作为纯粹提示词使用——立为单元时走向已裁剪（没选全砍、选了只留那个），入池后不可再改选。
+// inPlan（是否随规划分析发送）只在向导第 1 步「插入单元」勾选区读写——工具面板只管生成，不管查看。
 // 跨工具导入是两工具间唯一影响通道：只能导入「加工史里还没有本工具」的单元——同工具回流禁、
 // 两标满禁由此结构性成立（两标满的单元加工史已含双方工具，哪个工具都进不去，套娃不可能）。
 // 导入不消耗：原单元原地保留（可再导入重 roll、可自己注入），导入产物 = 加工史追加本工具的新单元。
-// 池每工具 ≤3，满了界面禁生成；采纳规划不清池，清理走各工具面板的一键清理键（只清本工具名下）
+// 池每工具 ≤3，满了界面禁生成；采纳规划不清池，清理走第 1 步「插入单元」区各组的清空键（只清本工具名下）
 import { loadChatData, saveChatData } from "./chatdata.js";
 import { newId } from "./settings.js";
 import { composeReactionText } from "./reactions.js";
@@ -42,14 +44,14 @@ function stripLegacyPreview(unit) {
     return unit;
 }
 
-// 单元池（含面板草稿：事件面板的参考开关、两个面板的意见草稿、随机事件生成的未入池草稿——随聊天存，刷新不丢）
+// 单元池（含面板草稿：两个面板的意见草稿、两工具生成的未入池草稿——随聊天存，刷新不丢）
 export function unitsState() {
     const state = loadChatData('units', () => ({
         version: 1,
         eventUnits: [],
         reactionUnits: [],
         eventDraft: null,
-        eventOpts: { useLibrary: true },
+        reactionDraft: null,
         eventNote: '',
         reactionNote: '',
     }));
@@ -57,12 +59,13 @@ export function unitsState() {
         .map(u => stripLegacyPreview(normalizeUnit(u, 'event'))).filter(Boolean).slice(0, MAX_UNITS_PER_TOOL);
     state.reactionUnits = (Array.isArray(state.reactionUnits) ? state.reactionUnits : [])
         .map(u => normalizeUnit(u, 'reaction')).filter(Boolean).slice(0, MAX_UNITS_PER_TOOL);
-    // 随机事件的生成草稿（大模型随机/掷骰先出草稿，点「立为单元」才入池）；再生成会整体换掉
+    // 两工具的生成草稿（先出草稿，点「立为单元」才入池）；再生成会整体换掉
     state.eventDraft = state.eventDraft && typeof state.eventDraft === 'object'
         ? normalizeUnit(state.eventDraft, 'event') : null;
-    state.eventOpts = {
-        useLibrary: state.eventOpts?.useLibrary !== false,
-    };
+    state.reactionDraft = state.reactionDraft && typeof state.reactionDraft === 'object'
+        ? normalizeUnit(state.reactionDraft, 'reaction') : null;
+    // 旧版「参考事件库」开关（2026-08-26 退役：大模型随机无条件看库防复刻，不再有勾选）：读回时清残留
+    delete state.eventOpts;
     state.eventNote = String(state.eventNote ?? '');
     state.reactionNote = String(state.reactionNote ?? '');
     return state;
@@ -114,15 +117,35 @@ export function newEventUnit(payload, imported = false) {
     return unit;
 }
 
-// 反应单元出厂：payload = 反应卡字段（composeReactionText 的输入），text = 组装好的口径全文
+// 立为单元时的走向裁剪（用户定则：单元 = 纯文本提示词块，入池即定稿）：
+// 草稿上走向都没选 → 选项全部砍掉（单元只作参考材料）；选了一个 → 只保留那一个，其余砍掉。
+// 裁完重算材料正文；入池后不可再改选走向（想换走向 = 重新生成一版）
+export function finalizeEventDraft(unit) {
+    const p = unit?.payload;
+    if (!p) return unit;
+    const options = Array.isArray(p.options) ? p.options : [];
+    if (Number.isInteger(p.choiceIdx) && options[p.choiceIdx]) {
+        p.options = [options[p.choiceIdx]];
+        p.choiceIdx = 0;
+    } else {
+        p.options = [];
+        p.choiceIdx = null;
+    }
+    unit.text = eventUnitText(unit);
+    return unit;
+}
+
+// 反应单元出厂：payload = 反应卡字段（composeReactionText 的输入），text = 组装好的口径全文。
+// 标题优先用模型给的短标题（与事件同款）；旧卡没有 title 字段才退回拿即时口径开头硬切
 export function newReactionUnit(card, imported = false, inPlan = false) {
     const unit = normalizeUnit({
         id: newId('unit-'),
         tool: 'reaction',
         badges: imported ? ['event', 'reaction'] : ['reaction'],
-        title: String(card?.immediate ?? '').slice(0, 40),
+        title: String(card?.title ?? card?.immediate ?? '').slice(0, 60),
         text: '',
         payload: {
+            title: String(card?.title ?? ''),
             salience: card?.salience,
             immediate: String(card?.immediate ?? ''),
             aftermath: String(card?.aftermath ?? ''),

@@ -182,12 +182,14 @@ export async function generateRandomEvent(rule, materials = {}) {
 }
 
 /**
- * 大模型自由随机：不经事件库掷骰，让模型即兴出一次意外遭遇（随机事件工具面板的「大模型随机」键 / 掷骰管线的自由分支）。
+ * 大模型自由随机：不经事件库掷骰，让模型即兴出一次意外遭遇。
+ * 三个调用方：「大模型随机」键（不带维度不带意见，事件库已有条目无条件作为防复刻清单随行）/
+ * 「按意见生成」键（带 note，模型遵循意见即兴——意见是方向不是剧本）/ 掷骰管线的维度随机分支（带 dimension，不看库）。
  * @param {object} [options]
- * @param {object} [options.dimension]      维度对象 {name, prompt}：按维度气质即兴
- * @param {boolean} [options.useLibrary]    true 时把事件库条目列给模型参考（可从中选方向也可另起）
+ * @param {object} [options.dimension]  维度对象 {name, prompt}：按维度气质即兴
+ * @param {string} [options.note]       指导意见（「按意见生成」键专用；与随机路径二选一）
  */
-export async function generateFreeRandomEvent({ dimension = null, useLibrary = false, materials = {} } = {}) {
+export async function generateFreeRandomEvent({ dimension = null, note = '', materials = {} } = {}) {
     const schema = '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
         + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ] }';
 
@@ -195,7 +197,7 @@ export async function generateFreeRandomEvent({ dimension = null, useLibrary = f
         + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'
         + '轻重自定、宁重不轻（过轻会执行敷衍），但危机必须留出口。'
         + (dimension ? '用户指定了维度，按该维度的气质展开。' : '')
-        + (useLibrary ? '用户提供了事件库条目，可从中选一个方向展开，也可另起更契合当前情境的事件。' : '')
+        + (note.trim() ? '用户给出了指导意见，遵循它生成——意见是方向不是剧本，仍要即兴出具体的既成事件。' : '')
         + '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。'
         + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
         + schema + '\noptions 给 3 个左右。';
@@ -204,11 +206,14 @@ export async function generateFreeRandomEvent({ dimension = null, useLibrary = f
     if (dimension) {
         sections.push('## 事件方向（维度自由生成）', `维度「${dimension.name}」：${dimension.prompt ?? ''}\n按这个维度的气质即兴出一次事件。`);
     }
-    if (useLibrary) {
+    if (note.trim()) sections.push('## 指导意见（用户指定，遵循它生成）', note.trim());
+    // 大模型随机（不指定维度）无条件看库——不是参考方向，是防复刻清单（2026-08-26 用户定则，不再做勾选）
+    if (!dimension) {
         const rules = (settings.eventRules ?? []).filter(r => r.enabled !== false);
-        sections.push('## 事件库条目（参考方向）', rules.length
-            ? rules.map(r => `- ${r.name}：${r.promptHint ?? ''}`).join('\n')
-            : '（事件库为空，请即兴生成）');
+        if (rules.length) {
+            sections.push('## 事件库已有条目（防复刻清单：生成的新事件不要与下面这些撞内容）',
+                rules.map(r => `- ${r.name}：${r.promptHint ?? ''}`).join('\n'));
+        }
     }
 
     const request = {

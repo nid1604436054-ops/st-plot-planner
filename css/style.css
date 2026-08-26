@@ -708,6 +708,8 @@
 .pp-gd-evdesc {
     overflow-wrap: anywhere;
     line-height: 1.5;
+    /* 单元=纯文本提示词块：这里现在放整块正文（事件含已选走向行、反应是口径全文），换行必须保真 */
+    white-space: pre-wrap;
 }
 
 .pp-gd-evoptlabel {
@@ -758,6 +760,40 @@
     gap: 4px;
     white-space: nowrap;
     flex: 0 0 auto;
+}
+
+/* 灰置（二选一禁用态，2026-08-26）：只降透明度+挡点击，不动布局。随机事件面板住在查看器里、
+   单元区在抽屉里，双作用域同款（§13 铁则 5：查看器不吃抽屉规则） */
+.pp-drawer .pp-off, .pp-viewer .pp-off {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+/* 第 1 步「插入单元」区（抽屉内）：组头 = 分组名 + 该组清空键；行 = 勾选框 + 可点开的单元名 */
+.pp-gd-ughead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.pp-gd-urow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+}
+
+/* 单元名可点开（展开=看提示词全文与操作）：下划线点缀点明可点，不抢按钮视觉 */
+.pp-gd-ubody {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-decoration: underline dotted;
 }
 
 .pp-gd-sel {

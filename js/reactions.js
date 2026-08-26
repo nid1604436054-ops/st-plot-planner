@@ -23,7 +23,8 @@ const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器�
     + '不是传播过程的场面描写。'
     + '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。'
     + '只输出一个 JSON 对象，不要输出 JSON 以外的任何文字：\n'
-    + '{ "salience": 1~5 的整数（显著性：1=只有身边几人注意到，3=在场者普遍反应，5=全场围观且会留下记录）,\n'
+    + '{ "title": "短标题：10 字内浓缩这件引人注目的事（用作单元名，跟随机事件的浓缩标题同款）",\n'
+    + '  "salience": 1~5 的整数（显著性：1=只有身边几人注意到，3=在场者普遍反应，5=全场围观且会留下记录）,\n'
     + '  "immediate": "即时反应口径：什么身份的旁观者、以什么动作或低语作出反应、烈度如何；每轮 1-3 句的量。写身份与形式，不写现成台词与画面",\n'
     + '  "aftermath": "余波口径：显著性 1-3 写不外传方向（在场者议论几句后自然平息）；显著性 4-5 写传播走向（经什么渠道传开、到多大范围、后续场景里陌生人以什么形式提起）。贴世界观：现代用拍摄上传、本地群、热搜边缘等，古风奇幻用口耳相传、悬赏告示、教会或官府注意等",\n'
     + '  "boundaries": "底线：不得导致感情实质破裂、主要角色受异性实质侵犯、user 无法逆转的损失；危机可以重，出口必须存在。再列出本事件可接受的余波（如虚惊一场、舆情压力、短期经济困难、身份暴露）",\n'
@@ -38,7 +39,7 @@ const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器�
  * @param {string} [options.note]       指导意见（期望烈度、余波方向、要避开什么）
  * @param {object} [options.materials]  向导第 1 步材料 { memoryTags, memoryModes, memoryRecent, storageItems }
  * @param {string} [options.activePlan] 进行中剧情全文（与规划分析同一来源）
- * @returns {Promise<{salience:number, immediate:string, aftermath:string, boundaries:string, floors:number}>}
+ * @returns {Promise<{title:string, salience:number, immediate:string, aftermath:string, boundaries:string, floors:number}>}
  */
 export async function generateReactionCard({ note = '', materials = {}, activePlan = '' } = {}) {
     const { parts } = materialSections({
@@ -79,6 +80,8 @@ export async function generateReactionCard({ note = '', materials = {}, activePl
 export function normalizeCard(card) {
     const floors = Math.min(Math.max(Number(card?.floors) || 6, 2), 30);
     return {
+        // 短标题（2026-08-26 起要求模型给，与事件同款）；旧卡没有就交由单元层拿即时口径开头兜底
+        title: String(card?.title ?? '').trim().slice(0, 60),
         salience: Math.min(Math.max(Math.round(Number(card?.salience) || 2), 1), 5),
         immediate: String(card?.immediate ?? '').trim(),
         // 余波口径是一段方向描述；楼层预算随显著性走（大事件才给长预算——短窗口里根本扩散不开）

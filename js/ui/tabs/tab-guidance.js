@@ -30,7 +30,7 @@ import { getTavernContext } from "../../context.js";
 import { loadChatData, saveChatData } from "../../chatdata.js";
 import { escapeHtml, estimateTokens } from "../../utils.js";
 import { searchToolReady, withGlobalPresets } from "../../api.js";
-import { unitsState, persistUnits, newEventUnit, newReactionUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, MAX_UNITS_PER_TOOL } from "../../units.js";
+import { unitsState, persistUnits, newEventUnit, newReactionUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
 
 // 向导状态机：'' 空闲 | collect ① | ready ② 分析前确认 | running ③ | result ④ | reviewing/report 检查报告
 let step = '';
@@ -302,83 +302,130 @@ function unitHeadHtml(unit) {
 const unitInjected = u => settings.injections.some(i => i.enabled && i.unitId === u.id
     && !(i.scope === 'chat' && i.chatId !== undefined && i.chatId !== getTavernContext().chatId));
 
-// 第 1 步「插入单元」勾选行：单元是整块提示词，参不参与规划在规划材料页勾（卡面上没有这个开关）。
+// 第 1 步「插入单元」区展开状态：点单元名开合，跨重画保留（切聊天时在 resetGuidance 清）
+const expandedUnits = new Set();
+
+// 第 1 步「插入单元」区行：勾选框（插入规划）+ 完整加工史徽章（左＝先、右＝后）+ 单元名（点开看全文与操作）。
 // 已注入的反应单元灰显不可勾——生效注入会让规划与检查自动附带同一口径，再勾就是同文进两次
 function unitPickRow(u) {
     const injected = u.tool === 'reaction' && unitInjected(u);
     const tip = `${TOOL_NAME[u.tool]}单元。勾选后作为整块材料随分析发送` + (injected ? '；已转隐身注入，规划与检查自动附带这份正文，不用再勾' : '');
-    return `<label title="${escapeHtml(tip)}\n${escapeHtml(String(u.text ?? '').slice(0, 300))}"><input type="checkbox" data-c1u="${escapeHtml(u.id)}" ${u.inPlan ? 'checked' : ''} ${injected ? 'disabled' : ''}/> <span class="pp-unit-mark">${TOOL_MARK[u.tool]}</span> ${escapeHtml(u.title || '(未命名)')}${injected ? '（已注入·自动附带）' : ''}</label>`;
+    return `<div class="pp-gd-urow">
+        <label title="${escapeHtml(tip)}"><input type="checkbox" data-c1u="${escapeHtml(u.id)}" ${u.inPlan ? 'checked' : ''} ${injected ? 'disabled' : ''}/></label>
+        <span class="pp-gd-ubody" data-uview="${escapeHtml(u.id)}" title="点开/收起这个单元的提示词全文与操作">${unitMarkHtml(u.badges[0])}${unitMarkHtml(u.badges[1])} ${escapeHtml(u.title || '(未命名)')}${injected ? '（已注入·自动附带）' : ''}</span>
+    </div>`;
 }
 
-// 反应单元卡（工具面板内）：字段展示 + 楼层预算 + 正文预览 + 操作（转注入 / 删除）
-function rxUnitCardHtml(unit) {
-    const card = unit.payload;
-    const stars = '★'.repeat(card.salience) + '☆'.repeat(5 - card.salience);
-    return `
-    <div class="pp-item pp-gd-evcard" data-uid="${escapeHtml(unit.id)}">
-        ${unitHeadHtml(unit)}
-        <div>显著性 <span style="color:#e8c06a">${stars}</span>（${card.salience}/5）</div>
-        <label class="pp-label">即时反应口径（每轮 1-3 句，织进当前场景，写一次就够）</label>
-        <div>${escapeHtml(card.immediate)}</div>
-        <label class="pp-label">余波口径（消息传开/平息的方向，不写场面）</label>
-        <div>${escapeHtml(card.aftermath)}</div>
-        <label class="pp-label">底线</label>
-        <div>${escapeHtml(card.boundaries)}</div>
-        <label class="pp-label" title="转注入用的就是下面这份预览文本；改过就按这份固定，注入后只按层数过期。随分析发送走第 1 步「插入单元」勾选，用的也是这份文本">楼层预算（一层 = 一条角色回复，user 消息不计；到期自动撤下）</label>
-        <input data-rxu-floors="1" class="text_pole textarea_compact" type="number" min="2" max="30" value="${card.floors}" />
-        <label class="pp-label">注入正文预览（可改）</label>
-        <textarea data-rxu-text="1" class="text_pole textarea_compact" rows="10">${escapeHtml(unit.text)}</textarea>
-        <div class="pp-btn-row">
-            <span data-rxu-inject="1" class="menu_button" title="转为隐身注入（模型可见、聊天界面不显示），按楼层预算到期自动撤下；生效期间规划与检查自动附带同一口径，第 1 步「插入单元」的勾选自动取消；本单元留在暂存里不消耗">转为隐身注入</span>
-            <span data-rxu-del="1" class="menu_button fa-solid fa-trash" title="从暂存池删除这个单元（已转隐身注入的不受影响）"></span>
+// 单元区展开卡：单元 = 带标签的纯文本提示词块（2026-08-26 用户定则）——展开看到的就是发给模型的那份正文；
+// 转注入/层数/楼层预算/删除全在这里（工具面板只管生成，不存放单元）
+function unitAreaCardHtml(u) {
+    if (u.tool === 'event') {
+        return `<div class="pp-item pp-gd-evcard" data-ucard="${escapeHtml(u.id)}">
+            <div class="pp-gd-evdesc">${escapeHtml(u.text ?? '')}</div>
+            <div class="pp-btn-row pp-gd-evops">
+                <label title="隐身注入多少层后自动撤下；一层 = 一条角色回复（user 消息不计）">注入层数
+                    <input type="number" class="text_pole" data-ua-layers="1" min="1" max="200" step="1" value="${(u.payload ?? {}).injectLayers ?? 20}" />
+                </label>
+                <span data-ua-inject="1" class="menu_button" title="把事件与已选走向直接写成一条隐身注入（模型可见、聊天界面不显示），按所填层数到期自动撤下；不经过分析，也不影响这个单元在「插入单元」的勾选。立卡时没选走向的单元转不了注入（只作参考材料）">转为隐身注入</span>
+                <span data-ua-del="1" class="menu_button fa-solid fa-trash" title="从暂存池删除这个单元（已转隐身注入的不受影响）"></span>
+            </div>
+        </div>`;
+    }
+    const card = u.payload ?? {};
+    return `<div class="pp-item pp-gd-evcard" data-ucard="${escapeHtml(u.id)}">
+        <label class="pp-label" title="转注入按这个层数到期自动撤下；一层 = 一条角色回复（user 消息不计）">楼层预算</label>
+        <input data-ua-floors="1" class="text_pole" type="number" min="2" max="30" value="${card.floors}" />
+        <label class="pp-label" title="这就是发给模型的整块提示词；改过就按这份固定，注入后只按层数过期。随分析发送走的也是这份文本">注入正文（可改）</label>
+        <textarea data-ua-text="1" class="text_pole textarea_compact" rows="10">${escapeHtml(u.text)}</textarea>
+        <div class="pp-btn-row pp-gd-evops">
+            <span data-ua-inject="1" class="menu_button" title="转为隐身注入（模型可见、聊天界面不显示），按楼层预算到期自动撤下；生效期间规划与检查自动附带同一口径，「插入单元」的勾选自动取消；本单元留在暂存里不消耗">转为隐身注入</span>
+            <span data-ua-del="1" class="menu_button fa-solid fa-trash" title="从暂存池删除这个单元（已转隐身注入的不受影响）"></span>
         </div>
     </div>`;
 }
 
-// 反应单元卡接线：rerender = 面板整面重画（按钮态复位），refresh = 第 1 步状态行计数刷新
-function wireRxUnit(cardEl, unit, rerender, refresh) {
-    const floorsEl = cardEl.querySelector('[data-rxu-floors]');
-    const textEl = cardEl.querySelector('[data-rxu-text]');
-    floorsEl.addEventListener('change', () => {
-        unit.payload.floors = Math.min(Math.max(Number(floorsEl.value) || unit.payload.floors, 2), 30);
-        floorsEl.value = unit.payload.floors;
-        if (!unit.payload.edited) { unit.text = composeReactionText(unit.payload, 0); textEl.value = unit.text; }
-        persistUnits();
-    });
-    textEl.addEventListener('input', () => { unit.text = textEl.value; unit.payload.edited = true; persistUnits(); });
-    cardEl.querySelector('[data-rxu-inject]').addEventListener('click', () => {
-        const text = textEl.value.trim();
-        if (!text) { toastr.warning('注入内容为空'); return; }
-        const auto = composeReactionText(unit.payload, 0);
-        const reaction = unit.payload.edited && text !== auto ? { ...unit.payload, edited: true } : unit.payload;
-        addInjection({
-            id: newId('inj-'),
-            label: unit.payload.immediate ? `路人反应：${unit.payload.immediate.slice(0, 24)}` : '路人反应',
-            mode: 'open',
-            content: text,
-            depth: 4,
-            role: 'system',
-            scope: 'chat',
-            enabled: true,
-            source: 'reaction',
-            unitId: unit.id,
-            createdAt: Date.now(),
-            expires: { type: 'layers', layers: unit.payload.floors },
-            reaction,
-            age: 0,
+// 单元区展开卡接线：rerender = 单元区重画（行上的勾选/已注入态跟着变），refreshCounts = 入口键暂存计数刷新。
+// 事件注入要求立卡时选过走向（裁剪后只剩那一个）；反应注入沿用「注入即取消插入勾选」防同文双算
+function wireUnitAreaCard(cardEl, unit, rerender, refreshCounts) {
+    if (unit.tool === 'event') {
+        const p = unit.payload ?? (unit.payload = {});
+        const layersEl = cardEl.querySelector('[data-ua-layers]');
+        layersEl.addEventListener('input', () => {
+            const v = Number(layersEl.value);
+            if (Number.isFinite(v)) { p.injectLayers = v; persistUnits(); }
         });
-        toastr.success(unit.inPlan
-            ? `已注入，${unit.payload.floors} 层后自动撤下；生效期间规划与检查自动附带同一口径，已同时取消第 1 步「插入单元」的勾选`
-            : `已注入，${unit.payload.floors} 层后自动撤下（一层 = 一条角色回复；生效期间规划与检查报告自动附带同一口径，页面底部「生效中的隐身注入」可提前撤下）`);
-        unit.inPlan = false;
-        persistUnits();
-        rerender();
-        refresh();
-    });
-    cardEl.querySelector('[data-rxu-del]').addEventListener('click', () => {
+        layersEl.addEventListener('change', () => {
+            p.injectLayers = clampInjectLayers(p.injectLayers);
+            persistUnits();
+            layersEl.value = String(p.injectLayers);
+        });
+        cardEl.querySelector('[data-ua-inject]').addEventListener('click', () => {
+            const opt = Number.isInteger(p.choiceIdx) ? (p.options ?? [])[p.choiceIdx] : null;
+            if (!opt) {
+                toastr.warning('这个单元立卡时没选走向，只作参考材料；要注入请在生成草稿时选一个走向');
+                return;
+            }
+            const injLayers = clampInjectLayers(p.injectLayers);
+            addInjection({
+                id: newId('inj-'),
+                label: `事件：${p.title ?? ''} · ${opt.label ?? ''}`,
+                mode: 'open',
+                content: `【随机事件·${p.title ?? ''}】${p.description ?? ''}\n已选定走向：${opt.label ?? ''}\n幕后提示：${opt.hint ?? ''}`,
+                depth: 4,
+                role: 'system',
+                scope: 'chat',
+                enabled: true,
+                source: 'event',
+                unitId: unit.id,
+                createdAt: Date.now(),
+                expires: { type: 'layers', layers: injLayers },
+            });
+            toastr.success(`已注入，${injLayers} 层后自动撤下（页面底部「生效中的隐身注入」可提前撤下）`);
+        });
+    } else {
+        const floorsEl = cardEl.querySelector('[data-ua-floors]');
+        const textEl = cardEl.querySelector('[data-ua-text]');
+        floorsEl.addEventListener('change', () => {
+            unit.payload.floors = Math.min(Math.max(Number(floorsEl.value) || unit.payload.floors, 2), 30);
+            floorsEl.value = unit.payload.floors;
+            if (!unit.payload.edited) { unit.text = composeReactionText(unit.payload, 0); textEl.value = unit.text; }
+            persistUnits();
+        });
+        textEl.addEventListener('input', () => { unit.text = textEl.value; unit.payload.edited = true; persistUnits(); });
+        cardEl.querySelector('[data-ua-inject]').addEventListener('click', () => {
+            const text = textEl.value.trim();
+            if (!text) { toastr.warning('注入内容为空'); return; }
+            const auto = composeReactionText(unit.payload, 0);
+            const reaction = unit.payload.edited && text !== auto ? { ...unit.payload, edited: true } : unit.payload;
+            addInjection({
+                id: newId('inj-'),
+                label: unit.title ? `路人反应：${unit.title}` : '路人反应',
+                mode: 'open',
+                content: text,
+                depth: 4,
+                role: 'system',
+                scope: 'chat',
+                enabled: true,
+                source: 'reaction',
+                unitId: unit.id,
+                createdAt: Date.now(),
+                expires: { type: 'layers', layers: unit.payload.floors },
+                reaction,
+                age: 0,
+            });
+            toastr.success(unit.inPlan
+                ? `已注入，${unit.payload.floors} 层后自动撤下；生效期间规划与检查自动附带同一口径，已同时取消「插入单元」的勾选`
+                : `已注入，${unit.payload.floors} 层后自动撤下（一层 = 一条角色回复；生效期间规划与检查报告自动附带同一口径，页面底部「生效中的隐身注入」可提前撤下）`);
+            unit.inPlan = false;
+            persistUnits();
+            rerender();
+        });
+    }
+    cardEl.querySelector('[data-ua-del]').addEventListener('click', () => {
         removeUnit(unit.id);
+        expandedUnits.delete(unit.id);
         rerender();
-        refresh();
+        refreshCounts();
     });
 }
 
@@ -465,6 +512,7 @@ export function resetGuidance() {
     });
     evImports.clear();
     rxImports.clear();
+    expandedUnits.clear();
     showActive = false; showHistory = false; viewHistId = null; report = null;
     const container = document.getElementById('pp_tab_content');
     if (container?.querySelector('#pp_gd_storybar')) guidanceTab.render(container);
@@ -795,8 +843,8 @@ function renderCollect(container, main) {
             || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
         <div class="pp-btn-row">
-            <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内三路取材（大模型随机 / 掷骰出草稿点「立为单元」入池 / 自己写意见立单元），暂存最多 3 个，满了先删。生成材料自动带本页上方同一批（记忆表格档位与标签、玩法勾选、世界书、进行中剧情），也可勾选导入路人反应的暂存单元做参考（已生效注入不自动带，防双算）。入池的单元在本页下方「插入单元」勾选随分析发送、可在面板里转隐身注入、可被路人反应工具导入再加工；采纳规划后暂存不清空，清理用面板里的清空键">随机事件</span>
-            <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见、生成反应单元（材料自动带本页上方同一批，也可导入随机事件的暂存单元做参考）、编辑卡面，然后两路任选——转隐身注入挂主对话（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径）或在本页下方「插入单元」勾选随分析发送，两路互斥；产物最多暂存 3 个，清理用面板里的清空键">路人反应</span>
+            <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内生成——掷骰 / 大模型随机 / 按意见生成三键与意见二选一（意见框有字时只剩「按意见生成」能点），生成先出草稿、点草稿上的「立为单元」入池，暂存最多 3 个。大模型随机无条件把事件库已有条目作为防复刻清单随行（不做勾选）。生成材料自动带本页上方同一批，也可勾选导入路人反应的暂存单元做参考（仅随机两键生效；已生效注入不自动带，防双算）。入池单元在本页下方「插入单元」区点开查看、勾选随分析发送、转隐身注入；采纳规划后暂存不清空，清空键在「插入单元」区">随机事件</span>
+            <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见（可选）、点「生成反应卡」出草稿、点草稿上「立为单元」入池（材料自动带本页上方同一批，也可导入随机事件的暂存单元做参考；模型会顺带给浓缩短标题作单元名）。入池单元在本页下方「插入单元」区点开查看与操作——勾选随分析发送 / 转隐身注入（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径，两路互斥）；产物最多暂存 3 个，清空键在「插入单元」区">路人反应</span>
         </div>
         <div id="pp_gd_c1_units"></div>
         <label class="pp-label" title="已有的想法、约束或重点（可选，随分析发给模型）">剧情构思方向</label>
@@ -943,20 +991,43 @@ function renderCollect(container, main) {
         rxBtnEl.textContent = us.reactionUnits.length ? `路人反应（${us.reactionUnits.length}）` : '路人反应';
     };
     syncToolBtns();
-    // 插入单元勾选区：入池单元参不参与本次分析在这里定（工具面板里的每次变动回来重建）
+    // 第 1 步「插入单元」区：入池单元统一在这里查看与操作（工具面板只管生成，2026-08-26 E8 外置）——
+    // 勾选 = 随分析发送；点单元名展开提示词全文；转注入/层数/楼层预算/删除/清空键全在这
     const unitsBox = main.querySelector('#pp_gd_c1_units');
     const renderUnitPicks = () => {
         const us = unitsState();
-        const rows = us.eventUnits.map(u => unitPickRow(u)).concat(us.reactionUnits.map(u => unitPickRow(u)));
-        unitsBox.innerHTML = rows.length ? `
-        <label class="pp-label" title="勾选的单元作为整块提示词随分析发给规划模型（事件进「随机事件」小节、反应进「路人反应」小节，规划为其留出融入空间）。单元的生成与编辑在上面两个工具面板里">插入单元</label>
-        <div class="pp-gd-selp">${rows.join('')}</div>` : '';
+        const all = [...us.eventUnits, ...us.reactionUnits];
+        const group = (tool, list) => !list.length ? '' : `
+        <div class="pp-gd-ughead">
+            <label class="pp-label">${TOOL_NAME[tool]}单元（${list.length}）</label>
+            <span class="menu_button" data-uclear="${tool}" title="清空${TOOL_NAME[tool]}名下的全部暂存单元（另一工具的不动；已转隐身注入的不受影响）；采纳规划不会清池">清空</span>
+        </div>
+        ${list.map(u => unitPickRow(u) + (expandedUnits.has(u.id) ? unitAreaCardHtml(u) : '')).join('')}`;
+        unitsBox.innerHTML = all.length ? `
+        <label class="pp-label" title="勾选的单元作为整块提示词随分析发给规划模型（事件进「随机事件」小节、反应进「路人反应」小节，规划为其留出融入空间）。单元的生成在上面两个工具面板里；点单元名展开提示词全文与操作">插入单元</label>
+        ${group('event', us.eventUnits)}${group('reaction', us.reactionUnits)}` : '';
         unitsBox.querySelectorAll('[data-c1u]').forEach(cb => cb.addEventListener('change', () => {
             const cur = unitsState();
             for (const u of [...cur.eventUnits, ...cur.reactionUnits]) {
                 if (u.id === cb.dataset.c1u) { u.inPlan = cb.checked; break; }
             }
             persistUnits();
+        }));
+        unitsBox.querySelectorAll('[data-uview]').forEach(el => el.addEventListener('click', () => {
+            const id = el.dataset.uview;
+            if (expandedUnits.has(id)) expandedUnits.delete(id); else expandedUnits.add(id);
+            renderUnitPicks();
+        }));
+        unitsBox.querySelectorAll('[data-ucard]').forEach(cardEl => {
+            const u = all.find(x => x.id === cardEl.dataset.ucard);
+            if (u) wireUnitAreaCard(cardEl, u, renderUnitPicks, syncToolBtns);
+        });
+        unitsBox.querySelectorAll('[data-uclear]').forEach(btn => btn.addEventListener('click', () => {
+            clearUnits(btn.dataset.uclear);
+            (btn.dataset.uclear === 'event' ? evImports : rxImports).clear();
+            renderUnitPicks();
+            syncToolBtns();
+            toastr.success(`已清空${TOOL_NAME[btn.dataset.uclear]}单元（另一工具的不动；已转隐身注入的不受影响）`);
         }));
     };
     renderUnitPicks();
@@ -1137,78 +1208,59 @@ function pickedImports(tool, picked) {
     return others.filter(u => picked.has(u.id) && unitImportable(u, tool));
 }
 
-// 随机事件工具面板：三路取材（大模型随机 / 掷骰管线 → 先出草稿，点「立为单元」入池；自己给意见直接立）
-// + 暂存池（≤3，满了禁生成先手删）。掷骰入口唯一化——页面底部工具区只管事件库与维度配置。
-// 「或自己给意见」与「立为单元」住在面板最底部（暂存池之下）——立单元是收尾动作，不占生成区的位
+// 随机事件工具面板：只管生成（2026-08-26 E8 重排）。意见框在顶部（生成参考来源），与随机严格二选一——
+// 意见框有字 → 掷骰/大模型随机/导入全灰置，只剩「按意见生成」；清空意见 → 随机两键回来（按意见生成灰置）。
+// 按意见生成走大模型（意见是方向不是剧本），产物与随机路径一样先出草稿、点「立为单元」入池；
+// 入池单元的查看/勾选/注入/删除/清空都在第 1 步「插入单元」区。掷骰入口唯一化——页面底部工具区只管库与维度
 function openEvPanel(onChange) {
     const body = openViewer('随机事件').querySelector('.pp-viewer-body');
     const status = text => { const el = body.querySelector('#pp_gd_ev_status'); if (el) el.textContent = text; };
     const rerender = () => { render(); onChange(); };
     const render = () => {
         const st = unitsState();
-        const pool = st.eventUnits;
-        const full = pool.length >= MAX_UNITS_PER_TOOL;
+        const full = st.eventUnits.length >= MAX_UNITS_PER_TOOL;
         body.innerHTML = `
-        <div class="pp-gd-selp">
-            <label title="把事件库规则的名称与提示给模型参考，可从中选方向也可另起"><input type="checkbox" id="pp_gd_ev_lib" ${st.eventOpts.useLibrary ? 'checked' : ''}/> 参考事件库</label>
-        </div>
+        <label class="pp-label" title="写下事件或走向想法，点「按意见生成」让大模型遵循它即兴（意见是方向不是剧本，仍会生成走向选项）；与随机二选一——框里有字时掷骰/大模型随机灰置，清空恢复">或自己给意见（有字 = 按意见生成，清空 = 随机两键）</label>
+        <textarea id="pp_gd_ev_manual" class="text_pole textarea_compact" rows="2" placeholder="想要什么样的事件或走向，写下想法"></textarea>
         <div class="pp-btn-row">
-            <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰，直接让模型即兴生成一个事件（先出草稿，点草稿上的「立为单元」收进暂存）；生成材料自动带第 1 步同一批，勾选的导入单元一并作参考">大模型随机</span>
             <span id="pp_gd_ev_roll" class="menu_button" title="掷骰管线：先在勾选的掷骰板块（事件条目/维度随机/AI自主）里按板块权重抽一个——条目板块按权重×概率抽一条（必出），维度随机按维度权重抽方向，AI自主由模型看剧情挑维度；板块开关与权重在页面底部「事件库设置」；结果先出草稿，点「立为单元」收进暂存">掷骰</span>
-            <span id="pp_gd_ev_clear" class="menu_button" title="清空随机事件名下的全部暂存单元（路人反应的不动；已转隐身注入的不受影响）；采纳规划不会清池，清理只在这里">清空暂存</span>
+            <span id="pp_gd_ev_llm" class="menu_button" title="不经掷骰直接让模型即兴；事件库已有条目无条件作为防复刻清单随行（生成的新事件不与库里撞内容，不做勾选）；生成材料自动带第 1 步同一批，勾选的导入单元一并作参考">大模型随机</span>
+            <span id="pp_gd_ev_note" class="menu_button" title="把上面的意见交给大模型，遵循意见即兴生成事件（意见路径独占材料位：不带掷骰、不带导入单元）；结果先出草稿，点「立为单元」收进暂存">按意见生成</span>
         </div>
-        ${importRowHtml('event', evImports)}
-        <div id="pp_gd_ev_status" class="pp-muted">${full ? `暂存已满 ${MAX_UNITS_PER_TOOL}/${MAX_UNITS_PER_TOOL}，先删一个再生成` : ''}</div>
-        <div id="pp_gd_ev_pool"></div>
-        <label class="pp-label" title="不掷骰，直接把你自己的事件或走向想法立成单元">或自己给意见</label>
-        <textarea id="pp_gd_ev_manual" class="text_pole textarea_compact" rows="2" placeholder="不掷骰，直接写下你的事件或走向想法"></textarea>
-        <div class="pp-btn-row"><span id="pp_gd_ev_manual_add" class="menu_button" title="把上面写下的意见立成一个事件单元（只有事件标），与生成的单元一样用：第 1 步「插入单元」勾选随分析发送 / 转注入 / 被对方导入">立为单元</span></div>`;
-
-        body.querySelector('#pp_gd_ev_lib').addEventListener('change', e => { st.eventOpts.useLibrary = e.target.checked; persistUnits(); });
+        <div id="pp_gd_ev_imp">${importRowHtml('event', evImports)}</div>
+        <div id="pp_gd_ev_status" class="pp-muted">${full ? `暂存已满 ${MAX_UNITS_PER_TOOL}/${MAX_UNITS_PER_TOOL}，先在第 1 步「插入单元」区删一个再生成` : ''}</div>
+        <div id="pp_gd_ev_pool"></div>`;
         const manualEl = body.querySelector('#pp_gd_ev_manual');
         manualEl.value = st.eventNote;
-        manualEl.addEventListener('input', () => { st.eventNote = manualEl.value; persistUnits(); });   // 只回存不重画，输入不掉焦点
+        // 二选一灰置（2026-08-26 用户拍板）：pp-off 只降透明度+挡点击，不重画（输入不掉焦点）
+        const syncGenBtns = () => {
+            const has = manualEl.value.trim().length > 0;
+            body.querySelector('#pp_gd_ev_roll').classList.toggle('pp-off', has);
+            body.querySelector('#pp_gd_ev_llm').classList.toggle('pp-off', has);
+            body.querySelector('#pp_gd_ev_note').classList.toggle('pp-off', !has);
+            body.querySelector('#pp_gd_ev_imp').classList.toggle('pp-off', has);   // 导入只在随机两键时生效
+        };
+        manualEl.addEventListener('input', () => { st.eventNote = manualEl.value; persistUnits(); syncGenBtns(); });   // 只回存不重画，输入不掉焦点
+        syncGenBtns();
 
-        // 草稿卡（有则渲染在池顶）+ 暂存池；按 id 对卡接线（草稿与池卡共用同一张卡渲染）
+        // 草稿卡（面板只放草稿；入池单元在第 1 步「插入单元」区查看与操作）
         const poolBox = body.querySelector('#pp_gd_ev_pool');
-        poolBox.innerHTML =
-            (st.eventDraft ? evUnitCardHtml(st.eventDraft, true) : '')
-            + (pool.length ? pool.map(u => evUnitCardHtml(u)).join('')
-                : '<div class="pp-muted" title="大模型随机/掷骰先出草稿、点草稿上的「立为单元」入池；入池的单元在第 1 步「插入单元」勾选随分析发送、可转隐身注入、可被路人反应工具导入再加工；每边最多 3 个，满了先删">暂存池还是空的——生成后点草稿上的「立为单元」，或在下方写下意见立一个</div>');
-        if (st.eventDraft) wireEvUnit(poolBox.querySelector('[data-draft]'), st.eventDraft, rerender, true);
-        poolBox.querySelectorAll('[data-uid]').forEach(cardEl => {
-            const u = pool.find(x => x.id === cardEl.dataset.uid);
-            if (u) wireEvUnit(cardEl, u, rerender);
-        });
+        poolBox.innerHTML = st.eventDraft ? evDraftCardHtml(st.eventDraft)
+            : '<div class="pp-muted" title="掷骰/大模型随机/按意见生成都先出草稿；点草稿上的「立为单元」入池，入池后去第 1 步「插入单元」区查看与操作">生成后草稿出现在这里——立为单元后去第 1 步「插入单元」区找它</div>';
+        if (st.eventDraft) wireEvDraft(poolBox.querySelector('[data-draft]'), st.eventDraft, rerender);
 
         body.querySelectorAll('[data-imp]').forEach(cb => cb.addEventListener('change', () => {
             if (cb.checked) evImports.add(cb.dataset.imp); else evImports.delete(cb.dataset.imp);
         }));
-        body.querySelector('#pp_gd_ev_clear').addEventListener('click', () => {
-            clearUnits('event');
-            evImports.clear();
-            rerender();
-            toastr.success('已清空事件暂存（路人反应的不动；已转隐身注入的不受影响）');
-        });
-        body.querySelector('#pp_gd_ev_manual_add').addEventListener('click', () => {
-            const note = manualEl.value.trim();
-            if (!note) { toastr.warning('「立为单元」把上面写下的意见变成单元；大模型随机/掷骰的生成结果点草稿上的「立为单元」收进暂存，不用写意见'); return; }
-            if (!addUnit(newEventUnit({ mode: 'manual', title: '', description: note }))) {
-                toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个`);
-                return;
-            }
-            rerender();
-            toastr.success('已立为事件单元');
-        });
         body.querySelector('#pp_gd_ev_llm').addEventListener('click', async () => {
-            if (evBusy) return;
+            if (evBusy || manualEl.value.trim()) return;
             if (!(getTavernContext().chat ?? []).length) { toastr.warning('空聊天里没有对话材料，先聊几句再生成'); return; }
             if (unitsState().eventUnits.length >= MAX_UNITS_PER_TOOL) { toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个再生成`); return; }
             const imports = pickedImports('event', evImports);
             evBusy = true;
             status('大模型随机生成中……');
             try {
-                const gen = await generateFreeRandomEvent({ useLibrary: st.eventOpts.useLibrary, materials: { ...wizardMaterials(), importedUnits: imports } });
+                const gen = await generateFreeRandomEvent({ materials: { ...wizardMaterials(), importedUnits: imports } });
                 const cur = unitsState();
                 cur.eventDraft = newEventUnit({ ...gen, mode: 'llm' }, imports.length > 0);
                 persistUnits();
@@ -1221,8 +1273,30 @@ function openEvPanel(onChange) {
                 evBusy = false;
             }
         });
-        body.querySelector('#pp_gd_ev_roll').addEventListener('click', async () => {
+        body.querySelector('#pp_gd_ev_note').addEventListener('click', async () => {
             if (evBusy) return;
+            const note = manualEl.value.trim();
+            if (!note) return;
+            if (!(getTavernContext().chat ?? []).length) { toastr.warning('空聊天里没有对话材料，先聊几句再生成'); return; }
+            if (unitsState().eventUnits.length >= MAX_UNITS_PER_TOOL) { toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个再生成`); return; }
+            evBusy = true;
+            status('按意见生成中……');
+            try {
+                const gen = await generateFreeRandomEvent({ note, materials: { ...wizardMaterials() } });   // 意见路径独占材料位，不带导入单元
+                const cur = unitsState();
+                cur.eventDraft = newEventUnit({ ...gen, mode: 'opinion' }, false);
+                persistUnits();
+                rerender();
+                status('草稿已生成——点「立为单元」收进暂存（再生成会换掉草稿）');
+            } catch (err) {
+                status('');
+                toastr.error(String(err.message ?? err));
+            } finally {
+                evBusy = false;
+            }
+        });
+        body.querySelector('#pp_gd_ev_roll').addEventListener('click', async () => {
+            if (evBusy || manualEl.value.trim()) return;
             if (!(getTavernContext().chat ?? []).length) { toastr.warning('空聊天里没有对话材料，先聊几句再生成'); return; }
             if (unitsState().eventUnits.length >= MAX_UNITS_PER_TOOL) { toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个再生成`); return; }
             const r = rollEventPipeline();
@@ -1251,7 +1325,7 @@ function openEvPanel(onChange) {
                     commitRolledEvent({ dimension: dim, title: gen.title, source: 'ai' });
                     msg = `来自 AI 自主${dim ? `·维度「${dim.name}」` : ''}——点「立为单元」收进暂存`;
                 } else {
-                    gen = await generateFreeRandomEvent({ dimension: r.dimension, useLibrary: st.eventOpts.useLibrary, materials: { ...wizardMaterials(), importedUnits: imports } });
+                    gen = await generateFreeRandomEvent({ dimension: r.dimension, materials: { ...wizardMaterials(), importedUnits: imports } });
                     commitRolledEvent({ dimension: r.dimension, title: gen.title, source: 'free' });
                     msg = `来自维度「${r.dimension.name}」自由生成——点「立为单元」收进暂存`;
                 }
@@ -1271,18 +1345,19 @@ function openEvPanel(onChange) {
     render();
 }
 
-// 事件单元卡：卡头徽章 + 标题/描述 + 走向选项（点选定向）+ 操作。
-// isDraft = 生成出来还没入池的草稿：动作行是「立为单元 / 丢弃」，入池后才有的注入层数/转注入/删除不出现
-function evUnitCardHtml(unit, isDraft = false) {
+// 事件草稿卡（面板内）：草稿标 + 卡头徽章 + 描述 + 走向选项（三选一或不选）+ 立为单元/丢弃。
+// 立为单元按「三选一或不选」裁剪走向（finalizeEventDraft）：没选=选项全砍（只作参考材料）、
+// 选了=只留那一个——入池即定稿的纯文本提示词块，之后不可再改选走向（想换 = 重新生成一版）
+function evDraftCardHtml(unit) {
     const p = unit.payload ?? {};
     const options = Array.isArray(p.options) ? p.options : [];
     return `
-    <div class="pp-item pp-gd-evcard${isDraft ? ' pp-gd-evdraft' : ''}"${isDraft ? ' data-draft="1"' : ''} data-uid="${escapeHtml(unit.id)}">
-        ${isDraft ? '<div><span class="pp-badge" title="还没入暂存池；再生成一次会换掉这份草稿">草稿</span></div>' : ''}
+    <div class="pp-item pp-gd-evcard pp-gd-evdraft" data-draft="1" data-uid="${escapeHtml(unit.id)}">
+        <div><span class="pp-badge" title="还没入暂存池；再生成一次会换掉这份草稿">草稿</span></div>
         ${unitHeadHtml(unit)}
         <div class="pp-gd-evdesc">${escapeHtml(p.description ?? '')}</div>
         ${options.length ? `
-        <div class="pp-label pp-gd-evoptlabel">走向选项（点选一个定向，再点一次取消；都不选＝只作参考）</div>
+        <div class="pp-label pp-gd-evoptlabel">走向选项（三选一或不选；都不选＝立卡后只作参考材料，选项会在立卡时裁掉）</div>
         ${options.map((o, i) => `
             <div class="menu_button pp-option ${p.choiceIdx === i ? 'pp-gd-sel' : ''}" data-evopt="${i}">
                 <span class="pp-option-label">${escapeHtml(o.label ?? '')}</span>
@@ -1290,20 +1365,14 @@ function evUnitCardHtml(unit, isDraft = false) {
             </div>`).join('')}
         ${p.choiceIdx == null ? '' : `<div class="pp-muted">已选：${escapeHtml(options[p.choiceIdx]?.label ?? '')}</div>`}` : ''}
         <div class="pp-btn-row pp-gd-evops">
-            ${isDraft ? `
-            <span data-evu-keep="1" class="menu_button" title="把这份草稿收进暂存池（生成本身就是内容，不用写意见）；收进后可在第 1 步「插入单元」勾选随分析发送">立为单元</span>
-            <span data-evu-discard="1" class="menu_button" title="丢掉这份草稿（不影响暂存池里已立的单元）">丢弃</span>` : `
-            <label title="隐身注入多少层后自动撤下；一层 = 一条角色回复（user 消息不计）">注入层数
-                <input type="number" class="text_pole" data-evu-layers="1" min="1" max="200" step="1" value="${p.injectLayers ?? 20}" />
-            </label>
-            <span data-evu-inject="1" class="menu_button" title="把事件与已选走向直接写成一条隐身注入（模型可见、聊天界面不显示），按所填层数到期自动撤下；不经过分析，也不影响这个单元在第 1 步「插入单元」的勾选">转为隐身注入</span>
-            <span data-evu-del="1" class="menu_button fa-solid fa-trash" title="从暂存池删除这个单元（已转隐身注入的不受影响）"></span>`}
+            <span data-evu-keep="1" class="menu_button" title="把这份草稿收进暂存池；走向按当前所选裁剪（没选=选项全砍，选了=只留那一个），裁完即定稿">立为单元</span>
+            <span data-evu-discard="1" class="menu_button" title="丢掉这份草稿（不影响暂存池里已立的单元）">丢弃</span>
         </div>
     </div>`;
 }
 
-// 事件单元卡接线：rerender = 面板整面重画（选项选中态刷新）。草稿卡只接走向选择与收/弃
-function wireEvUnit(cardEl, unit, rerender, isDraft = false) {
+// 事件草稿卡接线：走向点选 + 收/弃（收 = finalizeEventDraft 裁剪后入池）。rerender = 面板整面重画
+function wireEvDraft(cardEl, unit, rerender) {
     const p = unit.payload ?? (unit.payload = {});
     cardEl.querySelectorAll('[data-evopt]').forEach(el => el.addEventListener('click', () => {
         const i = Number(el.dataset.evopt);
@@ -1312,102 +1381,79 @@ function wireEvUnit(cardEl, unit, rerender, isDraft = false) {
         persistUnits();
         rerender();
     }));
-    if (isDraft) {
-        cardEl.querySelector('[data-evu-keep]').addEventListener('click', () => {
-            const st = unitsState();
-            if (st.eventUnits.length >= MAX_UNITS_PER_TOOL) {
-                toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先删一个再收`);
-                return;
-            }
-            st.eventDraft = null;
-            persistUnits();
-            addUnit(unit);
-            rerender();
-            toastr.success('已立为事件单元（第 1 步「插入单元」可勾选随分析发送）');
-        });
-        cardEl.querySelector('[data-evu-discard]').addEventListener('click', () => {
-            const st = unitsState();
-            st.eventDraft = null;
-            persistUnits();
-            rerender();
-        });
-        return;
-    }
-    const layersEl = cardEl.querySelector('[data-evu-layers]');
-    // 点选走向会整卡重渲染，input 事件实时回存，重渲染后数值不丢
-    layersEl.addEventListener('input', () => {
-        const v = Number(layersEl.value);
-        if (Number.isFinite(v)) { p.injectLayers = v; persistUnits(); }
-    });
-    layersEl.addEventListener('change', () => {
-        p.injectLayers = clampInjectLayers(p.injectLayers);
-        persistUnits();
-        layersEl.value = String(p.injectLayers);
-    });
-    cardEl.querySelector('[data-evu-inject]').addEventListener('click', () => {
-        const opt = Number.isInteger(p.choiceIdx) ? (p.options ?? [])[p.choiceIdx] : null;
-        if (!opt) {
-            toastr.warning('先点选一个走向再注入（都不选则只把事件当参考）');
+    cardEl.querySelector('[data-evu-keep]').addEventListener('click', () => {
+        const st = unitsState();
+        if (st.eventUnits.length >= MAX_UNITS_PER_TOOL) {
+            toastr.warning(`事件暂存已满 ${MAX_UNITS_PER_TOOL} 个，先在第 1 步「插入单元」区删一个再收`);
             return;
         }
-        const injLayers = clampInjectLayers(p.injectLayers);
-        addInjection({
-            id: newId('inj-'),
-            label: `事件：${p.title ?? ''} · ${opt.label ?? ''}`,
-            mode: 'open',
-            content: `【随机事件·${p.title ?? ''}】${p.description ?? ''}\n已选定走向：${opt.label ?? ''}\n幕后提示：${opt.hint ?? ''}`,
-            depth: 4,
-            role: 'system',
-            scope: 'chat',
-            enabled: true,
-            source: 'event',
-            unitId: unit.id,
-            createdAt: Date.now(),
-            expires: { type: 'layers', layers: injLayers },
-        });
-        toastr.success(`已注入，${injLayers} 层后自动撤下（页面底部「生效中的隐身注入」可提前撤下）`);
+        st.eventDraft = null;
+        persistUnits();
+        addUnit(finalizeEventDraft(unit));
+        rerender();
+        toastr.success('已立为事件单元（第 1 步「插入单元」区点开查看、勾选随分析发送、转注入）');
     });
-    cardEl.querySelector('[data-evu-del]').addEventListener('click', () => {
-        removeUnit(unit.id);
+    cardEl.querySelector('[data-evu-discard]').addEventListener('click', () => {
+        const st = unitsState();
+        st.eventDraft = null;
+        persistUnits();
         rerender();
     });
 }
 
-// 路人反应工具面板：指导意见生成 + 暂存池（≤3）。产物 = 反应单元，两路互斥——第 1 步
-// 「插入单元」勾选随分析发送 / 转隐身注入（转注入后规划与检查经生效注入自动附带同一口径）
+// 路人反应工具面板：只管生成（2026-08-26 E8 对齐事件面板草稿制）——顶部指导意见（可选）→
+// 「生成反应卡」出草稿 → 点草稿上「立为单元」入池；模型顺带给浓缩短标题作单元名。
+// 入池单元的查看/勾选/注入/删除/清空都在第 1 步「插入单元」区，面板不再存放单元
 function openRxPanel(onChange) {
     const body = openViewer('路人反应').querySelector('.pp-viewer-body');
+    const status = text => { const el = body.querySelector('#pp_gd_rx_status'); if (el) el.textContent = text; };
     const rerender = () => { render(); onChange(); };
     const render = () => {
         const st = unitsState();
-        const pool = st.reactionUnits;
+        const full = st.reactionUnits.length >= MAX_UNITS_PER_TOOL;
         body.innerHTML = `
         <label class="pp-label" title="写给生成模型的指导意见：期望烈度、余波方向、要避开什么">指导意见（可选）</label>
         <textarea id="pp_gd_rx_note" class="text_pole textarea_compact" rows="2" placeholder="期望烈度、余波方向、要避开什么"></textarea>
         <div class="pp-btn-row">
-            <span id="pp_gd_rx_gen" class="menu_button" title="生成一个反应单元入池；材料自动带第 1 步同一批（记忆表格档位与标签、玩法勾选、世界书、进行中剧情），勾选的导入单元一并作参考">生成反应卡</span>
-            <span id="pp_gd_rx_clear" class="menu_button" title="清空路人反应名下的全部暂存单元（随机事件的不动；已转隐身注入的不受影响）；采纳规划不会清池，清理只在这里">清空暂存</span>
+            <span id="pp_gd_rx_gen" class="menu_button" title="生成一张反应卡先出草稿（材料自动带第 1 步同一批：记忆表格档位与标签、玩法勾选、世界书、进行中剧情，勾选的导入单元一并作参考）；点草稿上的「立为单元」入池，模型会顺带给一个浓缩短标题作单元名">生成反应卡</span>
         </div>
         ${importRowHtml('reaction', rxImports)}
+        <div id="pp_gd_rx_status" class="pp-muted">${full ? `反应暂存已满 ${MAX_UNITS_PER_TOOL}/${MAX_UNITS_PER_TOOL}，先在第 1 步「插入单元」区删一个再生成` : ''}</div>
         <div id="pp_gd_rx_pool"></div>`;
         const noteEl = body.querySelector('#pp_gd_rx_note');
         noteEl.value = st.reactionNote;
         noteEl.addEventListener('input', () => { st.reactionNote = noteEl.value; persistUnits(); });   // 只回存不重画，输入不掉焦点
 
+        // 草稿卡（面板只放草稿；入池单元在第 1 步「插入单元」区查看与操作）
         const poolBox = body.querySelector('#pp_gd_rx_pool');
-        poolBox.innerHTML = pool.length ? pool.map(u => rxUnitCardHtml(u)).join('')
-            : '<div class="pp-muted" title="产物先暂存在这里：在第 1 步「插入单元」勾选随分析发送、可转隐身注入、可被随机事件工具导入再加工；每边最多 3 个，满了先删">暂存池还是空的——生成一张卡</div>';
-        poolBox.querySelectorAll('[data-uid]').forEach((cardEl, i) => wireRxUnit(cardEl, pool[i], rerender, onChange));
+        poolBox.innerHTML = st.reactionDraft ? rxDraftCardHtml(st.reactionDraft)
+            : '<div class="pp-muted" title="生成先出草稿；点草稿上的「立为单元」入池，入池后去第 1 步「插入单元」区查看与操作">生成后草稿出现在这里——立为单元后去第 1 步「插入单元」区找它</div>';
+        const draft = st.reactionDraft;
+        if (draft) {
+            const draftEl = poolBox.querySelector('[data-draft]');
+            draftEl.querySelector('[data-rxu-keep]').addEventListener('click', () => {
+                const cur = unitsState();
+                if (cur.reactionUnits.length >= MAX_UNITS_PER_TOOL) {
+                    toastr.warning(`反应暂存已满 ${MAX_UNITS_PER_TOOL} 个，先在第 1 步「插入单元」区删一个再收`);
+                    return;
+                }
+                cur.reactionDraft = null;
+                persistUnits();
+                addUnit(draft);
+                rerender();
+                toastr.success('已立为反应单元（第 1 步「插入单元」区点开查看、勾选随分析发送、转注入）');
+            });
+            draftEl.querySelector('[data-rxu-discard]').addEventListener('click', () => {
+                const cur = unitsState();
+                cur.reactionDraft = null;
+                persistUnits();
+                rerender();
+            });
+        }
 
         body.querySelectorAll('[data-imp]').forEach(cb => cb.addEventListener('change', () => {
             if (cb.checked) rxImports.add(cb.dataset.imp); else rxImports.delete(cb.dataset.imp);
         }));
-        body.querySelector('#pp_gd_rx_clear').addEventListener('click', () => {
-            clearUnits('reaction');
-            rxImports.clear();
-            rerender();
-            toastr.success('已清空反应暂存（随机事件的不动；已转隐身注入的不受影响）');
-        });
         body.querySelector('#pp_gd_rx_gen').addEventListener('click', async () => {
             if (rxBusy) return;
             if (!(getTavernContext().chat ?? []).length) { toastr.warning('空聊天里没有对话材料，先聊几句再生成'); return; }
@@ -1416,17 +1462,18 @@ function openRxPanel(onChange) {
             rxBusy = true;
             const btn = body.querySelector('#pp_gd_rx_gen');
             btn.textContent = '生成中……';
+            status('');
             try {
                 const gen = await generateReactionCard({
                     note: st.reactionNote,
                     materials: { ...wizardMaterials(), importedUnits: imports },
                     activePlan: activeStory()?.planText ?? '',
                 });
-                if (!addUnit(newReactionUnit(gen, imports.length > 0))) {
-                    toastr.warning(`反应暂存已满 ${MAX_UNITS_PER_TOOL} 个，生成结果没有入池`);
-                } else {
-                    rerender();   // 面板整面重画：按钮文案复位、卡片上桌
-                }
+                const cur = unitsState();
+                cur.reactionDraft = newReactionUnit(gen, imports.length > 0);
+                persistUnits();
+                rerender();   // 面板整面重画：按钮文案复位、草稿卡上桌
+                status('草稿已生成——点「立为单元」收进暂存（再生成会换掉草稿）');
             } catch (err) {
                 toastr.error(String(err.message ?? err));
                 btn.textContent = '生成反应卡';
@@ -1436,6 +1483,20 @@ function openRxPanel(onChange) {
         });
     };
     render();
+}
+
+// 反应草稿卡（面板内）：草稿标 + 卡头徽章 + 组装好的口径全文（纯文本块，就是发给模型的那份）+ 立为单元/丢弃
+function rxDraftCardHtml(unit) {
+    return `
+    <div class="pp-item pp-gd-evcard pp-gd-evdraft" data-draft="1" data-uid="${escapeHtml(unit.id)}">
+        <div><span class="pp-badge" title="还没入暂存池；再生成一次会换掉这份草稿">草稿</span></div>
+        ${unitHeadHtml(unit)}
+        <div class="pp-gd-evdesc">${escapeHtml(unit.text ?? '')}</div>
+        <div class="pp-btn-row pp-gd-evops">
+            <span data-rxu-keep="1" class="menu_button" title="把这份草稿收进暂存池；收进后去第 1 步「插入单元」区查看与操作">立为单元</span>
+            <span data-rxu-discard="1" class="menu_button" title="丢掉这份草稿（不影响暂存池里已立的单元）">丢弃</span>
+        </div>
+    </div>`;
 }
 
 function clampInjectLayers(v) {
