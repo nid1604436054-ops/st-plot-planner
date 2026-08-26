@@ -186,13 +186,10 @@ export async function generateRandomEvent(rule, materials = {}) {
  * @param {object} [options]
  * @param {object} [options.dimension]      维度对象 {name, prompt}：按维度气质即兴
  * @param {boolean} [options.useLibrary]    true 时把事件库条目列给模型参考（可从中选方向也可另起）
- * @param {boolean} [options.wantPreview]   true 时附带一版预览剧情走向（仅供参考，正式规划仍走分析调用）
  */
-export async function generateFreeRandomEvent({ dimension = null, useLibrary = false, wantPreview = false, materials = {} } = {}) {
+export async function generateFreeRandomEvent({ dimension = null, useLibrary = false, materials = {} } = {}) {
     const schema = '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
-        + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ]'
-        + (wantPreview ? ', "preview": "若采纳该事件，后续剧情的一版预览走向（120 字内，仅供参考）"' : '')
-        + ' }';
+        + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ] }';
 
     const system = '你是文字角色扮演的随机遭遇生成器。基于当前情境即兴生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
         + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'

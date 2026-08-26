@@ -312,9 +312,9 @@ function reactionSection(header, extraText = '') {
  * @param {string} [options.userNote]            用户剧情构思/补充说明
  * @param {string} [options.previousPlan]        打回重写时：上一版规划
  * @param {string} [options.revisionNote]        打回重写时：修改意见
- * @param {string} [options.eventText]           勾了「参与规划」的事件单元正文（多单元已由
+ * @param {string} [options.eventText]           第 1 步「插入单元」勾选的事件单元正文（多单元已由
  *                                               调用方拼好；进「随机事件」小节，位置在剧情与反应之间）
- * @param {string} [options.reactionText]         勾了「参与规划」的未注入反应单元正文
+ * @param {string} [options.reactionText]         第 1 步「插入单元」勾选的未注入反应单元正文
  *                                               （与生效中的反应注入合并进「路人反应」小节）
  * @param {string} [options.activePlan]          进行中剧情全文（查重与进度对照）
  * @param {string[]} [options.historySummaries]  历史剧情摘要（查重用）
@@ -333,7 +333,7 @@ function reactionSection(header, extraText = '') {
 // 角色摘要 / 最近对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 进行中剧情 / 路人反应 / 历史摘要。
 // 小节本体在 materials.js（reactions.js / randomEvents.js 也直接用它，工具生成不走本函数——
 // 已生效注入不自动进工具生成，防双算）；「路人反应」小节在这里插入，
-// opts.reactionText = 勾了「参与规划」的未注入反应单元正文（与生效注入合并成一节）。
+// opts.reactionText = 第 1 步「插入单元」勾选的未注入反应单元正文（与生效注入合并成一节）。
 // 注入模板序固定：剧情 → 事件 → 反应——反应小节插在进行中剧情之后（事件小节由
 // buildGuidanceMessages 再插在两者中间），不给排顺序的旋钮
 export function materialSections(opts = {}) {

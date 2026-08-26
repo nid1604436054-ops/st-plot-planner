@@ -128,9 +128,11 @@
 
 /* 按钮文字横排铁则（多次返工的坑，全局一次治死）：插件内按钮一律不许折行、不许被
    flex 挤窄——挤窄后文字会一个字一行竖着排；容器放不下靠容器自己的 wrap 换行解决。
+   width:auto 对冲酒馆 .menu_button 的 width:min-content（中文没空格时它按单字算）。
    例外 .pp-option：它是「选项名 + 幕后提示」靠换行排布的两行结构（规则放后面同权重胜出） */
 .pp-drawer .menu_button,
 .pp-viewer .menu_button {
+    width: auto;
     white-space: nowrap;
     flex-shrink: 0;
 }
@@ -338,8 +340,11 @@
 
 /* 事件走向选项：占满整行的卡片，走向与幕后提示上下分行显示
    （应用户反馈：走向和提示挤在同一行糊成一块，宁可页面拉长、滚动没关系）。
-   位置须在上方 .pp-drawer .menu_button 的 nowrap 之后，同权重靠后者生效 */
-.pp-drawer .pp-option {
+   位置须在上方 .pp-drawer .menu_button 的 nowrap 之后，同权重靠后者生效。
+   工具面板住在悬浮查看器里（挂 body、不在抽屉内，抽屉规则不继承）——查看器作用域必须
+   同款补一份，否则退回酒馆 menu_button 的 width:min-content，中文走向名被挤成单字竖排 */
+.pp-drawer .pp-option,
+.pp-viewer .pp-option {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -937,11 +942,12 @@
     padding: 24px;
 }
 
-/* 窗体实色底：与 .pp-drawer 同一套叠层手法，半透明主题色叠 5 层把残余透光率压到肉眼不可见 */
+/* 窗体实色底：与 .pp-drawer 同一套叠层手法，半透明主题色叠 5 层把残余透光率压到肉眼不可见。
+   宽度宁宽勿挤（用户 2026-08-26 拍板）：悬浮窗优先占页面空间，文字保持横排格式，内容长了靠正文区滚 */
 .pp-viewer {
     display: flex;
     flex-direction: column;
-    width: min(900px, 100%);
+    width: min(1100px, 100%);
     max-height: 100%;
     border: 1px solid var(--SmartThemeBorderColor, #444);
     border-radius: 10px;
