@@ -112,9 +112,19 @@ export const worldbookTab = {
             e.target.value = '';
         });
 
+        // 三个内嵌区（纯文本导入编辑框 / 检索测试 / 回收站）互斥展开：点开一个收起另外两个，
+        // 不再前后叠着出现（2026-08-27 用户拍板）；再点同一个键收起
         const txtEditor = container.querySelector('#pp_wb_txt_editor');
+        const scanWrap = container.querySelector('#pp_wb_scan_wrap');
+        const trashWrap = container.querySelector('#pp_wb_trash_wrap');
+        const showExclusive = target => {
+            const show = target.style.display === 'none';
+            [txtEditor, scanWrap, trashWrap].forEach(w => { w.style.display = 'none'; });
+            target.style.display = show ? '' : 'none';
+            return show;
+        };
         container.querySelector('#pp_wb_import_txt').addEventListener('click', () => {
-            txtEditor.style.display = txtEditor.style.display === 'none' ? '' : 'none';
+            showExclusive(txtEditor);
         });
         container.querySelector('#pp_wb_txt_cancel').addEventListener('click', () => {
             txtEditor.style.display = 'none';
@@ -143,9 +153,8 @@ export const worldbookTab = {
             renderBooks(container);
         });
 
-        const scanWrap = container.querySelector('#pp_wb_scan_wrap');
         container.querySelector('#pp_wb_scan').addEventListener('click', () => {
-            scanWrap.style.display = scanWrap.style.display === 'none' ? '' : 'none';
+            showExclusive(scanWrap);
         });
 
         container.querySelector('#pp_wb_scan_run').addEventListener('click', () => {
@@ -162,11 +171,8 @@ export const worldbookTab = {
                 : '<div class="pp-muted">未命中任何条目</div>';
         });
 
-        const trashWrap = container.querySelector('#pp_wb_trash_wrap');
         container.querySelector('#pp_wb_trash').addEventListener('click', () => {
-            const show = trashWrap.style.display === 'none';
-            trashWrap.style.display = show ? '' : 'none';
-            if (show) renderTrash(container);
+            if (showExclusive(trashWrap)) renderTrash(container);
         });
         container.querySelector('#pp_wb_trash_clear').addEventListener('click', () => {
             if (!clearArmed) {

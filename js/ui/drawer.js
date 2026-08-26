@@ -110,13 +110,15 @@ export function initDrawer() {
     });
     document.addEventListener('pp-switch-tab', e => activateTab(e.detail?.id));
 
-    // 点到酒馆顶栏 / 魔法棒菜单里的原生按钮时自动收起本抽屉，避免和原生面板叠在一起；
-    // 魔法棒菜单里「剧情规划器」入口本身除外（那是打开入口）
+    // 点到酒馆顶栏 / 选项菜单 / 魔法棒菜单里的原生按钮时自动收起本抽屉，避免和原生面板叠在一起；
+    // 魔法棒菜单里「剧情规划器」入口本身除外（那是打开入口）。
+    // 选择器必须带 #top-settings-holder：酒馆顶栏的全部按钮（用户设置/背景/角色面板把手等）都住在
+    // 它里面——#top-bar 是个空占位 div，只选它永远点不中（2026-08-27 用户报自动收起不生效的根因）
     $(document).on('click', (e) => {
         const el = drawerEl();
         if (!el?.classList.contains('pp-open')) return;
         if (e.target.closest?.('#pp_drawer, #pp_wand_open')) return;
-        if (e.target.closest?.('#top-bar, #extensionsMenu')) closeDrawer();
+        if (e.target.closest?.('#top-settings-holder, #top-bar, #options, #extensionsMenu')) closeDrawer();
     });
 
     // 窗口尺寸变化：把当前高度夹进新视口（用户拖过的也夹，但不重置）

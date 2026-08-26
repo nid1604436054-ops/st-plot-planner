@@ -67,7 +67,7 @@ export const settingsTab = {
                 <label class="pp-label" title="把不同供应商的连接各存一套（地址+密钥+模型），下拉一键切换，测试不同供应商不用反复粘贴；温度等其余参数全局共用">供应商方案</label>
             <div class="pp-model-row">
                 <select id="pp_set_prof" class="text_pole" title="选择已保存的方案立即整套启用（地址、密钥、模型一起换过来）；切换后模型下拉显示「当前自定义」，点「获取模型列表」可刷新成新供应商的列表"></select>
-                <div id="pp_set_prof_save" class="menu_button" title="把当前地址、密钥、模型存成一个方案：名字自动取地址域名；同一地址+密钥再次保存只更新模型，同域名不同密钥会另存一条（名字带 -2 -3 区分）">存当前</div>
+                <div id="pp_set_prof_save" class="menu_button" title="把当前地址、密钥、模型存成一个方案：名字自动取地址域名；同一地址+密钥再次保存只更新模型，同域名不同密钥会另存一条（名字带 -2 -3 区分）">保存</div>
                 <div id="pp_set_prof_del" class="menu_button" title="删除下拉里选中的方案（只删留底的方案，不动当前连接）">删除</div>
             </div>
             <label class="pp-label">API 地址（含 /v1）</label>
@@ -444,7 +444,8 @@ function presetSummary() {
     return list.length ? `${list.length} 个预设 · ${n} 个全局生效` : '未设置';
 }
 
-function presetRow(p, i, total) {
+// 预设行：顺序 = 新建先后，不可调（2026-08-27 用户拍板撤掉上移/下移）
+function presetRow(p) {
     const editing = editingPreset === p.id;
     return `
     <div class="pp-item" data-preset-item="${p.id}">
@@ -453,8 +454,6 @@ function presetRow(p, i, total) {
         </div>
         <div class="pp-item-ops">
             <span class="pp-muted pp-gd-plen">${String(p.content ?? '').trim().length} 字</span>
-            <span class="menu_button fa-solid fa-arrow-up" data-pup="${p.id}" title="上移（越靠前越先拼进提示词）" ${i === 0 ? 'style="visibility:hidden"' : ''}></span>
-            <span class="menu_button fa-solid fa-arrow-down" data-pdown="${p.id}" title="下移" ${i === total - 1 ? 'style="visibility:hidden"' : ''}></span>
             <span class="menu_button" data-pedit="${p.id}">${editing ? '收起' : '编辑'}</span>
             <span class="menu_button fa-solid fa-trash" data-pdel="${p.id}" title="删除该预设"></span>
         </div>
@@ -492,7 +491,7 @@ function renderPreset(container) {
 
     el.innerHTML = `
     ${head}
-    ${presets.map((p, i) => presetRow(p, i, presets.length)).join('') || '<div class="pp-muted">还没有预设，点下面「新建预设」加一条</div>'}
+    ${presets.map(p => presetRow(p)).join('') || '<div class="pp-muted">还没有预设，点下面「新建预设」加一条</div>'}
     <div class="pp-btn-row">
         <span id="pp_set_preset_new" class="menu_button"><i class="fa-solid fa-plus"></i> 新建预设</span>
         <span id="pp_set_preset_builtin" class="menu_button" title="展开查看内置的系统指令和预设拼接的位置">查看内置指令</span>
@@ -501,15 +500,6 @@ function renderPreset(container) {
 
     const refreshHead = () => {
         el.querySelector('#pp_set_preset_head .pp-muted').textContent = presetSummary();
-    };
-    const movePreset = (id, delta) => {
-        const list = settings.guidance.presets;
-        const i = list.findIndex(x => x.id === id);
-        const j = i + delta;
-        if (i < 0 || j < 0 || j >= list.length) return;
-        [list[i], list[j]] = [list[j], list[i]];
-        save();
-        renderPreset(container);
     };
 
     el.querySelector('#pp_set_preset_toggle').addEventListener('click', () => {
@@ -545,8 +535,6 @@ function renderPreset(container) {
         if (editingPreset === btn.dataset.pdel) editingPreset = null;
         renderPreset(container);
     }));
-    el.querySelectorAll('[data-pup]').forEach(btn => btn.addEventListener('click', () => movePreset(btn.dataset.pup, -1)));
-    el.querySelectorAll('[data-pdown]').forEach(btn => btn.addEventListener('click', () => movePreset(btn.dataset.pdown, 1)));
     // 名字/内容编辑即时保存，只更新行内文字，不整块重渲染（避免打断输入）
     el.querySelectorAll('[data-pname]').forEach(inp => inp.addEventListener('input', () => {
         const p = findPreset(inp.dataset.pname);

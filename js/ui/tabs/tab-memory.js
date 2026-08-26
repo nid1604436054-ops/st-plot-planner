@@ -98,13 +98,18 @@ export const memoryTab = {
             }
             renderAll(container);
         });
+        // 打标签 / 备份与恢复 互斥展开：点开一个收起另一个（2026-08-27 用户拍板），再点同一个键收起
+        const tagaiEl = container.querySelector('#pp_mem_tagai');
+        const bkEl = container.querySelector('#pp_mem_backups');
         container.querySelector('#pp_mem_tag_btn').addEventListener('click', () => {
-            const el = container.querySelector('#pp_mem_tagai');
-            el.style.display = el.style.display === 'none' ? '' : 'none';
+            const show = tagaiEl.style.display === 'none';
+            tagaiEl.style.display = show ? '' : 'none';
+            bkEl.style.display = 'none';
         });
         container.querySelector('#pp_mem_bk_btn').addEventListener('click', () => {
-            const el = container.querySelector('#pp_mem_backups');
-            el.style.display = el.style.display === 'none' ? '' : 'none';
+            const show = bkEl.style.display === 'none';
+            bkEl.style.display = show ? '' : 'none';
+            tagaiEl.style.display = 'none';
         });
         container.querySelector('#pp_mem_delbtn').addEventListener('click', () => {
             memView = 'deleted';
