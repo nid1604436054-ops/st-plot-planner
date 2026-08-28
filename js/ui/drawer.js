@@ -8,11 +8,12 @@
 import { worldbookTab } from "./tabs/tab-worldbook.js";
 import { memoryTab } from "./tabs/tab-memory.js";
 import { guidanceTab } from "./tabs/tab-guidance.js";
+import { listenerTab } from "./tabs/tab-listener.js";
 import { settingsTab } from "./tabs/tab-settings.js";
 import { flushChatData } from "../chatdata.js";
 import { settings, save } from "../settings.js";
 
-const TABS = [worldbookTab, memoryTab, guidanceTab, settingsTab];
+const TABS = [worldbookTab, memoryTab, guidanceTab, listenerTab, settingsTab];
 let activeId = TABS[0].id;
 
 // 上次自动适配写入的高度；当前内联高度与它不一致 = 用户拖过，停止自动适配

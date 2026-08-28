@@ -48,6 +48,19 @@ const DEFAULTS = {
     },
     lorebooks: [],          // M1 世界书库
     lorebookTrash: [],      // 世界书回收站：删的书/条目先进这里，页面上可恢复或彻底删除
+    listener: {             // 2.0 监听（全局项；逐轮留痕/挂载单位在 chatdata 的 listener 块按聊天走）
+        enabled: false,     // 总开关：关 = 不分析、不注入、不扣发送（默认关，打开前不上路，防意外计费）
+        providerId: '',     // 监听模型固定项：供应商方案 id；空 = 用方案库第一个；方案库空 = 退回主连接
+        depth: 2,           // 注入槽深度（0 = 紧贴上下文末尾；默认比 1.0 剧情注入的 4 更靠近末端）
+        strictness: 'standard', // 达成判定松紧：loose 宽 / standard 标准 / strict 严
+        intervene: 'medium',    // 介入强度：low 低 / medium 中 / high 高（两模式的发与不发都归它管）
+        traceRounds: 50,    // 留痕滚动轮数
+        stuckWindow: 3,     // 卡死参考窗口（连续约 N 轮无推进也无有效对话才考虑 stuck；提案值）
+        progressMin: 400,   // 换算锚：一层楼有效推进字数区间的低端（示意默认，两端可调）
+        progressMax: 800,   // 换算锚：区间高端
+        withLorebook: true, // 附加材料：世界书检索命中（共用 1.0 检索口径）
+        withMemory: true,   // 附加材料：记忆表格（全量口径）
+    },
     chatData: {},           // 每聊天数据的冷层留底（见 js/chatdata.js）：{ [聊天身份]: { memory/story/picks/reaction/books } }
     uiZoom: 100,            // 面板内容缩放百分比（80–160，抽屉头部步进器调）：字与控件等比放大、页面相应变长
     injections: [],         // M4 隐身注入项

@@ -7,6 +7,7 @@ export function initWandMenu() {
     <div id="pp_wand_open" class="list-group-item flex-container flexGap5" title="打开剧情规划器面板">
         <div class="fa-fw fa-solid fa-compass-drafting extensionsMenuExtensionButton"></div>
         <span>剧情规划器</span>
+        <span id="pp_wand_dot" class="pp-wand-dot" title="监听有问题待看：点开面板 →「监听」页签"></span>
     </div>`;
 
     const tryAppend = () => {

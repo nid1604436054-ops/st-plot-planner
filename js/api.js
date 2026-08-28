@@ -12,9 +12,8 @@ export class ApiError extends Error {
     }
 }
 
-function requireConfig() {
-    const { baseUrl, model } = settings.api;
-    if (!baseUrl || !model) {
+function requireConfig(conn) {
+    if (!conn.baseUrl || !conn.model) {
         throw new ApiError('请先在「剧情规划器 → 设置」页签里配置 API 地址和模型');
     }
 }
@@ -66,6 +65,9 @@ function pickContent(message, { finishReason = '', completionTokens = null, prom
  * @param {(usage:object)=>void} [options.onUsage]     回传服务商实报 usage：非流式必有；
  *        流式时请求带 stream_options.include_usage、服务商在末包附上才回调（不附就不回调）
  * @param {boolean} [options.skipPresets]  true 时跳过全局预设注入（仅连通性测试用）
+ * @param {{baseUrl:string,apiKey:string,model:string}} [options.provider]
+ *        独立连接覆盖（监听模型固定项用）：提供时地址/密钥/模型走这一套，
+ *        不提供走当前主连接；温度等其余参数全局共用
  * @returns {Promise<string>} 模型输出的文本（启用中的预设已随 system 消息附带）
  */
 // ---------------------------------------------------------------------------
@@ -91,10 +93,10 @@ export function withGlobalPresets(messages) {
     return messages.map((m, i) => i === idx ? { ...m, content: `${m.content}\n\n${block}` } : m);
 }
 
-export async function chatCompletion({ messages, temperature, maxTokens, signal, onDelta, onUsage, skipPresets = false } = {}) {
-    requireConfig();
-    const { baseUrl, apiKey, model } = settings.api;
-    const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+export async function chatCompletion({ messages, temperature, maxTokens, signal, onDelta, onUsage, skipPresets = false, provider } = {}) {
+    const conn = provider ?? settings.api;
+    requireConfig(conn);
+    const url = `${conn.baseUrl.replace(/\/+$/, '')}/chat/completions`;
     const stream = typeof onDelta === 'function';
     const sent = skipPresets ? messages : withGlobalPresets(messages);
 
@@ -102,10 +104,10 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+            ...(conn.apiKey ? { Authorization: `Bearer ${conn.apiKey}` } : {}),
         },
         body: JSON.stringify({
-            model,
+            model: conn.model,
             messages: sent,
             temperature: temperature ?? settings.api.temperature,
             max_tokens: maxTokens ?? settings.api.maxTokens,

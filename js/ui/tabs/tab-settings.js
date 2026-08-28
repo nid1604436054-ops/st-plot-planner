@@ -7,6 +7,7 @@ import { testConnection, fetchModels, searchWeb } from "../../api.js";
 import { guidanceSystemPrompt } from "../../planner.js";
 import { activeStory } from "../../story.js";
 import { chatDataKey, resetChatDataCache } from "../../chatdata.js";
+import { listenerCfg, setListenerEnabled } from "../../listener.js";
 import { escapeHtml, clamp, readFileAsText } from "../../utils.js";
 
 // 拉取过的模型列表缓存：页签每次激活都会重渲染，缓存避免切换后下拉列表丢失
@@ -14,7 +15,7 @@ let modelIds = [];
 // true = 手动填模型名（拉取的列表里没有时用），false = 下拉选择
 let manualModel = false;
 // 大区块折叠状态（页签会话内保留）：大模型连接默认展开，其余默认收起
-const secFolds = { conn: true, search: false, advanced: false, backup: false };
+const secFolds = { conn: true, search: false, listener: false, advanced: false, backup: false };
 
 // 重建模型下拉框；当前已保存的模型若不在列表里，作为「当前自定义」置顶保留
 function rebuildModelSelect(container) {
@@ -113,6 +114,44 @@ export const settingsTab = {
             </details>
         </div>
         <div class="pp-section">
+            <details class="pp-fold" data-secfold="listener" ${secFolds.listener ? 'open' : ''}>
+                <summary title="2.0 监听（逐轮判定＋微量指导注入）的全局项；逐轮留痕与挂载单位按聊天存在「监听」页签里"><i class="fa-solid fa-ear-listen"></i> 监听</summary>
+                <div class="pp-grid2">
+                    <div>
+                        <label class="pp-label" title="监听总开关：开 = 每轮扮演模型输出完毕后自动判定并注入指导；关 = 完全不分析、不注入、不扣发送。监听页签里也有同一个开关">启用监听</label>
+                        <input id="pp_set_ls_on" type="checkbox" />
+                    </div>
+                    <div>
+                        <label class="pp-label" title="监听模型固定项（2.0 里唯一不逐次选模型的调用）：选一个供应商方案给判定与指导用；默认用方案库第一个；方案库空时退回上面的主连接。逐轮判定建议放便宜模型或主流模型轻量版">监听模型</label>
+                        <select id="pp_set_ls_prov" class="text_pole"></select>
+                    </div>
+                </div>
+                <label class="pp-label" title="监听指导注入槽的深度（0 = 紧贴上下文末尾；数字越大越靠前）。默认 2，比 1.0 剧情注入（默认 4）更靠近末端；同轮并存时监听指导在更后面">注入深度</label>
+                <input id="pp_set_ls_depth" class="text_pole textarea_compact" type="number" min="0" max="100" />
+                <hr class="pp-hr" />
+                <div class="pp-grid2">
+                    <div>
+                        <label class="pp-label" title="换算锚：一层楼的有效剧情推进按这个区间综合衡量（不逐字换算），两端是示意默认、可调">有效推进区间·低（字）</label>
+                        <input id="pp_set_ls_pmin" class="text_pole textarea_compact" type="number" min="50" step="50" />
+                    </div>
+                    <div>
+                        <label class="pp-label" title="同上：区间高端">有效推进区间·高（字）</label>
+                        <input id="pp_set_ls_pmax" class="text_pole textarea_compact" type="number" min="100" step="50" />
+                    </div>
+                </div>
+                <div class="pp-grid2">
+                    <div>
+                        <label class="pp-label" title="附加材料：判定时附带世界书检索命中（共用上面的检索口径）">附带世界书</label>
+                        <input id="pp_set_ls_lore" type="checkbox" />
+                    </div>
+                    <div>
+                        <label class="pp-label" title="附加材料：判定时附带记忆表格（全量口径；将来要与 1.0 分开口径时在这里做减法）">附带记忆表格</label>
+                        <input id="pp_set_ls_mem" type="checkbox" />
+                    </div>
+                </div>
+            </details>
+        </div>
+        <div class="pp-section">
             <details class="pp-fold" data-secfold="advanced" ${secFolds.advanced ? 'open' : ''}>
                 <summary title="保持默认即可"><i class="fa-solid fa-gear"></i> 高级设置</summary>
                 <div class="pp-grid2">
@@ -185,6 +224,36 @@ export const settingsTab = {
         sTool.addEventListener('change', () => { settings.search.enabled = sTool.checked; save(); syncJudgeDisabled(); });
         sJudge.addEventListener('change', () => { settings.search.preJudge = sJudge.checked; save(); });
         syncJudgeDisabled();
+
+        // 监听区：总开关 / 模型固定项 / 注入深度 / 换算锚区间 / 附加材料
+        const ls = listenerCfg();
+        const lsOn = container.querySelector('#pp_set_ls_on');
+        lsOn.checked = ls.enabled === true;
+        lsOn.addEventListener('change', () => {
+            setListenerEnabled(lsOn.checked);
+            if (lsOn.checked) toastr.info('监听已启用：扮演模型每轮输出完毕后自动判定，指导写入独立注入槽');
+        });
+        const lsProvSel = container.querySelector('#pp_set_ls_prov');
+        const rebuildLsProv = () => {
+            const profs = settings.api.profiles ?? [];
+            lsProvSel.innerHTML = `<option value="">方案库第一个（默认）</option>`
+                + `<option value="__main__">主连接（不单独指定）</option>`
+                + profs.map(p => `<option value="${escapeHtml(p.id)}" ${ls.providerId === p.id ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model ?? '')}</option>`).join('');
+        };
+        rebuildLsProv();
+        lsProvSel.addEventListener('change', () => {
+            ls.providerId = lsProvSel.value === '__main__' ? '__main__' : lsProvSel.value;
+            save();
+        });
+        bindNum('#pp_set_ls_depth', () => ls.depth, v => ls.depth = Math.max(0, v));
+        bindNum('#pp_set_ls_pmin', () => ls.progressMin, v => ls.progressMin = Math.max(50, v));
+        bindNum('#pp_set_ls_pmax', () => ls.progressMax, v => ls.progressMax = Math.max(ls.progressMin + 50, v));
+        const lsLore = container.querySelector('#pp_set_ls_lore');
+        lsLore.checked = ls.withLorebook !== false;
+        lsLore.addEventListener('change', () => { ls.withLorebook = lsLore.checked; save(); });
+        const lsMem = container.querySelector('#pp_set_ls_mem');
+        lsMem.checked = ls.withMemory !== false;
+        lsMem.addEventListener('change', () => { ls.withMemory = lsMem.checked; save(); });
 
         applyModelMode(container);
         container.querySelector('#pp_set_model').addEventListener('change', () => {
