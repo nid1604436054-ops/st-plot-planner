@@ -41,9 +41,11 @@ const INTERVENE_UNIT = {
 };
 
 const INTERVENE_LIGHT = {
-    low: { label: '低', text: '仅严重 OOC 或明显文风重复时发。' },
-    medium: { label: '中', text: '中等及以上的发现才发。' },
-    high: { label: '高', text: '有任何发现就发。' },
+    // 2026-08-29 用户修订：轻量模式发现问题就发——输入成本反正已经花了，发现不说就白花；
+    // 静默概念属于单位模式的节点推进（节点没到不用催），不允许压掉轻量模式的问题上报
+    low: { label: '低', text: '仅很轻微的发现（OOC 轻微、文风轻微）可不发；中等及以上 OOC、剧情重复、明显文风重复必须发。' },
+    medium: { label: '中', text: '有任何发现就发修正指导，轻微也不例外；仅三项全部无发现时静默。' },
+    high: { label: '高', text: '有任何发现就发修正指导；仅三项全部无发现时静默。' },
 };
 
 export function listenerCfg() {
@@ -463,15 +465,15 @@ export function normalizeLightReport(obj) {
     };
 }
 
-// 轻量介入档闸（判断点 8）：发现的东西够不够格发指导
+// 轻量介入档闸（判断点 8，2026-08-29 用户修订：发现就该发，只有很轻微的可不发）
 export function lightShouldIntervene(r, level) {
     const sev = r.ooc.found ? Math.max(...r.ooc.items.map(it => ({ '轻微': 1, '中等': 2, '严重': 3 }[it.severity] ?? 2))) : 0;
     const style = { '无': 0, '轻微': 1, '明显': 2 }[r.styleRepeat.level] ?? 0;
     const plot = r.plotRepeat.found ? 2 : 0;   // 剧情重复没有轻重档，按中等权重计
     const worst = Math.max(sev, style, plot);
-    if (level === 'low') return worst >= 3 || style >= 2;      // 仅严重 OOC 或明显文风重复
-    if (level === 'medium') return worst >= 1;                 // 轻微及以上（中等及以上的发现）
-    return worst > 0;                                           // high：有任何发现就发
+    if (level === 'low') return worst >= 2;    // 仅很轻微的发现（OOC／文风轻微）不发；剧情重复、中等及以上都发
+    if (level === 'medium') return worst >= 1; // 有任何发现就发（轻微也发）
+    return worst > 0;                          // high：与中同——档位差异体现在单位模式的发送频率
 }
 
 // ---------------------------------------------------------------------------

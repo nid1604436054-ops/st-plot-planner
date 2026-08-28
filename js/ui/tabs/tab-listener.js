@@ -174,7 +174,7 @@ function renderTab(container) {
                     <option value="strict" ${cfg.strictness === 'strict' ? 'selected' : ''}>严</option>
                 </select>
             </label>
-            <label title="介入强度——管指导发多勤多勤（接管全部频控行为）。低：仅明显偏航或停滞时发；中：例行轻推，允许静默轮；高：每轮都发（卡死除外）。轻量模式下低＝仅严重问题、高＝有任何发现就发">
+            <label title="介入强度——管指导发多勤（接管全部频控行为）。单位模式：低＝仅明显偏航或停滞时发；中＝例行轻推，允许静默轮；高＝每轮都发（卡死除外）。轻量模式：发现问题就发——低＝仅很轻微的不发（OOC 轻微／文风轻微静默），中／高＝有任何发现就发（轻微也发）">
                 <span>介入</span>
                 <select id="pp_ls_inter" class="text_pole">
                     <option value="low" ${cfg.intervene === 'low' ? 'selected' : ''}>低</option>
