@@ -378,7 +378,7 @@ export function buildLightPrompt({ cfg, floorsText, worldbook, extra, lastGuidan
             '',
             '【修正指导】',
             '- 三项检查有任何发现时，生成一段修正指导：点明往哪个方向修（如拉回人设的事实依据、绕开重复的新走法），结构＝一句目标句＋动作提示；长度不设上限、宁详勿简；措辞每轮变化、不复读上一轮修正指导。',
-            '- 三项全部无发现时，不发指导——no_guidance_reason 写「本轮三项检查均无发现」。正常轮次静默是这个模式的常态，不是异常。',
+            '- 三项全部无发现时，不发指导——no_guidance_reason 写一两句本轮质量印象（例：「节奏稳定、人设无漂移；第 12 楼起略有原地打转苗头，暂不需干预」），禁用「均无发现」「一切正常」这类空话。正常轮次静默是这个模式的常态，不是异常。',
             '',
             `【介入强度】（当前档：${inter.label}）`,
             inter.text,
@@ -453,7 +453,8 @@ export function normalizeLightReport(obj) {
     if (!goal && !noReason) throw new Error('既没有修正指导也没有静默原因（静默轮必须留痕原因）');
     const found = Boolean(o.found) && items.length > 0;
     return {
-        ooc: { found, items: found ? items : [] },
+        // found=false 时 items 也保留：模型给的次级观察要进留痕显示，不丢（found 仍是介入闸的唯一依据）
+        ooc: { found, items },
         plotRepeat: { found: Boolean(p.found), note: String(p.note ?? '').slice(0, 300) },
         styleRepeat: { level: ['无', '轻微', '明显'].includes(s.level) ? s.level : '无', note: String(s.note ?? '').slice(0, 300) },
         goal,
@@ -534,7 +535,8 @@ export function applyLightOutcome(state, report, meta) {
             styleRepeat: report.styleRepeat,
         },
         guidance: meta.guidance,
-        noGuidanceReason: report.goal ? '' : report.noGuidanceReason,
+        // 以实际发没发为准：介入档拦下的轮次留原因（页内静默轮要显示全文）
+        noGuidanceReason: meta.guidance ? '' : report.noGuidanceReason,
         retried: Boolean(meta.retried),
         ...(meta.tokens ? { tokens: meta.tokens } : {}),
     };

@@ -26,6 +26,14 @@ function lastTrace(state) {
     return Array.isArray(state.trace) ? state.trace[0] ?? null : null;
 }
 
+// 三项小结一行（页内静默轮/留痕共用口径）：无发现的项亮「无」、有发现的写实际发现
+function lightChecksLine(f = {}) {
+    const ooc = f.ooc?.found ? `OOC×${f.ooc.items?.length ?? 1}` : 'OOC 无';
+    const plot = f.plotRepeat?.found ? '剧情重复' : '剧情重复 无';
+    const style = f.styleRepeat?.level && f.styleRepeat.level !== '无' ? `文风${f.styleRepeat.level}` : '文风 无';
+    return `${ooc} ／ ${plot} ／ ${style}`;
+}
+
 function traceSummary(rec) {
     if (!rec) return '';
     if (!rec.ok) return `失败：${clamp(rec.error, 60)}`;
@@ -150,6 +158,7 @@ function renderTab(container) {
         <span class="pp-muted" title="注入槽里当前生效的指导全文（微量指导或轻量修正指导）；静默轮显示静默原因">（第 ${state.round} 轮）</span>
         ${rec && rec.ok && rec.guidance ? `
         <div class="pp-ls-guidance">${escapeHtml(rec.guidance)}</div>` : rec && rec.ok ? `
+        ${rec.mode === 'light' ? `<div class="pp-muted">${escapeHtml(lightChecksLine(rec.findings))}</div>` : ''}
         <div class="pp-muted">本轮静默：${escapeHtml(rec.noGuidanceReason || '未给原因')}</div>` : `
         <div class="pp-muted">${rec ? '最近一轮失败，注入槽已清空（绝不复用过期指导）' : '还没有判定记录'}</div>`}
     </div>
@@ -356,8 +365,8 @@ function refreshTraceWindow() {
         ` : ''}
         ${rec.mode === 'light' && rec.ok ? `
             ${(rec.findings?.ooc?.items ?? []).map(it => `<div class="pp-ls-ev"><b>OOC·${escapeHtml(it.aspect)}·${escapeHtml(it.severity)}</b> ${escapeHtml(clamp(it.evidence, 100))}<span class="pp-muted">建议：${escapeHtml(clamp(it.fix, 80))}</span></div>`).join('')}
-            ${rec.findings?.plotRepeat?.found ? `<div class="pp-ls-ev"><b>剧情重复</b> ${escapeHtml(clamp(rec.findings.plotRepeat.note, 120))}</div>` : ''}
-            ${rec.findings?.styleRepeat && rec.findings.styleRepeat.level !== '无' ? `<div class="pp-ls-ev"><b>文风重复·${escapeHtml(rec.findings.styleRepeat.level)}</b> ${escapeHtml(clamp(rec.findings.styleRepeat.note, 120))}</div>` : ''}
+            ${(rec.findings?.plotRepeat && (rec.findings.plotRepeat.found || rec.findings.plotRepeat.note)) ? `<div class="pp-ls-ev"><b>剧情重复${rec.findings.plotRepeat.found ? '' : '·无'}</b> ${escapeHtml(rec.findings.plotRepeat.note)}</div>` : ''}
+            ${(rec.findings?.styleRepeat && (rec.findings.styleRepeat.level !== '无' || rec.findings.styleRepeat.note)) ? `<div class="pp-ls-ev"><b>文风重复·${escapeHtml(rec.findings.styleRepeat.level)}</b> ${escapeHtml(rec.findings.styleRepeat.note)}</div>` : ''}
         ` : ''}
         ${rec.guidance ? `<div class="pp-ls-guidance">${escapeHtml(rec.guidance)}</div>` : (rec.ok ? `<div class="pp-muted">静默原因：${escapeHtml(rec.noGuidanceReason || '未给原因')}</div>` : '')}
         ${rec.retried ? '<div class="pp-muted">（本轮经过一次坏输出自动修复重试）</div>' : ''}
