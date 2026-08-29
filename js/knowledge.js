@@ -1,7 +1,10 @@
 // 2.0 知识库（DESIGN §6.9，2026-08-29 定稿后落码）：反模型偏好的候选池。
 // 模型在「约会去哪、消费什么」这类选择上有训练分布尖峰——换模型、重 roll 也只在几个
 // 常见选项里打转（用户 1.0 起实测确认）。知识库把候选集合整个换掉：清单只喂剧情规划向导
-// （随机事件/路人反应不接，扮演模型注入一概不碰），每张清单随机抓一小把随材料发给模型。
+// （随机事件/路人反应不接，扮演模型注入一概不碰），每张清单按轮换随机抓一小把随材料发给模型
+// （2026-08-31 真机第六轮改定轮换制：整张清单洗牌成一条队按序发，全部条目各发一次之前
+// 不重复，发完一轮自动重洗开新一轮——起因：纯随机的「疙瘩」长相与直觉落差太大，用户拍板
+// 「所有条目随完一轮之前，不会出现重复条目」）。
 // 数据全局共享（settings.knowledge，不绑聊天不绑角色）：清单 { name, fields[], entries[] }。
 // fields 即自定义表头——导入时定死、永不做事后迁移（用户留存原始文本，重导即重建，
 // 2026-08-29 用户拍板「不做迁徙，后面也不会做」）。
@@ -126,18 +129,40 @@ export function updateEntry(listId, entryId, values) {
 }
 
 /**
- * 从一张清单纯随机抓 N 条（无语境过滤——2026-08-29 用户明确否决过滤机制）。
- * 冷却中的条目跳过；可用不足 N 条有多少抓多少。
+ * 从一张清单按轮换随机抓 N 条（无语境过滤——2026-08-29 用户明确否决过滤机制；
+ * 2026-08-31 真机第六轮：纯随机改轮换制）。每张清单一条轮换队列 list.queue＝本轮剩余
+ * 未发条目 id（随设置持久化、全局共享跨聊天）：队列空了把全部可用（非冷却）条目洗牌成
+ * 新一轮按序发——全部条目各发一次之前绝不重复，发完一轮自动重洗。轮到某条时它已被删
+ * 或进了冷却就跳过出本轮（冷却结束或下轮回归）；开新轮时排除本把已发过的（轮换边界的
+ * 一把不发同一条两遍）。冷却交互、重抓＝消费等细则见 DESIGN §6.9 第六轮修订。
  * @returns {{picked:Array, available:number}} available = 冷却外的全部条目数（面板提示用）
  */
 export function grabFromList(list, n) {
-    const available = (list?.entries ?? []).filter(e => !(Number(e.cooldown) > 0));
-    const pool = [...available];
-    for (let i = pool.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [pool[i], pool[j]] = [pool[j], pool[i]];
+    const wanted = Math.max(0, Math.round(n) || 0);
+    const entries = list?.entries ?? [];
+    const available = entries.filter(e => !(Number(e.cooldown) > 0));
+    if (!Array.isArray(list.queue)) list.queue = [];
+    const byId = new Map(entries.map(e => [e.id, e]));
+    const picked = [];
+    const pickedIds = new Set();
+    while (picked.length < wanted) {
+        if (!list.queue.length) {
+            const fresh = available.filter(e => !pickedIds.has(e.id));
+            if (!fresh.length) break;
+            for (let i = fresh.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [fresh[i], fresh[j]] = [fresh[j], fresh[i]];
+            }
+            list.queue = fresh.map(e => e.id);
+        }
+        const entry = byId.get(list.queue.shift());
+        if (entry && !(Number(entry.cooldown) > 0)) {
+            picked.push(entry);
+            pickedIds.add(entry.id);
+        }
     }
-    return { picked: pool.slice(0, Math.max(0, Math.round(n) || 0)), available: available.length };
+    save();
+    return { picked, available: available.length };
 }
 
 // ---------------------------------------------------------------------------

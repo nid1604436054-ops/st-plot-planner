@@ -901,7 +901,7 @@ function renderCollect(container, main) {
             || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
         ${kbLists.length ? `
-        <label class="pp-label" title="知识库＝自建素材清单（「知识库」页签管理），反模型偏好用。勾选的清单点开「知识库抓取」各随机抓一小把，随分析发给规划模型；确认采用时选用的条目进冷却（放弃草稿不冷却）。勾选随当前对话记忆保存">知识库清单</label>
+        <label class="pp-label" title="知识库＝自建素材清单（「知识库」页签管理），反模型偏好用。勾选的清单点开「知识库抓取」各按轮换抓一小把（整张清单洗牌按序发，一轮内不重复），随分析发给规划模型；确认采用时选用的条目进冷却（放弃草稿不冷却）。勾选随当前对话记忆保存">知识库清单</label>
         <div class="pp-gd-selp">
             ${kbLists.map(l => {
                 const coolN = l.entries.filter(e => Number(e.cooldown) > 0).length;
@@ -911,7 +911,7 @@ function renderCollect(container, main) {
         <div class="pp-btn-row">
             <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内生成——掷骰 / 大模型随机 / 按意见生成三键与意见二选一（意见框有字时只剩「按意见生成」能点），生成先出草稿、点草稿上的「立为单元」入池，暂存最多 3 个。大模型随机无条件把事件库已有条目作为防复刻清单随行（不做勾选）。生成材料自动带本页上方同一批，也可勾选导入路人反应的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的；生成的事件必须与它咬合：顺着它描述的世界状态发展、不复写同一件事；仅随机两键生效；已生效注入不自动带，防双算；导入产物正文自带前因，删掉原始单元也不丢）。入池单元在本页下方「插入单元」区点开查看、勾选随分析发送、转隐身注入；采纳规划后暂存不清空，清空键在「插入单元」区">随机事件</span>
             <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见（可选）、点「生成反应卡」出草稿、点草稿上「立为单元」入池（材料自动带本页上方同一批，也可导入随机事件的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的）——导入的事件按将要且一定会发生对待，反应卡围绕它出；导入产物正文自带前因，删掉原始单元也不丢；模型会顺带给浓缩短标题作单元名）。入池单元在本页下方「插入单元」区点开查看与操作——勾选随分析发送 / 转隐身注入（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径，两路互斥）；产物最多暂存 3 个，清空键在「插入单元」区">路人反应</span>
-            <span id="pp_gd_kb_panel" class="menu_button" title="知识库抓取（悬浮面板，与随机事件/路人反应同款交互）：勾选中的每张清单各随机抓一小把（条数在「设置 → 知识库」，默认 5、纯随机不按语境过滤、冷却中的条目自动跳过），抓到的条目在面板里看得见——采用方式二选一：「全部采用」＝整把发给规划模型让它自己挑（默认），「自选」＝你勾哪条发哪条；单条可踢、每张清单可整把重抓；发送的随材料进第 2 步确认页。清单与条目在「知识库」页签管理">知识库抓取</span>
+            <span id="pp_gd_kb_panel" class="menu_button" title="知识库抓取（悬浮面板，与随机事件/路人反应同款交互）：勾选中的每张清单各按轮换抓一小把（条数在「设置 → 知识库」，默认 5；轮换制＝整张清单洗牌按序发，全部条目各发一次之前不重复、发完一轮自动重洗；不按语境过滤；冷却中的条目本轮跳过），抓到的条目在面板里看得见——采用方式二选一：「全部采用」＝整把发给规划模型让它自己挑（默认），「自选」＝你勾哪条发哪条；单条可踢、每张清单可整把换新；发送的随材料进第 2 步确认页。清单与条目在「知识库」页签管理">知识库抓取</span>
         </div>
         <div id="pp_gd_c1_units"></div>
         <label class="pp-label" title="已有的想法、约束或重点（可选，随分析发给模型）">剧情构思方向</label>
@@ -1608,7 +1608,8 @@ function openKbPanel(onChange) {
     // kbSel＝「自选」方式下勾上的条目（从一条没勾开始）；首开/重抓新进来的不勾（「全部采用」下不用勾）
     const selSetOf = () => new Set(run.kbSel ?? []);
     const reggrab = list => {
-        // 整把重抓：这张清单当前抓到的全部替换成新一把（纯随机、冷却跳过、可用不足有多少抓多少）
+        // 整把换新：这张清单当前抓到的全部替换成队列里的下一批（轮换制：丢掉的算已发过，
+        // 要等下一轮才回来；轮到冷却中的跳过、剩余不足有多少抓多少）
         const old = new Set(grabbedOf(list));
         const { picked } = grabFromList(list, cfg.grabCount);
         run.kbIds = (run.kbIds ?? []).filter(id => !old.has(id)).concat(picked.map(e => e.id));
@@ -1638,10 +1639,15 @@ function openKbPanel(onChange) {
             const selN = grabbed.filter(id => sel.has(id)).length;
             const available = list.entries.filter(e => !(Number(e.cooldown) > 0)).length;
             const cooling = list.entries.length - available;
+            // 本轮剩＝轮换队列里还没发到、且此刻不在冷却里的条数（队列全局共享跨聊天）
+            const leftInRound = (list.queue ?? []).filter(id => {
+                const e = list.entries.find(x => x.id === id);
+                return e && !(Number(e.cooldown) > 0);
+            }).length;
             return `
             <div class="pp-gd-ughead">
-                <label class="pp-label">${escapeHtml(list.name)}（已抓 ${payload.length}${pick ? ` · 勾上 ${selN}` : ' · 全部发送'} · 可用 ${available} 条${cooling ? ` · ${cooling} 条冷却中` : ''}）</label>
-                <span class="menu_button" data-kbregrab="${escapeHtml(list.id)}" title="这张清单整把重抓：丢弃当前抓到的，重新随机抓一批（「全部采用」下新一把照旧整把发送；「自选」下新一把默认不勾、要发的自己勾上）">重抓</span>
+                <label class="pp-label" title="轮换制：整张清单洗成一条队按序发，全部条目各发一次之前不重复，发完一轮自动重洗开新一轮（新一轮可与上一轮重复）。本轮剩＝这条队里还没发到的条数（含冷却中等着的；轮到时在冷却就跳过出本轮，下轮回归）">${escapeHtml(list.name)}（已抓 ${payload.length}${pick ? ` · 勾上 ${selN}` : ' · 全部发送'} · 可用 ${available} 条 · 本轮剩 ${leftInRound}${cooling ? ` · ${cooling} 条冷却中` : ''}）</label>
+                <span class="menu_button" data-kbregrab="${escapeHtml(list.id)}" title="这张清单整把换新：丢弃当前抓到的，按轮换队列发下一批（丢掉的和发过的都算本轮已发，要等下一轮才回来；「全部采用」下新一批照旧整把发送；「自选」下新一批默认不勾、要发的自己勾上）">重抓</span>
             </div>
             ${payload.map(({ listPos, entry }) => {
                 const on = sel.has(entry.id);
@@ -1653,7 +1659,7 @@ function openKbPanel(onChange) {
                 <span class="menu_button" data-kbkick="${escapeHtml(entry.id)}" title="踢掉这条：从这把里移除、不补抓（「自选」下不勾只是不发、行还在；踢＝这条看得都嫌烦，行都不要见）">踢</span>
             </div>`; }).join('') || '<div class="pp-muted">这张清单还没抓到条目（点「重抓」或回「知识库」页签加条目）</div>'}`;
         }).join('') + `
-        <div class="pp-muted" style="margin-top:6px" title="纯随机、无语境过滤（设计定稿）；条数与冷却次数在「设置 → 知识库」">抓取＝每清单纯随机 ${cfg.grabCount} 条，冷却中的条目自动跳过；踢掉不补抓。「全部采用」＝整把发给规划模型让它挑着用；「自选」＝你勾哪条发哪条，一条不勾＝本次不带知识材料。发送的条目进第 2 步确认页细账，确认采用时选用的进冷却（放弃草稿不冷却；「知识库」页点冷却徽章可清零）</div>`;
+        <div class="pp-muted" style="margin-top:6px" title="轮换制随机、无语境过滤（设计定稿）；条数与冷却次数在「设置 → 知识库」">抓取＝每清单按轮换发 ${cfg.grabCount} 条：整张清单洗牌按序发，全部条目各发一次之前不重复，发完一轮自动重洗；冷却中的条目本轮跳过（下轮回归）；重抓＝发下一批，丢掉的要等下一轮；踢掉不补抓。「全部采用」＝整把发给规划模型让它挑着用；「自选」＝你勾哪条发哪条，一条不勾＝本次不带知识材料。发送的条目进第 2 步确认页细账，确认采用时选用的进冷却（放弃草稿不冷却；「知识库」页点冷却徽章可清零）</div>`;
 
         body.querySelectorAll('[data-kbmode]').forEach(el => el.addEventListener('click', () => {
             run.kbMode = el.dataset.kbmode;

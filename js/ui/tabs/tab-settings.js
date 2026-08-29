@@ -156,7 +156,7 @@ export const settingsTab = {
                 <summary title="知识库（自建素材清单，§6.9）的抓取与冷却参数；清单与条目在「知识库」页签管理"><i class="fa-solid fa-lightbulb"></i> 知识库</summary>
                 <div class="pp-grid2">
                     <div>
-                        <label class="pp-label" title="剧情指导页第 1 步「知识库抓取」时，每张勾选的清单各随机抓多少条（纯随机、不按语境过滤；冷却中的条目自动跳过；可用不足时有多少抓多少）">每清单抓取条数</label>
+                        <label class="pp-label" title="剧情指导页第 1 步「知识库抓取」时，每张勾选的清单各发多少条（轮换制：整张清单洗牌按序发，全部条目各发一次之前不重复、发完一轮自动重洗；不按语境过滤；冷却中的条目本轮跳过；一轮剩余不足时有多少发多少）">每清单抓取条数</label>
                         <input id="pp_set_kb_grab" class="text_pole textarea_compact" type="number" min="1" max="20" />
                     </div>
                     <div>
