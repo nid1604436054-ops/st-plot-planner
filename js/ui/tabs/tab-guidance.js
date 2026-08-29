@@ -514,6 +514,84 @@ let analyzeBusy = false;
 let streamText = '';
 let streamStage = '';
 
+// 运行状态条（2026-08-31 第八轮真机反馈：分析途中没有中断键、看不到运行状态/用时/token/
+// 模型名，报错只有一闪而过的 toast 不留页）。runMeta 随每次分析/检查重置；报错与中断
+// 停在运行页上出横幅（去路：再试一次 / 回第 1 步），不再自动跳走
+let runCtl = null;      // 中断闸：AbortController，signal 一路传到 fetch；切聊天也 abort（白跑的计费省下来）
+let runTicker = null;   // 秒表 interval（0.5s 刷新用时与思考计数）
+let runMeta = null;     // { kind:'analysis'|'review', revise, model, thinkingOff, startAt, endAt, state:'running'|'done'|'error'|'aborted', usage, error, thinkChars }
+
+function startRunMeta(kind, { revise = false } = {}) {
+    runMeta = {
+        kind, revise,
+        model: settings.api.model || '（未配置模型）',
+        thinkingOff: settings.api.thinkingOff === true,
+        startAt: Date.now(), endAt: 0,
+        state: 'running', usage: null, error: '', thinkChars: 0,
+    };
+    if (runTicker) clearInterval(runTicker);
+    runTicker = setInterval(() => updateRunBar(analyzeToken), 500);
+}
+
+function stopRunTicker() {
+    if (runTicker) { clearInterval(runTicker); runTicker = null; }
+}
+
+function runDurText() {
+    if (!runMeta) return '—';
+    const ms = (runMeta.endAt || Date.now()) - runMeta.startAt;
+    return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
+}
+
+function usageText(u) {
+    if (!u) return '';
+    if (u.promptTokens || u.completionTokens) return `输入 ${Number(u.promptTokens || 0).toLocaleString()} · 输出 ${Number(u.completionTokens || 0).toLocaleString()} tokens（实报）`;
+    return u.streamNoUsage ? '无实报 token（流式未回传 usage）' : '';
+}
+
+// 运行条实时刷新（用时 + 思考计数）；token 实报只在调用结束才知道，结束后由横幅/结果页展示
+function updateRunBar(token) {
+    if (token !== analyzeToken) return;
+    const m = runMeta;
+    if (!m || m.state !== 'running') return;
+    const tEl = document.getElementById('pp_gd_run_time');
+    if (tEl) tEl.textContent = `已用时 ${Math.round((Date.now() - m.startAt) / 1000)}s`;
+    const kEl = document.getElementById('pp_gd_run_tokens');
+    if (kEl) kEl.textContent = m.thinkChars
+        ? (m.thinkingOff ? `⚠ 思考 ${m.thinkChars} 字——「关闭思考」没被这个端点执行，不对劲可点「中断」` : `思考 ${m.thinkChars} 字`)
+        : '';
+}
+
+// 报错/中断横幅（留在运行页上，代替旧版一闪而过的 toast 与自动跳页）
+function renderRunBanner(container) {
+    const el = document.getElementById('pp_gd_run_banner');
+    if (!el || !runMeta || runMeta.state === 'running') return;
+    const m = runMeta;
+    const bill = usageText(m.usage);
+    const retryLabel = m.kind === 'review' ? '重新检查' : (m.revise ? '按意见重新生成' : '再试一次');
+    const backLabel = m.kind === 'review' ? '回剧情页' : '回第 1 步';
+    const head = m.state === 'aborted'
+        ? `<b>已中断</b><span class="pp-muted">用时 ${runDurText()}${bill ? ` · ${bill}` : ''}——半途输出留在上面；中断前已开始/完成的调用与已生成的部分，服务商照常计费</span>`
+        : `<b>出错了</b><span class="pp-muted">用时 ${runDurText()}${bill ? ` · ${bill}` : ''}——报错原文在下面，半途输出留在上面</span>
+           <pre class="pp-gd-errtext">${escapeHtml(m.error || '（无报错信息）')}</pre>`;
+    el.innerHTML = `
+    <div class="pp-gd-banner${m.state === 'error' ? ' pp-gd-banner-err' : ''}">
+        ${head}
+        <div class="pp-btn-row">
+            <span class="menu_button" id="pp_gd_run_retry">${retryLabel}</span>
+            <span class="menu_button" id="pp_gd_run_back">${backLabel}</span>
+        </div>
+    </div>`;
+    el.querySelector('#pp_gd_run_retry').addEventListener('click', () => {
+        if (m.kind === 'review') reviewStory(container);
+        else startAnalyze(container, { revise: m.revise });
+    });
+    el.querySelector('#pp_gd_run_back').addEventListener('click', () => {
+        if (m.kind === 'review') { step = ''; renderMain(container); }
+        else gotoStep(container, 'collect');
+    });
+}
+
 function updateStreamView(token) {
     if (token !== analyzeToken) return;
     const outEl = document.getElementById('pp_gd_run_stream');
@@ -552,6 +630,9 @@ export function resetGuidance() {
     step = '';
     closeViewer();   // 开着的悬浮查看器（两个工具面板/提示词预览）一并关掉，不带到新聊天
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
+    runCtl?.abort();   // 在途调用一并掐断：回调已被 token 作废，让它跑完只是白花一次计费（第八轮）
+    stopRunTicker();
+    runMeta = null;
     Object.assign(run, {
         note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbKick: [], kbSentIds: [], kbListIds: null, lorePicks: [], result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
         memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
@@ -733,32 +814,36 @@ function renderStepPage(container, main) {
     if (step === 'collect') return renderCollect(container, main);
     if (step === 'ready') return renderReady(container, main);
 
-    if (step === 'running') {
-        // 分析实时输出页：不占跳转条一格（2026-08-26 三步化）——开始分析自动进入、
-        // 分析在途点②回来、完账自动跳③结果；标题不带步骤号，免得与新③结果撞号
+    if (step === 'running' || step === 'reviewing') {
+        // 分析/检查实时输出页（running 不占跳转条一格，2026-08-26 三步化；开始分析自动进入、
+        // 分析在途点②回来、完账自动跳③；标题不带步骤号，免得与新③结果撞号）。
+        // 运行状态条（第八轮）：模型名 · 用时（秒表）· 思考计数（「关闭思考」是否被执行的实况）
+        // · 中断键；报错/中断出横幅留在本页，不再自动跳走
+        const title = step === 'running' ? '分析中' : '检查当前剧情';
         main.innerHTML = `
         <div class="pp-section">
-            <div class="pp-gd-stephead"><b>分析中</b><span class="pp-muted" id="pp_gd_run_stage"></span></div>
+            <div class="pp-gd-stephead"><b>${title}</b><span class="pp-muted" id="pp_gd_run_stage"></span></div>
+            <div class="pp-gd-runbar">
+                <span class="pp-muted" title="本次分析/检查用的模型（「设置」页的大模型连接）">模型 ${escapeHtml(runMeta?.model ?? '')}</span>
+                <span class="pp-muted" id="pp_gd_run_time"></span>
+                <span class="pp-muted" id="pp_gd_run_tokens"></span>
+                <span class="menu_button" id="pp_gd_run_abort" title="中断本次调用：页面停留在半途输出上（报「已中断」横幅，可再试一次）；中断前已开始/完成的调用与已生成的部分，服务商照常计费"><i class="fa-solid fa-stop"></i> 中断</span>
+            </div>
+            <div id="pp_gd_run_banner"></div>
             <pre id="pp_gd_run_stream" class="pp-gd-stream pp-muted">等待模型输出……</pre>
         </div>`;
+        main.querySelector('#pp_gd_run_abort').addEventListener('click', () => runCtl?.abort());
         updateStreamView(analyzeToken);
+        updateRunBar(analyzeToken);
+        renderRunBanner(container);
         return;
     }
     if (step === 'result') return renderResult(container, main);
 
-    if (step === 'reviewing') {
-        main.innerHTML = `
-        <div class="pp-section">
-            <div class="pp-gd-stephead"><b>检查当前剧情</b><span class="pp-muted" id="pp_gd_run_stage"></span></div>
-            <pre id="pp_gd_run_stream" class="pp-gd-stream pp-muted">等待模型输出……</pre>
-        </div>`;
-        updateStreamView(analyzeToken);
-        return;
-    }
     if (step === 'report' && report) {
         main.innerHTML = `
         <div class="pp-section">
-            <b>检查报告</b>
+            <b>检查报告</b>${runMeta?.state === 'done' && runMeta.kind === 'review' ? `<span class="pp-muted">模型 ${escapeHtml(runMeta.model)} · 用时 ${runDurText()} · ${usageText(runMeta.usage) || '无实报 token'}</span>` : ''}
             ${reportCardHtml(report)}
             <div class="pp-btn-row">
                 <span id="pp_gd_rp_again" class="menu_button">重新检查</span>
@@ -1641,6 +1726,11 @@ function openKbPanel(onChange) {
     const body = openViewer('知识库抓取').querySelector('.pp-viewer-body');
     const cfg = knowledgeCfg();
     const kicks = () => new Set(run.kbKick ?? []);
+    // 清单折叠态（第八轮真机反馈：全量清单整表摊开太长）：显式点过「展开/收起」的存这里，
+    // 没点过的按投喂方式给默认——抽样清单默认展开（一把几条，直接勾）、全量清单默认折叠
+    // （整表本来就要发，不用逐条过目；要踢谁再展开）；随面板关闭重置回默认
+    const foldState = new Map();
+    const isFolded = list => (foldState.has(list.id) ? foldState.get(list.id) : list.feed === 'full');
 
     const listIdsOf = list => new Set(list.entries.map(e => e.id));
     const grabbedOf = list => {
@@ -1688,11 +1778,13 @@ function openKbPanel(onChange) {
                 const chars = sending.reduce((n, e) => n + entryText(list, e).length, 0);
                 const cooling = list.entries.filter(e => Number(e.cooldown) > 0).length;
                 const kicked = list.entries.filter(e => kickSet.has(e.id) && !(Number(e.cooldown) > 0));
+                const folded = isFolded(list);
                 return `
             <div class="pp-gd-ughead">
                 <label class="pp-label" title="全量清单（投喂方式在「知识库」页签的清单展开区改）：整表可用条目全部随分析发给规划模型、它从中挑——挑中的进冷却（确认采用时结算）。不抓取不重抓、不占轮换队列；踢掉的本次不发（点「还原」放回来）；冷却中的条目自动跳过">${escapeHtml(list.name)}（全量 ${sending.length} 条 · 约 ${chars} 字${cooling ? ` · ${cooling} 条冷却中跳过` : ''}${kicked.length ? ` · 已踢 ${kicked.length}` : ''}）</label>
+                <span class="menu_button" data-kbfold="${escapeHtml(list.id)}" title="全量清单默认折叠——整表随分析发送、不用逐条过目；要踢谁再展开看"><i class="fa-solid fa-chevron-${folded ? 'right' : 'down'}"></i> ${folded ? '展开' : '收起'}</span>
             </div>
-            ${payloadFromIds(sending.map(e => e.id)).filter(p => p.list.id === list.id).map(({ listPos, entry }) => `
+            ${folded ? '' : `${payloadFromIds(sending.map(e => e.id)).filter(p => p.list.id === list.id).map(({ listPos, entry }) => `
             <div class="pp-kb-erow">
                 <span class="pp-muted pp-kb-ecode">${listPos}-${escapeHtml(entry.code)}</span>
                 <span class="pp-kb-ebody" title="${escapeHtml(entryText(list, entry))}">${escapeHtml(entryText(list, entry) || '（空条目）')}</span>
@@ -1707,7 +1799,7 @@ function openKbPanel(onChange) {
                 <span class="pp-muted pp-kb-ecode">${escapeHtml(entry.code)}</span>
                 <span class="pp-kb-ebody pp-muted" title="${escapeHtml(entryText(list, entry))}">${escapeHtml(entryText(list, entry) || '（空条目）')}</span>
                 <span class="menu_button" data-kbunkick="${escapeHtml(entry.id)}" title="放回本次发送集">还原</span>
-            </div>`).join('')}` : ''}`;
+            </div>`).join('')}` : ''}`}`;
             }
             // —— 抽样清单：原轮换抓取流程 ——
             const grabbed = grabbedOf(list);
@@ -1720,12 +1812,14 @@ function openKbPanel(onChange) {
                 const e = list.entries.find(x => x.id === id);
                 return e && !(Number(e.cooldown) > 0);
             }).length;
+            const folded = isFolded(list);
             return `
             <div class="pp-gd-ughead">
                 <label class="pp-label" title="抽样清单 · 轮换制：整张清单洗成一条队按序发，全部条目各发一次之前不重复，发完一轮自动重洗开新一轮（新一轮可与上一轮重复）。本轮剩＝这条队里还没发到的条数（含冷却中等着的；轮到时在冷却就跳过出本轮，下轮回归）">${escapeHtml(list.name)}（已抓 ${payload.length}${pick ? ` · 勾上 ${selN}` : ' · 全部发送'} · 可用 ${available} 条 · 本轮剩 ${leftInRound}${cooling ? ` · ${cooling} 条冷却中` : ''}）</label>
                 <span class="menu_button" data-kbregrab="${escapeHtml(list.id)}" title="这张清单整把换新：丢弃当前抓到的，按轮换队列发下一批（丢掉的和发过的都算本轮已发，要等下一轮才回来；「全部采用」下新一批照旧整把发送；「自选」下新一批默认不勾、要发的自己勾上）">重抓</span>
+                <span class="menu_button" data-kbfold="${escapeHtml(list.id)}" title="收起/展开这张清单抓到的条目（抽样清单默认展开）"><i class="fa-solid fa-chevron-${folded ? 'right' : 'down'}"></i> ${folded ? '展开' : '收起'}</span>
             </div>
-            ${payload.map(({ listPos, entry }) => {
+            ${folded ? '' : `${payload.map(({ listPos, entry }) => {
                 const on = sel.has(entry.id);
                 return `
             <div class="pp-kb-erow${pick && !on ? ' pp-kb-unsel' : ''}">
@@ -1733,7 +1827,7 @@ function openKbPanel(onChange) {
                 <span class="pp-muted pp-kb-ecode">${listPos}-${escapeHtml(entry.code)}</span>
                 <span class="pp-kb-ebody" title="${escapeHtml(entryText(list, entry))}">${escapeHtml(entryText(list, entry) || '（空条目）')}</span>
                 <span class="menu_button" data-kbkick="${escapeHtml(entry.id)}" title="踢掉这条：从这把里移除、不补抓（「自选」下不勾只是不发、行还在；踢＝这条看得都嫌烦，行都不要见）">踢</span>
-            </div>`; }).join('') || '<div class="pp-muted">这张清单还没抓到条目（点「重抓」或回「知识库」页签加条目）</div>'}`;
+            </div>`; }).join('') || '<div class="pp-muted">这张清单还没抓到条目（点「重抓」或回「知识库」页签加条目）</div>'}`}`;
         }).join('') + `
         <div class="pp-muted" style="margin-top:6px" title="清单的投喂方式（抽样/全量）在「知识库」页签的清单展开区改；条数与冷却次数在「设置 → 知识库」">抽样清单＝每张按轮换发 ${cfg.grabCount} 条（整张清单洗牌按序发，一轮内不重复、发完自动重洗；冷却中的本轮跳过；重抓＝发下一批；踢掉不补抓）——「全部采用」整把发给规划模型让它挑、「自选」你勾哪条发哪条。全量清单＝整表可用条目全部随行（模型从中挑，挑中的确认采用时进冷却；冷却中的自动跳过；踢＝本次不发、可还原）。发送的条目进第 2 步确认页细账，确认采用时选用的进冷却（放弃草稿不冷却；「知识库」页点冷却徽章可清零）</div>`;
 
@@ -1776,6 +1870,13 @@ function openKbPanel(onChange) {
             render();
             onChange();
         }));
+        // 清单折叠（第八轮）：只动显示不动发送集，不用留底
+        body.querySelectorAll('[data-kbfold]').forEach(btn => btn.addEventListener('click', () => {
+            const list = knowledgeLists().find(l => l.id === btn.dataset.kbfold);
+            if (!list) return;
+            foldState.set(list.id, !isFolded(list));
+            render();
+        }));
     };
 
     // 首开自动抓：勾选中、kbIds 里还没有它条目的**抽样**清单各抓一把（重开面板不重抓已抓的；
@@ -1807,6 +1908,10 @@ function openLorePanel(onChange) {
     const body = openViewer('世界书自选').querySelector('.pp-viewer-body');
     let query = '';
     const selSet = () => new Set(run.lorePicks ?? []);
+    // 按书折叠（第八轮真机反馈：书一多整页条目摊太长）——默认全部收起，要勾哪本点「展开」；
+    // 搜着检索词时命中的书自动展开（找条目方便），显式点过「收起」的仍尊重
+    const foldState = new Map();
+    const isFolded = (book, searching) => (foldState.has(book.id) ? foldState.get(book.id) : !searching);
 
     const render = () => {
         const books = settings.lorebooks ?? [];
@@ -1816,6 +1921,7 @@ function openLorePanel(onChange) {
             return;
         }
         const q = query.trim().toLowerCase();
+        const searching = Boolean(q);
         const groupHtml = books.map(book => {
             const entries = (book.entries ?? []).filter(e => !q
                 || String(e.comment ?? '').toLowerCase().includes(q)
@@ -1824,24 +1930,25 @@ function openLorePanel(onChange) {
             if (!entries.length) return '';
             const onN = entries.filter(e => sel.has(`${book.id}:${e.uid}`)).length;
             const allOn = entries.length > 0 && onN === entries.length;
+            const folded = isFolded(book, searching);
             return `
         <div class="pp-gd-ughead">
             <label class="pp-label" title="整本书一起勾/一起清（已勾＝全勾；再点＝全清）——性知识这类「整本书照着写」的书一键全选"><input type="checkbox" data-lbook="${escapeHtml(book.id)}" ${allOn ? 'checked' : ''} /> ${escapeHtml(book.name)}（已勾 ${onN}/${entries.length}）</label>
+            <span class="menu_button" data-lfold="${escapeHtml(book.id)}" title="${folded ? '展开' : '收起'}这本书的条目（默认收起，要勾选时再展开）"><i class="fa-solid fa-chevron-${folded ? 'right' : 'down'}"></i> ${folded ? '展开' : '收起'}</span>
         </div>
-        ${entries.map(e => {
+        ${folded ? '' : entries.map(e => {
             const key = `${book.id}:${e.uid}`;
             const on = sel.has(key);
-            const preview = String(e.content ?? '').replace(/\s+/g, ' ').slice(0, 80);
             return `
         <div class="pp-kb-erow${on ? '' : ' pp-kb-unsel'}">
             <label title="勾上＝这条的原文整条随分析进材料（照着写，不是选着用）"><input type="checkbox" data-lore="${escapeHtml(key)}" ${on ? 'checked' : ''} /></label>
-            <span class="pp-kb-ebody" title="${escapeHtml(String(e.content ?? ''))}">${escapeHtml(String(e.comment ?? `条目 ${e.uid + 1}`))} —— ${escapeHtml(preview)}${String(e.content ?? '').length > 80 ? '…' : ''}</span>
+            <span class="pp-kb-ebody" title="${escapeHtml(String(e.content ?? ''))}">${escapeHtml(String(e.comment ?? `条目 ${e.uid + 1}`))}</span>
         </div>`; }).join('')}`;
         }).join('');
         body.innerHTML = `
-        <input type="text" class="text_pole textarea_compact" id="pp_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动勾选…" value="${escapeHtml(query)}" style="width:100%" />
+        <input type="text" class="text_pole textarea_compact" id="pp_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动勾选；检索时命中的书自动展开…" value="${escapeHtml(query)}" style="width:100%" />
         ${groupHtml || '<div class="pp-muted">没有命中检索词的条目，清空检索词看全部</div>'}
-        <div class="pp-muted" style="margin-top:6px" title="与「知识库抓取」的分工：知识库清单是候选素材（模型挑着用、挑中的进冷却、礼物这类「选着用」的走那边）；自选世界书是照着写的材料（原文整条随行、每次都在、无冷却）。三档位（停用/关键词/常驻）与对话书单管的是自动检索那条路，与本面板无关">勾上＝整条原文随分析进材料（照着写）。不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与「检索命中」自动去重（这边优先，同一条不会进材料两次）。勾选随对话记忆保存（本对话下次规划回来还在），无冷却</div>`;
+        <div class="pp-muted" style="margin-top:6px" title="与「知识库抓取」的分工：知识库清单是候选素材（模型挑着用、挑中的进冷却、礼物这类「选着用」的走那边）；自选世界书是照着写的材料（原文整条随行、每次都在、无冷却）。三档位（停用/关键词/常驻）与对话书单管的是自动检索那条路，与本面板无关">勾上＝整条原文随分析进材料（照着写）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与「检索命中」自动去重（这边优先，同一条不会进材料两次）。勾选随对话记忆保存（本对话下次规划回来还在），无冷却</div>`;
 
         // 搜索框就地重画后焦点与光标回位（每轮 render 重新接线，输入不掉链）
         const qEl = body.querySelector('#pp_lore_q');
@@ -1873,6 +1980,13 @@ function openLorePanel(onChange) {
             }
             apply(s);
         }));
+        // 书的展开/收起（第八轮）：只动显示不动勾选
+        body.querySelectorAll('[data-lfold]').forEach(btn => btn.addEventListener('click', () => {
+            const book = (settings.lorebooks ?? []).find(b => b.id === btn.dataset.lfold);
+            if (!book) return;
+            foldState.set(book.id, !isFolded(book, searching));
+            render();
+        }));
     };
     render();
     onChange();
@@ -1889,13 +2003,15 @@ function historySummaries() {
 
 async function startAnalyze(container, { revise = false } = {}) {
     if (analyzeBusy) {
-        toastr.warning('上一轮分析还在进行中，等它完成（可先去别的步骤看看，完成会提示）');
+        toastr.warning('上一轮分析还在进行中，等它完成（可先去别的步骤看看，完成会提示；急停去「分析中」页点「中断」）');
         return;
     }
     const token = ++analyzeToken;
     analyzeBusy = true;
     streamText = '';
     streamStage = '';
+    runCtl = new AbortController();
+    startRunMeta('analysis', { revise });
     step = 'running';
     const activePlan = activeStory()?.planText ?? '';
     run.hadActive = Boolean(activePlan.trim());
@@ -1924,6 +2040,8 @@ async function startAnalyze(container, { revise = false } = {}) {
             storageItems: wizardStorageItems(),
             onDelta: t => { streamText = t; updateStreamView(token); },
             onStage: s => { streamStage = s; updateStreamView(token); },
+            onReasoning: n => { if (runMeta) { runMeta.thinkChars = n; updateRunBar(token); } },
+            signal: runCtl.signal,   // 运行页「中断」键（第八轮）：一路传到 fetch
             // 打回重写不吃预跑缓存：修改意见可能把检索方向带偏，重写一律重新判断
             researchPrefetch: revise ? null : run.research,
         });
@@ -1932,6 +2050,9 @@ async function startAnalyze(container, { revise = false } = {}) {
         run.raw = data.raw;
         run.hits = data.hits;
         run.planText = formatPlan(data.result.plan);
+        runMeta.state = 'done';
+        runMeta.endAt = Date.now();
+        runMeta.usage = data.usage;
         // 知识库用后账（§6.9，2026-08-31 真机第五轮改定）：分析成功只快照「本次发了哪些条目」，
         // 冷却结算挪到「确认采用/转为隐身注入」（settleKbCharge）——草稿放弃/重写不算用过，不碰冷却
         run.kbSentIds = kbPayload.map(p => p.entry.id);
@@ -1945,15 +2066,23 @@ async function startAnalyze(container, { revise = false } = {}) {
         }
     } catch (err) {
         if (token !== analyzeToken) return;
-        toastr.error(String(err.message ?? err));
-        // 打回重写失败回到结果页（旧结果还在）；首轮失败回到第 1 步改材料；
-        // 用户已跳去别的步骤则只报错，不动他所在的页面
-        if (step === 'running') {
-            step = revise ? 'result' : 'collect';
-            renderMain(container);
+        runMeta.endAt = Date.now();
+        runMeta.usage = err?.usage ?? runMeta.usage;
+        if (err?.name === 'AbortError') {
+            // 中断（运行页「中断」键或切聊天）：留在运行页出「已中断」横幅——半途输出还在，
+            // 「再试一次」原班材料重来；修订重试的旧结果仍在第 3 步没动
+            runMeta.state = 'aborted';
+        } else {
+            runMeta.state = 'error';
+            runMeta.error = String(err.message ?? err);
+            toastr.error(String(err.message ?? err));
         }
+        // 报错/中断不再自动跳页（第八轮「报错状态不留存」）：横幅留在运行页交代情况与去路；
+        // 用户已跳去别的步骤则只报错（toast），不动他所在的页面
+        if (step === 'running') renderMain(container);
     } finally {
         analyzeBusy = false;
+        stopRunTicker();
     }
 }
 
@@ -2018,7 +2147,7 @@ function renderResult(container, main) {
 
     main.innerHTML = `
     <div class="pp-section">
-        <div class="pp-gd-stephead"><b>第 3 步 · 人工二检</b><span class="pp-muted">世界书命中 ${run.hits} 条</span></div>
+        <div class="pp-gd-stephead"><b>第 3 步 · 人工二检</b><span class="pp-muted">世界书命中 ${run.hits} 条</span>${runMeta?.state === 'done' && runMeta.kind === 'analysis' ? `<span class="pp-muted" title="本次分析用的模型、用时与 token 实报（联网判断/检索的调用也计在内）">模型 ${escapeHtml(runMeta.model)} · 用时 ${runDurText()} · ${usageText(runMeta.usage) || '无实报 token'}</span>` : ''}</div>
         ${checkRow('OOC', ooc?.found && items.length
             ? items.map(it => `<div class="pp-hit"><b>${escapeHtml(it.aspect ?? '')} · ${escapeHtml(it.severity ?? '')}</b><div>${escapeHtml(it.evidence ?? '')}</div><div class="pp-muted">建议：${escapeHtml(it.fix ?? '')}</div></div>`).join('')
             : '<span class="pp-muted">未发现明显 OOC</span>')}
@@ -2164,13 +2293,15 @@ async function reviewStory(container) {
     if (!active) return;
     // 与 startAnalyze 同一道并发闸：检查与分析共用流式页与 token，混跑会静默作废一次计费调用
     if (analyzeBusy) {
-        toastr.warning('上一轮分析/检查还在进行中，等它完成');
+        toastr.warning('上一轮分析/检查还在进行中，等它完成（急停去检查页点「中断」）');
         return;
     }
     analyzeBusy = true;
     const token = ++analyzeToken;
     streamText = '';
     streamStage = '';
+    runCtl = new AbortController();
+    startRunMeta('review');
     step = 'reviewing';
     renderMain(container);
     try {
@@ -2184,8 +2315,13 @@ async function reviewStory(container) {
             memoryRecent: picks.memRecent,
             onDelta: t => { streamText = t; updateStreamView(token); },
             onStage: s => { streamStage = s; updateStreamView(token); },
+            onReasoning: n => { if (runMeta) { runMeta.thinkChars = n; updateRunBar(token); } },
+            signal: runCtl.signal,   // 运行页「中断」键（第八轮）
         });
         if (token !== analyzeToken) return;   // 期间切了聊天：报告丢弃
+        runMeta.state = 'done';
+        runMeta.endAt = Date.now();
+        runMeta.usage = data.usage;
         attachReport(active.id, data.result);
         report = data.result;
         renderStoryBar(container);   // 刷新「最近检查」时间（报告本体已挂到剧情条目上）
@@ -2196,13 +2332,20 @@ async function reviewStory(container) {
         }
     } catch (err) {
         if (token !== analyzeToken) return;
-        toastr.error(String(err.message ?? err));
-        if (step === 'reviewing') {
-            step = '';
-            renderMain(container);
+        runMeta.endAt = Date.now();
+        runMeta.usage = err?.usage ?? runMeta.usage;
+        if (err?.name === 'AbortError') {
+            runMeta.state = 'aborted';
+        } else {
+            runMeta.state = 'error';
+            runMeta.error = String(err.message ?? err);
+            toastr.error(String(err.message ?? err));
         }
+        // 报错/中断留页出横幅（第八轮），不再静默回空闲页
+        if (step === 'reviewing') renderMain(container);
     } finally {
         analyzeBusy = false;
+        stopRunTicker();
     }
 }
 

@@ -74,7 +74,10 @@ export const settingsTab = {
             <label class="pp-label">API 地址（含 /v1）</label>
             <input id="pp_set_base" class="text_pole textarea_compact" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" />
             <label class="pp-label">API 密钥</label>
-            <input id="pp_set_key" class="text_pole textarea_compact" type="password" placeholder="sk-..." autocomplete="off" />
+            <div class="pp-keyrow">
+                <input id="pp_set_key" class="text_pole textarea_compact" type="password" placeholder="sk-..." autocomplete="off" />
+                <span class="menu_button" data-keyeye="pp_set_key" title="点一下显示密钥原文（核对粘贴有没有错），再点隐藏"><i class="fa-solid fa-eye"></i></span>
+            </div>
             <label class="pp-label">模型</label>
             <div class="pp-model-row">
                 <select id="pp_set_model" class="text_pole"></select>
@@ -92,7 +95,10 @@ export const settingsTab = {
             <details class="pp-fold" data-secfold="search" ${secFolds.search ? 'open' : ''}>
                 <summary><i class="fa-solid fa-globe"></i> 联网搜索（Tavily）</summary>
                 <label class="pp-label">搜索 API 密钥（tvly- 开头，tavily.com 注册）</label>
-            <input id="pp_set_skey" class="text_pole textarea_compact" type="password" placeholder="tvly-..." autocomplete="off" />
+            <div class="pp-keyrow">
+                <input id="pp_set_skey" class="text_pole textarea_compact" type="password" placeholder="tvly-..." autocomplete="off" />
+                <span class="menu_button" data-keyeye="pp_set_skey" title="点一下显示密钥原文（核对粘贴有没有错），再点隐藏"><i class="fa-solid fa-eye"></i></span>
+            </div>
             <label class="pp-label" title="单次搜索带回并塞给模型的结果条数">每次带回条数</label>
             <input id="pp_set_smax" class="text_pole textarea_compact" type="number" min="1" max="10" />
             <div class="pp-grid2">
@@ -217,6 +223,16 @@ export const settingsTab = {
             el.addEventListener('change', () => { set(el.value); save(); });
         };
         const bindNum = (id, get, set) => bind(id, () => get(), v => set(Number(v) || 0));
+
+        // 密钥小眼睛（第八轮）：显示/隐藏只切输入框 type，不动存的值
+        container.querySelectorAll('[data-keyeye]').forEach(btn => btn.addEventListener('click', () => {
+            const inp = container.querySelector(`#${btn.dataset.keyeye}`);
+            if (!inp) return;
+            const show = inp.type === 'password';
+            inp.type = show ? 'text' : 'password';
+            const icon = btn.querySelector('i');
+            if (icon) icon.className = `fa-solid ${show ? 'fa-eye-slash' : 'fa-eye'}`;
+        }));
 
         bind('#pp_set_base', () => settings.api.baseUrl, v => settings.api.baseUrl = String(v).trim());
         bind('#pp_set_key', () => settings.api.apiKey, v => settings.api.apiKey = String(v).trim());

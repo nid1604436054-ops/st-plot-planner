@@ -35,6 +35,10 @@ let draft = null;   // { listId, providerId, entries: [{ values, keep }] }
 let rawText = '';
 // 上次结构化导入用的供应商（会话内记住，跨刷新不存）
 let lastProviderId = '';
+// 新建清单表单折叠态（第八轮真机反馈：表单常驻太占地方）——默认收起，点「新建清单」才展开；
+// 投喂方式的选择随会话记住（收起再展开不用重选），创建成功后自动收起（新建的清单已展开导入区）
+let newListOpen = false;
+let newFeed = 'sample';
 // 留底层单槽（跟着最近一次导入走）：展开状态/草稿/原文一起存 settings.knowledge.ui
 let uiRestored = false;
 const persistUi = () => {
@@ -199,13 +203,18 @@ export const knowledgeTab = {
         </div>
         <div class="pp-section">
             <div class="pp-kb-toolrow">
-                <input type="text" id="pp_kb_newname" class="text_pole textarea_compact" placeholder="新清单名，如：约会地点" style="flex:1 1 140px" />
-                <input type="text" id="pp_kb_newfields" class="text_pole textarea_compact" placeholder="表头字段，顿号分隔，如：名字、说明、标签" style="flex:2 1 260px" title="每张清单自定义表头（字段名任意定）——新建后定死、永不迁移；模型结构化导入时照它填，抓取按条抓" />
-                <span class="pp-seg" id="pp_kb_newfeed" title="投喂方式（建好后随时在清单展开区改）：抽样＝规划时按轮换抓一小把让模型挑；全量＝整表条目全部发给模型挑、挑中的进冷却——礼物这类清单用全量">
-                    <span class="pp-seg-opt on" data-newfeed="sample">抽样</span>
-                    <span class="pp-seg-opt" data-newfeed="full">全量</span>
-                </span>
-                <span class="menu_button" id="pp_kb_newcreate" title="建一张空清单，随后在展开区的「导入」里粘贴草稿结构化，或手动添加条目"><i class="fa-solid fa-plus"></i> 新建清单</span>
+                <span class="menu_button" id="pp_kb_newtoggle" title="新建一张清单：名字 + 自定义表头 + 投喂方式（建好后随时在清单展开区改投喂方式；表头新建后定死、永不迁移）"><i class="fa-solid fa-plus"></i> 新建清单 <i class="fa-solid fa-chevron-${newListOpen ? 'down' : 'right'}"></i></span>
+            </div>
+            <div id="pp_kb_newwrap" ${newListOpen ? '' : 'hidden'}>
+                <div class="pp-kb-toolrow">
+                    <input type="text" id="pp_kb_newname" class="text_pole textarea_compact" placeholder="新清单名，如：约会地点" style="flex:1 1 140px" />
+                    <input type="text" id="pp_kb_newfields" class="text_pole textarea_compact" placeholder="表头字段，顿号分隔，如：名字、说明、标签" style="flex:2 1 260px" title="每张清单自定义表头（字段名任意定）——新建后定死、永不迁移；模型结构化导入时照它填，抓取按条抓" />
+                    <span class="pp-seg" id="pp_kb_newfeed" title="投喂方式（建好后随时在清单展开区改）：抽样＝规划时按轮换抓一小把让模型挑；全量＝整表条目全部发给模型挑、挑中的进冷却——礼物这类清单用全量">
+                        <span class="pp-seg-opt${newFeed === 'sample' ? ' on' : ''}" data-newfeed="sample">抽样</span>
+                        <span class="pp-seg-opt${newFeed === 'full' ? ' on' : ''}" data-newfeed="full">全量</span>
+                    </span>
+                    <span class="menu_button" id="pp_kb_newcreate" title="建一张空清单，随后在展开区的「导入」里粘贴草稿结构化，或手动添加条目">创建</span>
+                </div>
             </div>
             ${lists.map(list => listRowHtml(list) + (viewList?.id === list.id ? panelHtml : '')).join('')}
         </div>`;
@@ -271,8 +280,12 @@ export const knowledgeTab = {
             if (e.key === 'Escape') { renamingId = null; rerender(); }
         });
 
-        // 新建清单：名字 + 表头（顿号/逗号分隔）+ 投喂方式（第七轮：抽样/全量二选一，建好可改）
-        let newFeed = 'sample';
+        // 新建清单（第八轮折叠）：点「新建清单」才展开表单；名字 + 表头（顿号/逗号分隔）+
+        // 投喂方式（第七轮：抽样/全量二选一，建好可改；选择随会话记住，收起再展不用重选）
+        container.querySelector('#pp_kb_newtoggle').addEventListener('click', () => {
+            newListOpen = !newListOpen;
+            rerender();
+        });
         const newFeedSeg = container.querySelector('#pp_kb_newfeed');
         newFeedSeg?.querySelectorAll('.pp-seg-opt').forEach(opt => opt.addEventListener('click', () => {
             newFeed = opt.dataset.newfeed;
@@ -285,13 +298,14 @@ export const knowledgeTab = {
                 const list = createList(name, fields, { feed: newFeed });
                 container.querySelector('#pp_kb_newname').value = '';
                 container.querySelector('#pp_kb_newfields').value = '';
+                newListOpen = false;   // 创建成功即收起（新建的清单已自动展开导入区，表单用完了）
                 view = { type: 'import', listId: list.id };   // 新建后直接进导入区
                 query = ''; tagFilter = null; editingEntryId = null;
                 persistUi();
                 rerender();
                 toastr.success(`清单「${list.name}」已建好（${list.feed === 'full' ? '全量' : '抽样'} · 表头：${list.fields.join('、')}）——粘贴草稿开始导入`);
             } catch (err) {
-                toastr.warning(String(err.message ?? err));
+                toastr.warning(String(err.message ?? err));   // 建失败（空名/重名）：表单保持展开改了再建
             }
         });
 

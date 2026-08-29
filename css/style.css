@@ -554,6 +554,53 @@
     margin: 6px 0 0;
 }
 
+/* 运行状态条（第八轮）：模型名 · 用时 · 思考计数 · 中断键，占满一行不换页宽 */
+.pp-gd-runbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    align-items: center;
+    margin: 4px 0 2px;
+    font-size: 0.92em;
+}
+
+/* 报错/中断横幅（第八轮）：留在运行页上交代情况与去路 */
+.pp-gd-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, #3a3a3a);
+    border-left: 3px solid var(--SmartThemeQuoteColor, #8a8a8a);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 6px 0;
+}
+
+.pp-gd-banner-err {
+    border-left-color: #c0392b;
+}
+
+.pp-gd-errtext {
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 160px;
+    overflow-y: auto;
+    margin: 0;
+    font-size: 0.92em;
+}
+
+/* 密钥输入行（第八轮）：输入框 + 显示/隐藏小眼睛 */
+.pp-keyrow {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.pp-keyrow input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
 .pp-mem-cols label {
     display: inline-flex;
     align-items: center;

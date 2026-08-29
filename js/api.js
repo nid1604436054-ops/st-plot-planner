@@ -18,10 +18,19 @@ function requireConfig(conn) {
     }
 }
 
-// 关闭思考参数（设置页「关闭思考」勾上时附带）：GLM 系认 thinking、Qwen 系认 enable_thinking，
-// 一并带上各家只认自己的、陌生的多半忽略；端点对陌生参数直接报 400/422 时由调用处去掉重发一次
+// 关闭思考参数（设置页「关闭思考」勾上时附带）：各家只认自己的、陌生的多半忽略——
+// deepseek/GLM 认 thinking、Qwen 认 enable_thinking、OpenAI 系认 reasoning_effort、
+// vLLM 部署的混合思考模型认 chat_template_kwargs，一并带上。
+// 端点对陌生参数直接报 400/422 时按报错点名的参数**定向去除**重发（见 chatCompletion），
+// 不再一刀全去——一刀全去＝把「关闭思考」一起丢掉、思考静默回来（2026-08-31 第八轮真机
+// 教训：V4-Flash 思考默认开、effort 默认 high，一刀切后一万多输出）
 function thinkingOffParams() {
-    return settings.api.thinkingOff ? { thinking: { type: 'disabled' }, enable_thinking: false } : {};
+    return settings.api.thinkingOff ? {
+        thinking: { type: 'disabled' },
+        enable_thinking: false,
+        reasoning_effort: 'none',
+        chat_template_kwargs: { thinking: false },
+    } : {};
 }
 
 // 取补全的最终文本，兼容三种正文形态：普通字符串 / 分段数组（content:[{type:'text'}]）/
@@ -62,6 +71,8 @@ function pickContent(message, { finishReason = '', completionTokens = null, prom
  * @param {number} [options.maxTokens]    缺省用设置里的值
  * @param {AbortSignal} [options.signal]
  * @param {(fullText:string)=>void} [options.onDelta]  提供时走 SSE 流式，逐步回调累计文本
+ * @param {(reasonChars:number)=>void} [options.onReasoning] 流式收到思考增量时回调累计思考字数
+ *        （正文与思考分开流时才有；「关闭思考」开着却一直涨＝端点没执行关闭参数，界面据此提示）
  * @param {(usage:object)=>void} [options.onUsage]     回传服务商实报 usage：非流式必有；
  *        流式时请求带 stream_options.include_usage、服务商在末包附上才回调（不附就不回调）
  * @param {boolean} [options.skipPresets]  true 时跳过全局预设注入（仅连通性测试用）
@@ -93,12 +104,12 @@ export function withGlobalPresets(messages) {
     return messages.map((m, i) => i === idx ? { ...m, content: `${m.content}\n\n${block}` } : m);
 }
 
-export async function chatCompletion({ messages, temperature, maxTokens, signal, onDelta, onUsage, skipPresets = false, provider } = {}) {
+export async function chatCompletion({ messages, temperature, maxTokens, signal, onDelta, onUsage, onReasoning, skipPresets = false, provider } = {}) {
     const conn = provider ?? settings.api;
     requireConfig(conn);
     const url = `${conn.baseUrl.replace(/\/+$/, '')}/chat/completions`;
     const stream = typeof onDelta === 'function';
-    const sent = skipPresets ? messages : withGlobalPresets(messages);
+    const sent0 = skipPresets ? messages : withGlobalPresets(messages);
 
     const doFetch = extra => fetch(url, {
         method: 'POST',
@@ -108,7 +119,7 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
         },
         body: JSON.stringify({
             model: conn.model,
-            messages: sent,
+            messages: sent0,
             temperature: temperature ?? settings.api.temperature,
             max_tokens: maxTokens ?? settings.api.maxTokens,
             stream,
@@ -118,15 +129,46 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
     });
 
     let res;
+    let lastErrText = '';
     try {
-        // 流式且要对账时，请服务商在末包附 usage（OpenAI 兼容主流家都认；不认的走下面的去参重发）
-        const extra = {
-            ...thinkingOffParams(),
-            ...(stream && typeof onUsage === 'function' ? { stream_options: { include_usage: true } } : {}),
+        // 附加参数两来源：关闭思考全家（设置开关）＋流式对账 stream_options。端点不认时按
+        // 重试梯子走：全量 → 去掉**报错点名**的参数 → 只留最通用的 thinking 一档 → 全去。
+        // 失败的 400/422 请求不产 token，多试两次不花成本；把「只留 thinking」垫在「全去」
+        // 之前＝deepseek/GLM 官方口径优先保住，全去是最后手段（那等于放任思考回来）
+        const streamOpt = stream && typeof onUsage === 'function' ? { stream_options: { include_usage: true } } : {};
+        let attempt = { ...thinkingOffParams(), ...streamOpt };
+        let sent = attempt;
+        // 报错点名参数的判定：长名先占位再查短名——报错文案写 enable_thinking 时，
+        // 其子串 thinking 不能算 thinking 参数也被点了名（点名错人会误删好的参数）
+        const blameKeys = keys => {
+            const found = [];
+            let rest = lastErrText;
+            for (const k of [...keys].sort((a, b) => b.length - a.length)) {
+                if (rest.includes(k)) {
+                    found.push(k);
+                    rest = rest.split(k).join(' ');
+                }
+            }
+            return found;
         };
-        res = await doFetch(extra);
-        if (extra && (res.status === 400 || res.status === 422)) {
-            res = await doFetch({});   // 端点不认这些附加参数（关闭思考/stream_options）：全部去掉重发一次
+        for (let round = 0; ; round++) {
+            sent = attempt;
+            res = await doFetch(sent);
+            if (res.ok || (res.status !== 400 && res.status !== 422) || !Object.keys(sent).length || round >= 2) break;
+            lastErrText = await res.text().catch(() => '');
+            const blamed = blameKeys(Object.keys(sent));
+            if (blamed.length) {
+                attempt = Object.fromEntries(Object.entries(sent).filter(([k]) => !blamed.includes(k)));
+            } else if (settings.api.thinkingOff && sent.thinking
+                && Object.keys(sent).some(k => k !== 'thinking' && k !== 'stream_options')) {
+                attempt = { thinking: { type: 'disabled' }, ...(sent.stream_options ? { stream_options: sent.stream_options } : {}) };
+            } else {
+                attempt = {};   // 最后手段：全部去掉重发（原行为，只在梯子走完仍被拒时才到这）
+            }
+        }
+        if (res.ok && settings.api.thinkingOff
+            && !(sent.thinking || sent.enable_thinking === false || sent.reasoning_effort || sent.chat_template_kwargs)) {
+            toastr.warning('「关闭思考」的参数被这个端点拒绝、已全部去掉后重发——本次模型可能照常思考（运行页的「思考」计数能实时看到，不对劲就点「中断」止损）');
         }
     } catch (err) {
         if (err.name === 'AbortError') throw err;
@@ -135,7 +177,7 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
     }
 
     if (!res.ok) {
-        const body = await res.text().catch(() => '');
+        const body = await res.text().catch(() => '') || lastErrText;
         throw new ApiError(`API 返回 ${res.status}：${body.slice(0, 300)}`, { status: res.status, body });
     }
 
@@ -179,6 +221,7 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
                     onDelta(full);
                 } else if (delta && (delta.reasoning_content || delta.reasoning)) {
                     reasoning += String(delta.reasoning_content ?? delta.reasoning ?? '');
+                    if (typeof onReasoning === 'function') onReasoning(reasoning.length);
                 }
             } catch {
                 // 忽略无法解析的心跳/注释行

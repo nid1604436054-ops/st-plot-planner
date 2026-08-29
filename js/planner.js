@@ -172,7 +172,7 @@ export function buildResearchBrief({ topic = '', userNote = '', eventText = '', 
  * @returns {Promise<{notes:string, searchLogs:string[], reason:string, usage:object}>}
  *          usage 只含判断这一次调用的账单；notes 为空 = 本次未检索
  */
-export async function runWebResearch(research = {}) {
+export async function runWebResearch(research = {}, { signal } = {}) {
     // preJudge 关 = 直查模式：轻量调用换「直接给关键词」提示词、必搜不判（判断关掉的是
     // 「要不要搜」这一问，轻量调用本身省不掉——关键词必须由模型产）
     const direct = settings.search?.preJudge === false;
@@ -184,6 +184,7 @@ export async function runWebResearch(research = {}) {
                 { role: 'system', content: direct ? GATE_DIRECT_PROMPT : GATE_SYSTEM_PROMPT },
                 { role: 'user', content: buildResearchBrief(research) },
             ],
+            signal,
             onUsage: u => { gateUsage.promptTokens = u.prompt_tokens ?? 0; gateUsage.completionTokens = u.completion_tokens ?? 0; },
         });
     } catch (err) {
@@ -246,8 +247,21 @@ export function guidanceResearchInputs(options = {}) {
 // ① 判断——只发千字简报的一次无工具调用，决定本次要不要联网（默认不要）；
 // ② 直查——判「要」才按它给的关键词调 Tavily（不耗模型 token），纪要附加进材料。
 // 全套材料只在正式分析发一次（onDelta 提供时走流式，界面实时收字）；判断/检索失败都不拦分析。
-// onStage('gate'|'analysis') 供界面标注当前等在哪一步；prefetch 指纹对得上就直接用预跑结果
-async function guidanceCompletion(messages, research = {}, { onDelta, onStage, prefetch } = {}) {
+// onStage('gate'|'analysis') 供界面标注当前等在哪一步；prefetch 指纹对得上就直接用预跑结果。
+// signal（第八轮「中断」）一路传到 fetch；预跑的判断调用发出去就没法从外面掐，只能不等它。
+// 返回 { text, usage, search }：usage＝本次全部调用的实报合计（判断+分析），界面留页展示
+function raceAbort(promise, signal) {
+    if (!signal) return promise;
+    let onAbort = () => {};
+    const guard = new Promise((_, reject) => {
+        onAbort = () => { const e = new Error('已中断'); e.name = 'AbortError'; reject(e); };
+        if (signal.aborted) return onAbort();
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
+    return Promise.race([promise, guard]).finally(() => signal.removeEventListener('abort', onAbort));
+}
+
+async function guidanceCompletion(messages, research = {}, { onDelta, onStage, prefetch, signal, onReasoning } = {}) {
     const total = { promptTokens: 0, completionTokens: 0, streamNoUsage: false };
     const add = u => {
         total.promptTokens += u?.promptTokens ?? u?.prompt_tokens ?? 0;
@@ -261,8 +275,8 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
             onStage?.('gate');
             const key = fingerprint(buildResearchBrief(research));
             const r = prefetch && prefetch.fingerprint === key
-                ? await prefetch.promise            // 预跑时输入与现在完全一致：直接采用
-                : await runWebResearch(research);   // 输入变了（换事件/改构思/新修改意见）：重判
+                ? await raceAbort(prefetch.promise, signal)   // 预跑时输入与现在完全一致：直接采用
+                : await runWebResearch(research, { signal });   // 输入变了（换事件/改构思/新修改意见）：重判
             add(r.usage);
             search = { searched: r.searchLogs.length > 0, queries: r.searchLogs.length, logs: r.searchLogs, reason: r.reason, direct: settings.search?.preJudge === false };
             notes = r.notes;
@@ -284,12 +298,14 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
         onStage?.('analysis');
         const text = await chatCompletion({
             messages: withNotes,
+            signal,
             onUsage: u => { add(u); analysisBilled = true; },
             ...(onDelta ? { onDelta } : {}),
+            ...(onReasoning ? { onReasoning } : {}),
         });
         total.streamNoUsage = Boolean(onDelta) && !analysisBilled;
         billToast(total, search);
-        return text;
+        return { text, usage: total, search };
     } catch (err) {
         total.streamNoUsage = Boolean(onDelta) && !analysisBilled;
         billToast(total, search);   // 失败也要报真实账单：空内容报错时的输入/输出对账全靠它
@@ -429,22 +445,25 @@ export function buildGuidanceMessages(options = {}) {
 
 /**
  * 运行一次剧情规划分析（检查 + 设计）。参数见 buildGuidanceMessages。
- * @returns {Promise<{result: object, raw: string, hits: number}>}
+ * @param {AbortSignal} [options.signal]       中断（运行页「中断」键）：一路传到 fetch
+ * @param {(reasonChars:number)=>void} [options.onReasoning] 流式思考增量累计回调（诊断「关闭思考」是否被执行）
+ * @returns {Promise<{result: object, raw: string, hits: number, usage: object, search: object|null}>}
+ *          usage/search＝本次全部调用的实报账单与检索信息（界面留页展示用）
  */
 export async function runPlotGuidance(options = {}) {
     const { system, user, hits } = buildGuidanceMessages(options);
-    const raw = await guidanceCompletion(
+    const { text, usage, search } = await guidanceCompletion(
         [
             { role: 'system', content: system },
             { role: 'user', content: user },
         ],
         guidanceResearchInputs(options),
-        { onDelta: options.onDelta, onStage: options.onStage, prefetch: options.researchPrefetch },
+        { onDelta: options.onDelta, onStage: options.onStage, prefetch: options.researchPrefetch, signal: options.signal, onReasoning: options.onReasoning },
     );
     try {
-        return { result: extractJson(raw), raw, hits };
+        return { result: extractJson(text), raw: text, hits, usage, search };
     } catch (err) {
-        err.raw = raw;   // 解析失败也把原始输出附到错误上，方便上层展示排查
+        err.raw = text;   // 解析失败也把原始输出附到错误上，方便上层展示排查
         throw err;
     }
 }
@@ -461,7 +480,7 @@ export async function runPlotGuidance(options = {}) {
  * @param {object} [options.memoryModes]   第 1 步的每表档位 { [uid]: 'off'|'tags'|'always' }
  * @param {number} [options.memoryRecent]  「标签」档每表另附的表尾最新行数
  */
-export async function runStoryReview({ planText = '', userNote = '', memoryTags = null, memoryModes = null, memoryRecent = 0, onDelta, onStage } = {}) {
+export async function runStoryReview({ planText = '', userNote = '', memoryTags = null, memoryModes = null, memoryRecent = 0, onDelta, onStage, signal, onReasoning } = {}) {
     const { chatList, hits } = collectPlanningContext();
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
@@ -491,15 +510,28 @@ export async function runStoryReview({ planText = '', userNote = '', memoryTags 
         userNote,
         planText: String(planText || ''),
     };
-    const stream = { onDelta, onStage };
-    const raw = await guidanceCompletion(messages, research, stream);
+    const stream = { onDelta, onStage, signal, onReasoning };
+    // 账单跨两次调用累计（首次分析＋坏输出的修复重试），报告页留页展示用
+    const acc = { promptTokens: 0, completionTokens: 0, streamNoUsage: false };
+    const accAdd = u => {
+        acc.promptTokens += u?.promptTokens ?? 0;
+        acc.completionTokens += u?.completionTokens ?? 0;
+        acc.streamNoUsage = acc.streamNoUsage || Boolean(u?.streamNoUsage);
+    };
+    const first = await guidanceCompletion(messages, research, stream);
+    accAdd(first.usage);
+    const raw = first.text;
     try {
         // 坏输出带修复提示回炉一次；call 仍走 guidanceCompletion，联网判断与账单口径不变
         const parsed = await parseModelJson(raw, {
             messages,
-            call: req => guidanceCompletion(req.messages, research, stream),
+            call: async req => {
+                const r = await guidanceCompletion(req.messages, research, stream);
+                accAdd(r.usage);
+                return r.text;
+            },
         });
-        return { result: parsed.result, raw: parsed.raw, hits: hits.length };
+        return { result: parsed.result, raw: parsed.raw, hits: hits.length, usage: acc, search: first.search };
     } catch (err) {
         err.raw ??= raw;   // 解析失败也把原始输出附到错误上，方便上层展示排查
         throw err;
