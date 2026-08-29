@@ -42,6 +42,7 @@ const run = {
     kbIds: [],           // 知识库抓到的条目 id（§6.9）：悬浮面板里抓/踢/重抓，随材料进确认页与生成
     kbSel: [],           // 「自选」方式下勾上的条目 id（恒为数组、从一条没勾开始、勾谁发谁）
     kbMode: 'all',       // 采用方式：'all' 全部采用（整把发送、规划模型自己挑）| 'pick' 自选（只发 kbSel 勾上的）——2026-08-30 真机反馈第四轮：全选/让模型挑/点名挑是并列用法，做成显式选择不再硬定单一默认
+    kbSentIds: [],       // 本次分析实际发送的知识条目 id 快照（§6.9 用后账）：冷却结算挪到「确认采用/转隐身注入」时（2026-08-31 真机第五轮）——分析成功只记这份帐，草稿放弃/重写不碰冷却；结算或丢弃后清空
     kbListIds: null,     // 第 1 步勾选的知识库清单 id（按对话记忆存 picks）；null = 未初始化（默认不勾）
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
     hadActive: false,   // 本次分析发起时是否存在进行中剧情（第 3 步「剧情进度」行只在这种时候显示）
@@ -128,6 +129,7 @@ function restoreWizard(container) {
         kbIds: Array.isArray(r.kbIds) ? r.kbIds.map(String) : [],
         kbSel: Array.isArray(r.kbSel) ? r.kbSel.map(String) : [],
         kbMode: r.kbMode === 'pick' || (r.kbMode == null && Array.isArray(r.kbSel) && r.kbSel.length > 0) ? 'pick' : 'all',   // 旧快照无此字段：有手勾的按「自选」、没动过的按「全部采用」
+        kbSentIds: Array.isArray(r.kbSentIds) ? r.kbSentIds.map(String) : [],
         kbListIds: Array.isArray(r.kbListIds) ? r.kbListIds.map(String) : null,
         result: r.result ?? null,
         raw: r.raw ?? '',
@@ -543,7 +545,7 @@ export function resetGuidance() {
     closeViewer();   // 开着的悬浮查看器（两个工具面板/提示词预览）一并关掉，不带到新聊天
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
     Object.assign(run, {
-        note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbListIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+        note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbSentIds: [], kbListIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
         memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
     });
     evImports.clear();
@@ -899,7 +901,7 @@ function renderCollect(container, main) {
             || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
         ${kbLists.length ? `
-        <label class="pp-label" title="知识库＝自建素材清单（「知识库」页签管理），反模型偏好用。勾选的清单点开「知识库抓取」各随机抓一小把，随分析发给规划模型；选用过的条目自动进冷却。勾选随当前对话记忆保存">知识库清单</label>
+        <label class="pp-label" title="知识库＝自建素材清单（「知识库」页签管理），反模型偏好用。勾选的清单点开「知识库抓取」各随机抓一小把，随分析发给规划模型；确认采用时选用的条目进冷却（放弃草稿不冷却）。勾选随当前对话记忆保存">知识库清单</label>
         <div class="pp-gd-selp">
             ${kbLists.map(l => {
                 const coolN = l.entries.filter(e => Number(e.cooldown) > 0).length;
@@ -1224,7 +1226,7 @@ function renderReady(container, main) {
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的随机事件单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 随机事件：${evNames.length ? escapeHtml(evNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的路人反应单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 路人反应：${rxNames.length ? escapeHtml(rxNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步勾选的游戏玩法条目，作为材料随分析发送，规划按这些规则设计">玩法：${gpNames.length ? escapeHtml(gpNames.join('、')) : '无'}</div>
-        <div class="pp-gd-stat" title="第 1 步「知识库抓取」面板里决定发送的条目（按清单分组，编号＝清单号-条目号；「全部采用」＝整把发送让模型挑、「自选」＝只发勾上的），随材料发送——规划从中选用素材，选用的进冷却">知识库：${kbText}</div>
+        <div class="pp-gd-stat" title="第 1 步「知识库抓取」面板里决定发送的条目（按清单分组，编号＝清单号-条目号；「全部采用」＝整把发送让模型挑、「自选」＝只发勾上的），随材料发送——规划从中选用素材，确认采用时选用的进冷却（放弃草稿不冷却）">知识库：${kbText}</div>
         <div class="pp-gd-stat" title="联网搜索总开关在「设置」页；开着时分析前先轻量判断是否需要现实信息（或直接检索），纪要附进分析材料">联网搜索：${searchToolActive() ? '开' : '关'}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">开始分析</span>
@@ -1651,7 +1653,7 @@ function openKbPanel(onChange) {
                 <span class="menu_button" data-kbkick="${escapeHtml(entry.id)}" title="踢掉这条：从这把里移除、不补抓（「自选」下不勾只是不发、行还在；踢＝这条看得都嫌烦，行都不要见）">踢</span>
             </div>`; }).join('') || '<div class="pp-muted">这张清单还没抓到条目（点「重抓」或回「知识库」页签加条目）</div>'}`;
         }).join('') + `
-        <div class="pp-muted" style="margin-top:6px" title="纯随机、无语境过滤（设计定稿）；条数与冷却次数在「设置 → 知识库」">抓取＝每清单纯随机 ${cfg.grabCount} 条，冷却中的条目自动跳过；踢掉不补抓。「全部采用」＝整把发给规划模型让它挑着用；「自选」＝你勾哪条发哪条，一条不勾＝本次不带知识材料。发送的条目进第 2 步确认页细账，规划选用的进冷却</div>`;
+        <div class="pp-muted" style="margin-top:6px" title="纯随机、无语境过滤（设计定稿）；条数与冷却次数在「设置 → 知识库」">抓取＝每清单纯随机 ${cfg.grabCount} 条，冷却中的条目自动跳过；踢掉不补抓。「全部采用」＝整把发给规划模型让它挑着用；「自选」＝你勾哪条发哪条，一条不勾＝本次不带知识材料。发送的条目进第 2 步确认页细账，确认采用时选用的进冷却（放弃草稿不冷却；「知识库」页点冷却徽章可清零）</div>`;
 
         body.querySelectorAll('[data-kbmode]').forEach(el => el.addEventListener('click', () => {
             run.kbMode = el.dataset.kbmode;
@@ -1744,14 +1746,9 @@ async function startAnalyze(container, { revise = false } = {}) {
         run.raw = data.raw;
         run.hits = data.hits;
         run.planText = formatPlan(data.result.plan);
-        // 知识库用后账（§6.9）：带知识材料且生成成功才结算——全部条目冷却 -1，
-        // 模型自报导选用过的重置为冷却上限；空选不算异常、也照走冷却递减
-        if (kbPayload.length) {
-            const usedCodes = Array.isArray(run.result?.plan?.knowledgeUsed) ? run.result.plan.knowledgeUsed : [];
-            const cfg = knowledgeCfg();
-            const usedN = settleCooldown(kbPayload, usedCodes, cfg.cooldownGens);
-            toastr.info(`知识库：本次选用 ${usedN} 条进冷却（${cfg.cooldownGens} 次生成内抓取跳过）`);
-        }
+        // 知识库用后账（§6.9，2026-08-31 真机第五轮改定）：分析成功只快照「本次发了哪些条目」，
+        // 冷却结算挪到「确认采用/转为隐身注入」（settleKbCharge）——草稿放弃/重写不算用过，不碰冷却
+        run.kbSentIds = kbPayload.map(p => p.entry.id);
         persistWizard();
         // 分析中用户跳去了别的步骤：结果照常入账（快照已更新），不抢当前页面
         if (step === 'running' || step === 'result') {
@@ -1779,6 +1776,18 @@ function formatPlan(plan) {
     const beats = (plan.beats ?? []).map((b, i) => `${i + 1}. [${b.stage ?? ''}] ${b.content ?? ''}`).join('\n');
     const risks = (plan.risks ?? []).length ? `风险注意：${plan.risks.join('；')}` : '';
     return [plan.summary ?? '', beats, risks].filter(Boolean).join('\n\n');
+}
+
+// 知识库冷却结算（§6.9，2026-08-31 真机第五轮改定）：只在「确认采用」或「转为隐身注入」时执行——
+// 规划真正上场（进档案或注入主对话）才算用过；同一份草稿两条路都走只结一次（结完清 kbSentIds）。
+// 结算口径不变：全部条目冷却 -1（空选也照走）、自报导选用过的重置为上限、使用次数 +1
+function settleKbCharge() {
+    if (!(run.kbSentIds ?? []).length) return;
+    const usedCodes = Array.isArray(run.result?.plan?.knowledgeUsed) ? run.result.plan.knowledgeUsed : [];
+    const cfg = knowledgeCfg();
+    const usedN = settleCooldown(payloadFromIds(run.kbSentIds), usedCodes, cfg.cooldownGens);
+    run.kbSentIds = [];
+    if (usedN) toastr.info(`知识库：规划选用 ${usedN} 条进冷却（接下来 ${cfg.cooldownGens} 次采用内抓取跳过；「知识库」页点冷却徽章可提前清零）`);
 }
 
 function renderResult(container, main) {
@@ -1816,7 +1825,7 @@ function renderResult(container, main) {
             <span id="pp_gd_adopt" class="menu_button">确认采用</span>
             <span id="pp_gd_revise" class="menu_button" title="按上面的修改意见把规划重写一版（材料与第 1 步勾选不变）">重新生成</span>
             <span id="pp_gd_inject" class="menu_button" title="把上面这份规划文本直接注入主对话（模型可见、聊天界面不显示），按上面的深度/角色/过期生效、到期自动撤下。与「确认采用」的区别：采用是把规划存为「进行中剧情」档案——后续规划与检查都以它为基准，并自动绑定剧情注入（完结才撤下）；转注入不进档案，只是把这份文本临时塞给主对话模型">转为隐身注入</span>
-            <span id="pp_gd_discard" class="menu_button" title="丢弃本次生成（构思、预设与事件选择保留）">放弃保存</span>
+            <span id="pp_gd_discard" class="menu_button" title="丢弃本次生成（构思与第 1 步材料保留：知识库抓到的条目、勾选、采用方式都在，可直接再次开始分析；冷却只在确认采用时才记，放弃不冷却）">放弃保存</span>
         </div>
     </div>`;
 
@@ -1862,9 +1871,11 @@ function renderResult(container, main) {
 
     main.querySelector('#pp_gd_revise').addEventListener('click', () => startAnalyze(container, { revise: true }));
     main.querySelector('#pp_gd_discard').addEventListener('click', () => {
-        Object.assign(run, { result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false, research: null, kbIds: [], kbSel: [], kbMode: 'all' });
+        // 2026-08-31 真机第五轮：放弃保存不再清知识库抓取——抓到的条目/勾选/方式都留着，
+        // 回第 1 步改改就能原班材料再次分析；只清这份生成结果与它的冷却结算帐（放弃不冷却）
+        Object.assign(run, { result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false, research: null, kbSentIds: [] });
         step = 'collect';
-        toastr.info('已丢弃本次生成（构思、预设与事件选择保留）');
+        toastr.info('已丢弃本次生成（构思与第 1 步材料保留——知识库抓到的还在，可直接再次开始分析；冷却没记，选用过的条目不受影响）');
         renderMain(container);
     });
     main.querySelector('#pp_gd_adopt').addEventListener('click', () => {
@@ -1872,6 +1883,7 @@ function renderResult(container, main) {
             toastr.warning('规划内容为空');
             return;
         }
+        settleKbCharge();   // 规划正式上场：知识库用后账在这结算（草稿阶段一直没动冷却）
         confirmPlot({
             planText: run.planText,
             summary: run.result?.plan?.summary ?? '',
@@ -1884,7 +1896,7 @@ function renderResult(container, main) {
         // 第 1 步勾选存在对话记忆里，下一轮进第 1 步自动恢复，这里照常清工作副本。
         // 单元池不随采用清空（DESIGN §2.5）：清理由各工具面板的一键清理键手动执行
         Object.assign(run, {
-            note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbListIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+            note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbSentIds: [], kbListIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
             memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
         });
         report = null;
@@ -1898,6 +1910,7 @@ function renderResult(container, main) {
             toastr.warning('规划内容为空');
             return;
         }
+        settleKbCharge();   // 转注入也是正式上场（与「确认采用」共用结算，同一份草稿只结一次）
         addInjection({
             id: newId('inj-'),
             label: `剧情规划 ${new Date().toLocaleTimeString()}`,

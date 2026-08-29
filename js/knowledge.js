@@ -6,7 +6,8 @@
 // fields 即自定义表头——导入时定死、永不做事后迁移（用户留存原始文本，重导即重建，
 // 2026-08-29 用户拍板「不做迁徙，后面也不会做」）。
 // 用后账：生成产物 JSON 自报选用了哪些条目（knowledgeUsed 编号），选用过的进冷却——
-// 冷却期内抓取自动跳过、按生成次数计，防「模型从小把里连挑最熟那条」。
+// 冷却期内抓取自动跳过、按采用次数计（2026-08-31 真机第五轮改定：结算在「确认采用/转隐身
+// 注入」时，草稿放弃/重写不碰冷却），防「模型从小把里连挑最熟那条」。冷却可手动清零。
 import { chatCompletion, parseModelJson } from "./api.js";
 import { settings, save, newId } from "./settings.js";
 
@@ -185,8 +186,9 @@ function usedEntryIds(payload, usedCodes) {
 }
 
 /**
- * 用后账结算（只在「带了知识材料且生成成功」的这一次调用后执行）：
- * 全部条目冷却 -1（冷却按生成次数计——只有带知识材料的生成才推动冷却；模型空选也照走，
+ * 用后账结算（2026-08-31 真机第五轮改定：只在规划真正上场时执行——「确认采用」或「转为
+ * 隐身注入」，由向导侧 settleKbCharge 调；草稿放弃/重写不结算，分析成功只快照发送帐）：
+ * 全部条目冷却 -1（冷却按采用次数计——只有带知识材料的采用才推动冷却；模型空选也照走，
  * 空选不算异常）、自报导选用过的条目冷却重置为 gens、使用次数 +1。
  * @returns {number} 本次判定为选用的条目数
  */
@@ -203,6 +205,16 @@ export function settleCooldown(payload, usedCodes, gens) {
     }
     save();
     return used.size;
+}
+
+// 手动清零一条条目的冷却（知识库页点冷却徽章，2026-08-31 真机第五轮：冷却此前没有任何
+// 取消出口）——用户判断这条可以再用就点掉，立刻恢复可抓
+export function clearCooldown(listId, entryId) {
+    const entry = findList(listId)?.entries.find(e => e.id === entryId);
+    if (entry && Number(entry.cooldown) > 0) {
+        entry.cooldown = 0;
+        save();
+    }
 }
 
 // ---------------------------------------------------------------------------

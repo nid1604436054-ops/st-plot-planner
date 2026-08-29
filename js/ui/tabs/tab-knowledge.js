@@ -16,7 +16,7 @@
 import { settings, save } from "../../settings.js";
 import {
     knowledgeLists, findList, createList, renameList, deleteList,
-    addEntries, deleteEntry, updateEntry, entryText, structureImport,
+    addEntries, deleteEntry, updateEntry, entryText, structureImport, clearCooldown,
 } from "../../knowledge.js";
 import { escapeHtml } from "../../utils.js";
 
@@ -82,7 +82,7 @@ function entryRowHtml(list, entry) {
     <div class="pp-kb-erow" data-kentry="${escapeHtml(entry.id)}" title="点开编辑各字段">
         <span class="pp-muted pp-kb-ecode">${escapeHtml(entry.code)}</span>
         <span class="pp-kb-ebody">${escapeHtml(entryText(list, entry) || '（空条目，点开填写）')}</span>
-        ${cool ? `<span class="pp-badge" title="选用后进冷却：接下来若干次知识库生成里抓取自动跳过（按生成次数计，次数在「设置 → 知识库」）">冷却 ${Number(entry.cooldown)}</span>` : ''}
+        ${cool ? `<span class="pp-badge" data-kclear="${escapeHtml(entry.id)}" title="选用后进冷却：接下来若干次采用里抓取自动跳过（次数在「设置 → 知识库」）。点一下＝立即清零，这条马上可以再被抓——你判断它该再用就点（冷却记在确认采用时，放弃草稿不记）">冷却 ${Number(entry.cooldown)} ✕</span>` : ''}
         ${Number(entry.used) > 0 ? `<span class="pp-muted" title="规划生成累计选用次数">用过 ${Number(entry.used)} 次</span>` : ''}
         <span class="menu_button fa-solid fa-trash" data-kedel="${escapeHtml(entry.id)}" title="删除这条条目"></span>
     </div>
@@ -298,7 +298,7 @@ export const knowledgeTab = {
                 refreshList();
             }));
             elist.querySelectorAll('[data-kentry]').forEach(row => row.addEventListener('click', e => {
-                if (e.target.closest('input, textarea, select, [data-kedel]')) return;
+                if (e.target.closest('input, textarea, select, [data-kedel], [data-kclear]')) return;
                 editingEntryId = editingEntryId === row.dataset.kentry ? null : row.dataset.kentry;
                 refreshList();
             }));
@@ -307,6 +307,12 @@ export const knowledgeTab = {
                 if (editingEntryId === btn.dataset.kedel) editingEntryId = null;
                 refreshList();
                 rerender();   // 头行的条目计数也要跟
+            }));
+            // 冷却徽章点击＝清零这条的冷却（2026-08-31 真机第五轮：冷却此前无处取消）
+            elist.querySelectorAll('[data-kclear]').forEach(b => b.addEventListener('click', () => {
+                clearCooldown(list.id, b.dataset.kclear);
+                refreshList();
+                rerender();   // 头行的「N 条冷却中」计数也要跟
             }));
             // 字段编辑即时保存，不重渲染（避免打断输入）
             elist.querySelectorAll('[data-kfield]').forEach(inp => inp.addEventListener('input', () => {

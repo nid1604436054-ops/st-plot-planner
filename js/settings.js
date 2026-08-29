@@ -50,7 +50,7 @@ const DEFAULTS = {
     lorebookTrash: [],      // 世界书回收站：删的书/条目先进这里，页面上可恢复或彻底删除
     knowledge: {            // 2.0 知识库（§6.9）：全局共享（不绑聊天不绑角色），条目与冷却账都在这
         grabCount: 5,       // 每张清单每次抓取的条数（设置页可调）
-        cooldownGens: 3,    // 选用条目的冷却生成次数（提案值待数值终审；0 = 不冷却）
+        cooldownGens: 3,    // 选用条目的冷却采用次数（结算在确认采用/转隐身注入时，草稿放弃不记；提案值待数值终审；0 = 不冷却）
         lists: [],          // 清单 {id, name, fields[], entries[], nextCode}：fields = 自定义表头，导入时定死永不迁移
     },
     listener: {             // 2.0 监听（全局项；逐轮留痕/挂载单位在 chatdata 的 listener 块按聊天走）

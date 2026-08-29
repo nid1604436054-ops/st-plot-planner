@@ -160,7 +160,7 @@ export const settingsTab = {
                         <input id="pp_set_kb_grab" class="text_pole textarea_compact" type="number" min="1" max="20" />
                     </div>
                     <div>
-                        <label class="pp-label" title="规划生成自报导选用过的条目进冷却：接下来 N 次带知识材料的生成里，抓取自动跳过它——防模型从小把里连挑最熟那条。0 = 不冷却。默认 3 为提案值，用实感调整">冷却生成次数</label>
+                        <label class="pp-label" title="规划确认采用（或转隐身注入）时，模型自报导选用过的条目进冷却：接下来 N 次采用里，抓取自动跳过它——防模型从小把里连挑最熟那条。草稿放弃/重写不碰冷却；冷却中的条目在「知识库」页点冷却徽章可立即清零。0 = 不冷却。默认 3 为提案值，用实感调整">冷却采用次数</label>
                         <input id="pp_set_kb_cool" class="text_pole textarea_compact" type="number" min="0" max="50" />
                     </div>
                 </div>
