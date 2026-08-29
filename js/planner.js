@@ -14,6 +14,20 @@ import { extractJson, fingerprint } from "./utils.js";
 // 输出 schema 两套变体：存在进行中剧情时才要求 progress（推进到哪个阶段 + 约百分比）。
 // 首次规划没有可对照执行的剧情，不问进度——问了模型也会编一个出来（人工二检页曾出现
 // 「还没采用的规划先有完成度」，根源就是 schema 无条件要这个字段）
+// plan 对象的 schema 两处复用（第一遍分析与第二遍对齐审校，第十二轮）：currentTime 是时间锚——
+// 相对时间（今天/明天/第二天）没有固定寄存的「现在」就会随体裁惯性漂移（今天上午的事被归档成
+// 「昨天」、一处写错后续参照系整体漂走），模型先把「现在是什么时候」读出来写在这里，锚点
+// 外化到生成点上；材料无线索也如实写「未指明」，结果页原样展示供人工核对
+const planSchemaBlock = (withKnowledge) => `{
+      "currentTime": "排程的时间基准：从对话记录/用户构思/记忆表格里读出「现在」（如「当天上午」「次日傍晚」）；材料里没有时间线索就写「未指明」",
+      "summary": "一句话概括接下来的走向",
+      "beats": [
+        { "stage": "阶段名", "content": "该阶段的幕后剧情安排（不出现在对话文本中）。不得替 user 编排：不写 user 的动作、台词或心理（对话或构思里 user 已明说的意愿可当前提）；涉及 user 一律写「若 user X，则 Y」的条件式接口，且本节点的核心推进不依赖 user 的回应" }
+      ],
+      "risks": ["可能跑偏的点；checks 判出、需要后续持续规避的要点也放这里"]${withKnowledge ? `,
+      "knowledgeUsed": ["从「知识库材料」小节选用条目的编号（形如 1-03）；一条都没用给空数组"]` : ''}
+    }`;
+
 const OUTPUT_SCHEMA_BASE = `{
   "checks": {
     "ooc": {
@@ -25,24 +39,14 @@ const OUTPUT_SCHEMA_BASE = `{
     "plotRepeat": { "found": false, "note": "已完结情节被当新剧情重演、或复刻已有桥段之处；同一剧情线的延续不算；没有则空字符串" },
     "styleRepeat": { "level": "无|轻微|明显", "note": "仅判 char 的自发重复：user 是否先重复、char 重复了什么" }__PROGRESS__
   },
-    "plan": {
-      "summary": "一句话概括接下来的走向",
-      "beats": [
-        { "stage": "阶段名", "content": "该阶段的幕后剧情安排（不出现在对话文本中）。不得替 user 编排：不写 user 的动作、台词或心理（对话或构思里 user 已明说的意愿可当前提）；涉及 user 一律写「若 user X，则 Y」的条件式接口，且本节点的核心推进不依赖 user 的回应" }
-      ],
-      "risks": ["可能跑偏的点；checks 判出、需要后续持续规避的要点也放这里"]__KNOWLEDGE__
-    }
+    "plan": __PLAN__
 }`;
 
 const outputSchema = (withProgress, withKnowledge) => OUTPUT_SCHEMA_BASE.replace(
     '__PROGRESS__',
     withProgress ? `,
     "progress": { "stage": "进行中剧情推进到哪个阶段", "pct": "约x%", "note": "判断依据" }` : '',
-).replace(
-    '__KNOWLEDGE__',
-    withKnowledge ? `,
-      "knowledgeUsed": ["从「知识库材料」小节选用条目的编号（形如 1-03）；一条都没用给空数组"]` : '',
-);
+).replace('__PLAN__', planSchemaBlock(withKnowledge));
 
 // 内置指令：保证返回 JSON（程序要解析成检查项 + 规划）。用户预设已全局化——启用中的
 // 由 api.js 的 chatCompletion 出口统一拼进 system 末尾（见 globalPresetBlock），此处不再单独拼。
@@ -57,7 +61,7 @@ export function guidanceSystemPrompt(hasActivePlan = false, hasKnowledge = false
         `1) 检查：结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）、是否与已有剧情重复、文风是否重复${hasActivePlan ? '、正在执行的剧情推进到什么程度' : ''}；`,
         '2) 规划：为后续剧情设计「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
         '要求：判断必须引用对话依据；给出「进行中剧情」时对照它检查进度与重复；给了「随机事件」就将其自然融入规划；给了「路人反应」就视为已发生之事的世界回应口径，规划为其留出呈现空间、不与余波和收束口径冲突；规划要具体、可执行、尊重既有设定；面向当前场景做预编排。',
-        '时间顺序：材料各小节与条目的排列顺序不代表时间先后——知识库、世界书、记忆表格各按自己的清单顺序罗列，不构成时间线，不得按罗列顺序安排先后；对话记录或用户构思里给出了当前时间的，一律以它为准排程，接下来的安排从当前时段往后推（现在是上午就排午饭前后，不排晚饭，也不倒排上午）；条目带时段类字段（表头含「时段」或字段值含时间词）的，按该字段排。',
+        '时间顺序：材料各小节与条目的排列顺序不代表时间先后——知识库、世界书、记忆表格各按自己的清单顺序罗列，不构成时间线，不得按罗列顺序安排先后；对话记录或用户构思里给出了当前时间的，一律以它为准排程，接下来的安排从当前时段往后推（现在是上午就排午饭前后，不排晚饭，也不倒排上午）；条目带时段类字段（表头含「时段」或字段值含时间词）的，按该字段排。排程前先把读到的「现在」写进 plan.currentTime，全部相对时间以它为锚——今天发生的事留在今天，不得挪到第二天。',
         '事实一致性：对话记录、记忆表格、历史摘要里已经发生的事是既定事实——发生在哪天就是哪天，今天上午发生的事就留在今天，不得把当天的安排改写成第二天或更晚，后续排程只能从既定事实之后接着往后推；角色与 user 的既定设定（年龄、身份、能力、资格——从对话、人设卡、记忆表格里读到的）同样是硬约束，规划不得安排设定不允许的事（如未成年角色开车、无证从业、与身份不符的行为）；「剧情需要」与既定事实或设定冲突时，事实与设定赢。',
         'user 不可编排：user 是用户本人扮演的角色，规划只编排角色（char）与世界，不得替 user 决定。三条禁令：①不替 user 做出动作；②不替 user 说出台词或给出回应——「user 答应后」「user 同意之后」这类把 user 的回应写成既成事实的写法同属此列；③不预设 user 的心理反应（user 怎么想、会不会感动，由用户自己写）。唯一豁免：对话记录或用户构思里 user 已明确说出的意愿，可以作为前提使用。涉及 user 的部分只有一种合法写法——条件式接口「若 user X，则 Y」（可以给多个接口、可以分支）；并且每个节点的核心推进必须独立成立、不依赖 user 的任何具体回应：user 接口是挂在节点上的加分分支，不是节点赖以成立的地基，删掉它节点照样走得通。',
         'user 不可编排的对照示例（学结构、不学内容——示例里的具体事件不要写进规划）：坏：「两人到猫咖，user 抚摸猫咪逗她开心，user 承诺下周再带她来，她感动地靠过来」——替 user 做了动作、许了承诺，节点核心全押在 user 的回应上。好：「两人到猫咖，久违的猫咪围观让她露出少见的放松神态，主动点了两份甜品；若 user 主动逗猫或拍下她与猫的合照，则她顺势把合照设成聊天背景」——节点核心是她自己的状态与行动，user 接口只是加分分支。',
@@ -74,6 +78,27 @@ export function guidanceSystemPrompt(hasActivePlan = false, hasKnowledge = false
     '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
     outputSchema(hasActivePlan, hasKnowledge),
 ].join('\n');
+}
+
+// 第二遍对齐审校的系统提示词（第十二轮，用户拍板两遍调用：第一次生成、第二次对齐要求修改）。
+// 生成态（第一遍）被规划的体裁惯性拽着走，审校态（第二遍）手里只有一份草稿和一份对账清单——
+// 同一个模型换到审校位上，相对时间不再跟着「下一段最常写什么」漂。只重发 plan：checks 是对
+// 对话的判断，不随 plan 修订而变，重查重发纯属多花输出 token
+export function alignSystemPrompt(hasKnowledge = false) {
+    return [
+        '你是剧情规划的对齐审校员。用户会用同一份材料生成过一版剧情规划草稿（随材料附上），你的任务不是重写，是逐条对账后把草稿里违反要求的地方改对：',
+        '①时间基准：先从材料（对话记录、用户构思、记忆表格、历史摘要）重读「现在是什么时候」写进 plan.currentTime——第一遍把今天上午的事排成第二天、把刚发生的写成昨天是常见病；草稿里所有相对时间（今天/明天/第二天/昨晚/上午/晚上）一律以你读出的基准为锚，已发生的事留在它实际发生的那天，后续排程只从既定事实之后往后推。',
+        '②既定事实与设定：材料里已发生的事是既定事实，发生在哪天就是哪天，不得挪动；角色与 user 的既定设定（年龄、身份、能力、资格——从对话、人设卡、记忆表格里读到的）是硬约束，不得安排设定不允许的事（如未成年角色开车）。',
+        '③点名要求：用户构思与修改意见里点名的要求（数量、价位或金额、时间日期、由谁发起或由谁挑选、地点、身份资格）逐条落实，不得打折、不得反着写、不得自作主张换方案；点名了发起权归谁就不得转手，尤其不得转给 user。',
+        '④user 不可编排：不替 user 做动作、不说台词、不预设心理（对话或构思里 user 已明说的意愿可当前提）；涉及 user 只能写「若 user X，则 Y」的条件式接口，且每个节点的核心推进不依赖 user 的回应。',
+        '只改违反上述各项的地方，其余原样保留——这是校对不是重写：走向、节点结构、选材与 plan.knowledgeUsed 都不动，改完仍是同一版规划。每处改动在 fixes 里逐条报出（改了哪里、从什么改成什么、依据哪条要求）；草稿本就全对就原样返回、fixes 给空数组。',
+        '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
+        '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
+        `{
+  "plan": ${planSchemaBlock(hasKnowledge)},
+  "fixes": ["逐条报出改动：改了哪里、从什么改成什么、依据哪条要求；没有改动给空数组"]
+}`,
+    ].join('\n');
 }
 
 const REVIEW_SCHEMA = `{
@@ -307,7 +332,9 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
         });
         total.streamNoUsage = Boolean(onDelta) && !analysisBilled;
         billToast(total, search);
-        return { text, usage: total, search };
+        // messages（联网纪要已拼进正文的那份）一并带回：第二遍对齐审校复用同一份材料，
+        // 联网不重判、检索不重跑（第十二轮）
+        return { text, usage: total, search, messages: withNotes };
     } catch (err) {
         total.streamNoUsage = Boolean(onDelta) && !analysisBilled;
         billToast(total, search);   // 失败也要报真实账单：空内容报错时的输入/输出对账全靠它
@@ -441,33 +468,111 @@ export function buildGuidanceMessages(options = {}) {
         system: guidanceSystemPrompt(Boolean(String(activePlan ?? '').trim()), Boolean(kbSection), skeletons.length > 0, minBeats),
         user: userContent,
         hits: hits.length,
+        hasKnowledge: Boolean(kbSection),   // 第二遍对齐审校的 schema 要带同款 knowledgeUsed 字段（第十二轮）
         sections,
     };
 }
 
 /**
  * 运行一次剧情规划分析（检查 + 设计）。参数见 buildGuidanceMessages。
- * @param {AbortSignal} [options.signal]       中断（运行页「中断」键）：一路传到 fetch
- * @param {(reasonText:string)=>void} [options.onReasoning] 流式思考增量累计回调，收思考全文（长度即字数；诊断「关闭思考」是否被执行）
+ * 第十二轮起默认两遍调用：第一遍生成，第二遍对齐审校（alignPass，用户拍板「第一次生成、
+ * 第二次对齐要求修改」治时间错位）——设置「生成后对齐修改（第二遍）」可关。
+ * @param {AbortSignal} [options.signal]       中断（运行页「中断」键）：一路传到 fetch；第二遍中途
+ *                                             中断＝保留第一遍结果交付，不整轮报废
+ * @param {(reasonText:string)=>void} [options.onReasoning] 流式思考增量累计回调，收思考全文（两遍拼接，
+ *                                             【第二遍思考】分节；长度即字数；诊断「关闭思考」是否被执行）
  * @returns {Promise<{result: object, raw: string, hits: number, usage: object, search: object|null}>}
- *          usage/search＝本次全部调用的实报账单与检索信息（界面留页展示用）
+ *          result.fixes＝第二遍逐条改动清单、result.alignState＝'done'|'failed'|'aborted'（第二遍
+ *          未运行时无此键）；usage/search＝两遍全部调用的实报合计与检索信息（界面留页展示用）
  */
 export async function runPlotGuidance(options = {}) {
-    const { system, user, hits } = buildGuidanceMessages(options);
-    const { text, usage, search } = await guidanceCompletion(
+    const { system, user, hits, hasKnowledge } = buildGuidanceMessages(options);
+    // 思考全文先经这里过一手：第二遍的思考要与第一遍拼接后再上屏，计数才是两遍合计
+    let reasonSoFar = '';
+    const onReasoning = options.onReasoning
+        ? t => { reasonSoFar = String(t ?? ''); options.onReasoning(reasonSoFar); }
+        : undefined;
+    const first = await guidanceCompletion(
         [
             { role: 'system', content: system },
             { role: 'user', content: user },
         ],
         guidanceResearchInputs(options),
-        { onDelta: options.onDelta, onStage: options.onStage, prefetch: options.researchPrefetch, signal: options.signal, onReasoning: options.onReasoning },
+        { onDelta: options.onDelta, onStage: options.onStage, prefetch: options.researchPrefetch, signal: options.signal, onReasoning },
     );
+    let result;
     try {
-        return { result: extractJson(text), raw: text, hits, usage, search };
+        result = extractJson(first.text);
     } catch (err) {
-        err.raw = text;   // 解析失败也把原始输出附到错误上，方便上层展示排查
+        err.raw = first.text;   // 解析失败也把原始输出附到错误上，方便上层展示排查
         throw err;
     }
+    const done = { result, raw: first.text, hits, usage: first.usage, search: first.search };
+    if (settings.guidance?.alignPass === false || !result?.plan) return done;
+    return alignPass(done, first.messages, {
+        hasKnowledge,
+        onDelta: options.onDelta,
+        onStage: options.onStage,
+        signal: options.signal,
+        onReasoning: options.onReasoning ? t => { reasonSoFar += `\n\n【第二遍思考】\n${t}`; options.onReasoning(reasonSoFar); } : undefined,
+    });
+}
+
+// 第二遍对齐审校（第十二轮）：同一份材料（联网纪要已在正文里，联网不重判）＋第一遍 plan 草稿
+// 再发一次。只改违反四类要求的地方（见 alignSystemPrompt）；失败/被中断不报废第一遍——
+// 结果照常交付、alignState 如实标注，两遍计费都实报累计（中断前已生成的部分服务商照常计费）
+async function alignPass(done, messages, { hasKnowledge = false, onDelta, onStage, signal, onReasoning } = {}) {
+    const draft = done.result.plan;
+    const alignMessages = [
+        { role: 'system', content: alignSystemPrompt(hasKnowledge) },
+        ...messages.slice(1).map(m => (m.role === 'user'
+            ? { ...m, content: `${m.content}\n\n## 第一遍草稿（第二遍对齐审校的对象——只改违反要求处，其余原样保留）\n${JSON.stringify(draft, null, 2)}` }
+            : m)),
+    ];
+    const alignUsage = { promptTokens: 0, completionTokens: 0 };
+    const mergeBill = () => {
+        done.usage = {
+            ...done.usage,
+            promptTokens: (done.usage?.promptTokens ?? 0) + alignUsage.promptTokens,
+            completionTokens: (done.usage?.completionTokens ?? 0) + alignUsage.completionTokens,
+        };
+    };
+    let alignBilled = false;
+    const billText = () => (alignUsage.promptTokens || alignUsage.completionTokens)
+        ? `两遍合计输入 ${done.usage.promptTokens.toLocaleString()} · 输出 ${done.usage.completionTokens.toLocaleString()} tokens（实报）`
+        : (onDelta ? '第二遍流式未回传 usage，无第二遍实报数字' : '');
+    try {
+        onStage?.('align');
+        const text = await chatCompletion({
+            messages: alignMessages,
+            signal,
+            onUsage: u => {
+                alignUsage.promptTokens += u?.prompt_tokens ?? 0;
+                alignUsage.completionTokens += u?.completion_tokens ?? 0;
+                alignBilled = true;
+            },
+            ...(onDelta ? { onDelta } : {}),
+            ...(onReasoning ? { onReasoning } : {}),
+        });
+        const parsed = extractJson(text);
+        if (!parsed?.plan || !Array.isArray(parsed.plan.beats)) throw new Error('第二遍输出里没有可用的 plan');
+        done.result = { ...done.result, plan: parsed.plan };
+        done.result.fixes = (Array.isArray(parsed.fixes) ? parsed.fixes : []).map(f => String(f ?? '').trim()).filter(Boolean);
+        done.result.alignState = 'done';
+        if (onDelta && !alignBilled) done.usage = { ...done.usage, streamNoUsage: true };
+        mergeBill();
+        toastr.info(`第二遍对齐修改完成：${done.result.fixes.length ? `改动 ${done.result.fixes.length} 处（第 3 步「第二遍对齐修改」行有逐条清单）` : '草稿本就全对，未改动'}${billText() ? `；${billText()}` : ''}`);
+    } catch (err) {
+        mergeBill();   // 失败/中断前已计费的照实累计（空内容报错的输入账单不吞）
+        if (err.name === 'AbortError') {
+            done.result.alignState = 'aborted';
+            toastr.info('第二遍对齐修改被中断：保留第一遍结果交付（中断前已生成的部分服务商照常计费）');
+        } else {
+            done.result.alignState = 'failed';
+            toastr.warning(`第二遍对齐修改失败（${String(err.message ?? err)}）——保留第一遍结果交付`);
+        }
+    }
+    return done;
 }
 
 /**

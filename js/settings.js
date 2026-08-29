@@ -38,6 +38,7 @@ const DEFAULTS = {
             layers: 20,
         },
         minBeats: 5,        // 规划节点数下限（第七轮：用户构思没点名数量时的兜底；节点是将来监听挂载的判断点——0 = 不设下限）
+        alignPass: true,    // 生成后自动追加第二遍对齐审校（第十二轮，用户拍板两遍调用治时间错位）——两遍＝计费约×2，关掉只跑第一遍
     },
     events: {
         branches: {         // 掷骰三板块：每次掷骰先在勾选板块里按权重抽一个，再走该板块的抽取逻辑
@@ -101,6 +102,7 @@ function ensureDefaults() {
     store.retrieval.memChars ??= 4000;
     store.guidance.inject ??= { depth: 4, role: 'system', expires: 'never', layers: 20 };
     store.guidance.minBeats ??= 5;   // 老安装补规划节点下限（第七轮，默认 5）
+    store.guidance.alignPass ??= true;   // 老安装补第二遍对齐审校开关（第十二轮，默认开）
     store.storageScanLayers ??= 20;   // 老安装补玩法触发词扫描窗口（沿用此前写死的 20）
     store.storageConsult ??= { idea: '', usePlan: false, useGp: false, draft: null };   // 玩法咨询的思路/材料勾选/草案（随全局设置留底）
     store.lorebookTrash ??= [];       // 老安装补世界书回收站

@@ -212,6 +212,9 @@ export const settingsTab = {
             <hr class="pp-hr" />
             <label class="pp-label" title="用户构思里没点名数量时，剧情规划的节点（beats）数量下限——规划给到的节点数不得少于这个数，不设上限（节点是后续监听判断的挂载点，多点细排便于跟进执行；示例数量会被模型当上限用，所以只写下限）。用户构思里点名了数量的，以构思为准（一样按「不少于」落实）。0 = 不设下限。默认 5">规划节点下限（0 = 不设）</label>
             <input id="pp_set_minbeats" class="text_pole textarea_compact" type="number" min="0" max="50" />
+            <hr class="pp-hr" />
+            <label class="pp-label" title="规划分析完成后自动追加第二遍调用：同一份材料再发给模型当「对齐审校员」，只改违反时间基准／既定事实与设定／点名要求／user 不可编排的地方（如把今天的事排成第二天），改动清单在第 3 步「第二遍对齐修改」行逐条展示。两遍调用＝计费约 ×2（输入材料发两遍）；第二遍失败或中断会保留第一遍结果交付。关掉则只跑第一遍（时间基准字段仍保留）">生成后对齐修改（第二遍）</label>
+            <input id="pp_set_alignpass" type="checkbox" />
             </details>
         </div>
         <div class="pp-section" id="pp_set_preset"></div>
@@ -244,6 +247,9 @@ export const settingsTab = {
         bindNum('#pp_set_memch', () => settings.retrieval.memChars, v => settings.retrieval.memChars = v);
         bindNum('#pp_set_ctx', () => settings.retrieval.contextLayers, v => settings.retrieval.contextLayers = v);
         bindNum('#pp_set_minbeats', () => settings.guidance.minBeats, v => settings.guidance.minBeats = Math.min(Math.max(v || 0, 0), 50));
+        const alignPass = container.querySelector('#pp_set_alignpass');
+        alignPass.checked = settings.guidance.alignPass !== false;
+        alignPass.addEventListener('change', () => { settings.guidance.alignPass = alignPass.checked; save(); });
         const thinkOff = container.querySelector('#pp_set_thinkoff');
         thinkOff.checked = settings.api.thinkingOff === true;
         thinkOff.addEventListener('change', () => { settings.api.thinkingOff = thinkOff.checked; save(); });

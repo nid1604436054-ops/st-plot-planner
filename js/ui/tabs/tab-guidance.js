@@ -609,7 +609,9 @@ function updateStreamView(token, force = false) {
     const stageEl = document.getElementById('pp_gd_run_stage');
     if (stageEl) stageEl.textContent = streamStage === 'gate'
         ? '联网判断/检索中……'
-        : `模型输出中 · 已接收 ${streamText.length} 字`;
+        : streamStage === 'align'
+            ? `第二遍 · 对齐修改中 · 已接收 ${streamText.length} 字`   // 第十二轮两遍调用：同一材料发给模型当对齐审校员，只改违反要求处
+            : `模型输出中 · 已接收 ${streamText.length} 字`;
     const nearBottom = force || outEl.scrollHeight - outEl.scrollTop - outEl.clientHeight < 48;
     // 思考原文上屏（第九轮）：之前只计数不显示，「思考 N 字」在涨却无处可看——现在思考
     // 全文带段头排在正文前面，翻上去就能边看出流边核对是不是真在思考
@@ -2113,9 +2115,15 @@ async function startAnalyze(container, { revise = false } = {}) {
 
 function formatPlan(plan) {
     if (!plan) return '';
+    // 时间基准行（第十二轮）：模型读出的「现在」——随规划文本一起注入/采用，扮演模型同样有锚；
+    // 「未指明」不写（写了也是占位的噪音）
+    const anchor = String(plan.currentTime ?? '').trim();
     const beats = (plan.beats ?? []).map((b, i) => `${i + 1}. [${b.stage ?? ''}] ${b.content ?? ''}`).join('\n');
     const risks = (plan.risks ?? []).length ? `风险注意：${plan.risks.join('；')}` : '';
-    return [plan.summary ?? '', beats, risks].filter(Boolean).join('\n\n');
+    return [
+        anchor && !anchor.includes('未指明') ? `时间基准：${anchor}` : '',
+        plan.summary ?? '', beats, risks,
+    ].filter(Boolean).join('\n\n');
 }
 
 // 知识库冷却结算（§6.9，2026-08-29 真机第五轮改定）：只在「确认采用」或「转为隐身注入」时执行——
@@ -2171,10 +2179,30 @@ function renderResult(container, main) {
     // 展示合成一张卡（第十一轮）：总数一行＋触发句子逐句列在同一张卡里，不再每处各开一张
     // 粗体标题卡（第九轮形态），也不能只剩总数不说哪里（第十轮过头形态）
     const yellow = scanUserScripting(run.planText);
+    // 时间基准（第十二轮）：模型读出的「现在」原样上屏——读错了（比如把今天读成明天）
+    // 一眼可辨，直接改下方规划文本里的相对时间即可
+    const anchor = String(run.result?.plan?.currentTime ?? '').trim();
+    // 第二遍对齐修改（第十二轮，用户拍板两遍调用）：改动逐条列在同一张卡（第十一轮黄牌同款形态）
+    const fixes = Array.isArray(run.result?.fixes) ? run.result.fixes.filter(Boolean) : [];
+    const alignState = run.result?.alignState;
 
     main.innerHTML = `
     <div class="pp-section">
-        <div class="pp-gd-stephead"><b>第 3 步 · 人工二检</b><span class="pp-muted">世界书命中 ${run.hits} 条</span>${runMeta?.state === 'done' && runMeta.kind === 'analysis' ? `<span class="pp-muted" title="本次分析用的模型、用时、思考字数与 token 实报（联网判断/检索的调用也计在内）">模型 ${escapeHtml(runMeta.model)} · 用时 ${runDurText()}${thinkMetaText(runMeta)} · ${usageText(runMeta.usage) || '无实报 token'}</span>` : ''}</div>
+        <div class="pp-gd-stephead"><b>第 3 步 · 人工二检</b><span class="pp-muted">世界书命中 ${run.hits} 条</span>${runMeta?.state === 'done' && runMeta.kind === 'analysis' ? `<span class="pp-muted" title="本次分析用的模型、用时、思考字数与 token 实报（联网判断/检索与第二遍对齐的调用也计在内）">模型 ${escapeHtml(runMeta.model)} · 用时 ${runDurText()}${thinkMetaText(runMeta)} · ${usageText(runMeta.usage) || '无实报 token'}</span>` : ''}</div>
+        ${checkRow('时间基准', !anchor
+            ? '<span class="pp-muted">（旧草稿，无时间基准字段）</span>'
+            : anchor.includes('未指明')
+                ? '<span class="pp-muted">未指明——材料里没读到时间线索，排程前的「现在」由模型自定</span>'
+                : `<div>${escapeHtml(anchor)}</div><div class="pp-muted">模型读出的「现在」，排程全以它为锚；读错了说明材料里的时间线索没被看到，直接改下方规划文本里的相对时间即可</div>`)}
+        ${checkRow('第二遍对齐修改', alignState === 'done'
+            ? (fixes.length
+                ? `<div>改动 <b>${fixes.length}</b> 处：</div><div class="pp-hit">${fixes.map(s => `<div>${escapeHtml(s)}</div>`).join('')}</div><div class="pp-muted">第二遍（同一份材料当对账清单重审）逐条修正的地方——采用的已是修正后版本</div>`
+                : '<span class="pp-muted">草稿本就全对，未改动</span>')
+            : alignState === 'failed'
+                ? '<span class="pp-muted">第二遍输出异常，保留第一遍结果交付——时间与事实请手动对照检查</span>'
+                : alignState === 'aborted'
+                    ? '<span class="pp-muted">第二遍被中断，保留第一遍结果交付——时间与事实请手动对照检查</span>'
+                    : `<span class="pp-muted">${settings.guidance.alignPass === false ? '（设置里已关闭——本次只跑第一遍）' : '（旧草稿，未经第二遍对齐）'}</span>`)}
         ${checkRow('OOC', ooc?.found && items.length
             ? items.map(it => `<div class="pp-hit"><b>${escapeHtml(it.aspect ?? '')} · ${escapeHtml(it.severity ?? '')}</b><div>${escapeHtml(it.evidence ?? '')}</div><div class="pp-muted">建议：${escapeHtml(it.fix ?? '')}</div></div>`).join('')
             : '<span class="pp-muted">未发现明显 OOC</span>')}
