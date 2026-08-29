@@ -4,7 +4,7 @@
 // 反向依赖本模块拿材料，而 planner.js → injection.js → reactions.js 已成链，再回指会成环）。
 // 「路人反应」小节因此不在这里，由 planner.js 在外层插入（见 planner.materialSections）。
 import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
-import { buildLoreContext } from "./lorebook.js";
+import { buildLoreContext, resolveLorePicks } from "./lorebook.js";
 import { buildMemoryContext, memoryState } from "./memoryTable.js";
 
 // 档位统计（记忆小节标题的口径文字用）：与 buildMemoryContext 同一集合——
@@ -71,11 +71,16 @@ export function gameplaySection(items, header) {
  * @param {Array}  [options.storageItems]      游戏玩法条目（{name, content}）
  * @param {string} [options.activePlan]        进行中剧情全文
  * @param {string[]} [options.historySummaries] 历史剧情摘要（查重用）
+ * @param {string[]} [options.lorePicks]       世界书自选勾选键（「bookId:uid」，第七轮 §6.10）：
+ *                                             勾中的条目整条原文随行成「自选世界书条目」小节，
+ *                                             并从检索命中里让位（自选优先，同一条不进材料两次）；
+ *                                             只有规划向导的分析调用传它，其他调用方一概不带
  * @param {object} [options.headers]           小节标题覆写：{ memoryPurpose, gameplay, activePlan }
  * @param {string[]} [options.enabledIds]      世界书书单覆盖（缺省 = 本对话启用的书单）
  */
-export function materialSections({ memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [], activePlan = '', historySummaries = [], headers = {}, enabledIds } = {}) {
-    const { chatList, hits } = collectPlanningContext({ enabledIds });
+export function materialSections({ memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [], activePlan = '', historySummaries = [], lorePicks = [], headers = {}, enabledIds } = {}) {
+    const picks = resolveLorePicks(lorePicks);
+    const { chatList, hits } = collectPlanningContext({ enabledIds, loreExclude: new Set(picks.map(p => p.key)) });
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets, sheetModes: memoryModes, latestPerSheet: memoryRecent });
     const summaries = (historySummaries ?? []).filter(Boolean);
@@ -84,6 +89,10 @@ export function materialSections({ memoryTags = null, memorySheets = null, memor
         characterSummary() || '（无角色卡）',
         '## 最近对话记录',
         formatChatLog(chatList),
+        ...(picks.length ? [
+            '## 自选世界书条目（用户点名随行的材料：原文整条、照着写——设定与口径以此为准；排列顺序不代表时间先后）',
+            picks.map(p => `【${p.book.name} / ${p.entry.comment}】\n${p.entry.content}`).join('\n\n'),
+        ] : []),
         '## 检索命中的世界书条目',
         buildLoreContext(hits),
         ...(memoryText ? [memorySectionHeader(memoryTags, headers.memoryPurpose, memoryRecent, memoryModes), memoryText] : []),

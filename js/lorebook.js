@@ -169,18 +169,22 @@ export function parseKeys(text) {
  * 常驻条目恒带出：排在最前、不占 maxEntries 名额（多条常驻不挤掉关键词命中），
  * 但仍与命中条目共用 maxChars 字符预算、优先消耗——常驻是每次都在的底料。
  * maxEntries / maxChars 为 0 表示不限制（命中多少带多少 / 不截断）。
+ * excludeKeys（第七轮世界书自选）：「bookId:uid」键集合——自选勾中的条目不再出现在
+ * 检索结果里（同一条两边都有时只走自选小节，自选优先），防同一条目进材料两次。
  */
-export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds } = {}) {
+export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds, excludeKeys } = {}) {
     const opts = settings.retrieval;
     const maxE = maxEntries ?? opts.maxEntries;
     const maxC = maxChars ?? opts.maxChars;
     const haystack = String(scanText ?? '').toLowerCase();
+    const excluded = excludeKeys instanceof Set ? excludeKeys : null;
     const constants = [];
     const keyed = [];
 
     for (const book of enabledBooks(enabledIds)) {
         for (const entry of book.entries) {
             if (entry.disabled || !entry.content) continue;
+            if (excluded?.has(`${book.id}:${entry.uid}`)) continue;
             if (entry.constant) {
                 constants.push({ book, entry });
                 continue;
@@ -222,4 +226,27 @@ export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds } = {
 export function buildLoreContext(hits) {
     if (!hits?.length) return '（本次检索未命中任何世界书条目）';
     return hits.map(h => `【${h.bookName} / ${h.comment}】\n${h.content}`).join('\n\n');
+}
+
+// 世界书条目自选（第七轮 §6.10）：勾选键（「bookId:uid」）→ 现存的 {key, book, entry}。
+// 不看关键词/常驻/书与条目的启用状态——勾选就是唯一口径（自选＝点名，与检索状态无关，
+// 禁用的照样能勾）；书或条目被删后勾选静默失效（找不到就不带），内容为空的不带。
+// 返回已按键去重、按传入顺序排列
+export function resolveLorePicks(keys) {
+    const seen = new Set();
+    const out = [];
+    for (const raw of keys ?? []) {
+        const s = String(raw ?? '');
+        const i = s.indexOf(':');
+        if (i <= 0) continue;
+        const bookId = s.slice(0, i);
+        const uid = s.slice(i + 1);
+        if (seen.has(s)) continue;
+        const book = settings.lorebooks.find(b => b.id === bookId);
+        const entry = book?.entries.find(e => String(e.uid) === String(uid));
+        if (!entry || !entry.content) continue;
+        seen.add(s);
+        out.push({ key: s, book, entry });
+    }
+    return out;
 }

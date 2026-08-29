@@ -156,7 +156,7 @@ export const settingsTab = {
                 <summary title="知识库（自建素材清单，§6.9）的抓取与冷却参数；清单与条目在「知识库」页签管理"><i class="fa-solid fa-lightbulb"></i> 知识库</summary>
                 <div class="pp-grid2">
                     <div>
-                        <label class="pp-label" title="剧情指导页第 1 步「知识库抓取」时，每张勾选的清单各发多少条（轮换制：整张清单洗牌按序发，全部条目各发一次之前不重复、发完一轮自动重洗；不按语境过滤；冷却中的条目本轮跳过；一轮剩余不足时有多少发多少）">每清单抓取条数</label>
+                        <label class="pp-label" title="剧情指导页第 1 步「知识库抓取」时，每张勾选的**抽样**清单各发多少条（轮换制：整张清单洗牌按序发，全部条目各发一次之前不重复、发完一轮自动重洗；不按语境过滤；冷却中的条目本轮跳过；一轮剩余不足时有多少发多少）。全量清单不受此项影响——整表条目全部随行">每清单抓取条数（抽样清单）</label>
                         <input id="pp_set_kb_grab" class="text_pole textarea_compact" type="number" min="1" max="20" />
                     </div>
                     <div>
@@ -203,6 +203,9 @@ export const settingsTab = {
             <hr class="pp-hr" />
             <label class="pp-label" title="「剧情指导 / 随机事件」调用大模型时，附带最近几层对话当上下文（只影响本插件的规划请求，不影响主对话）；0 = 不限（有多少层带多少层）">规划时附带最近几层对话（0 = 不限）</label>
             <input id="pp_set_ctx" class="text_pole textarea_compact" type="number" min="0" max="200" />
+            <hr class="pp-hr" />
+            <label class="pp-label" title="用户构思里没点名数量时，剧情规划的节点（beats）数量下限——规划给到的节点数不得少于这个数，不设上限（节点是后续监听判断的挂载点，多点细排便于跟进执行；示例数量会被模型当上限用，所以只写下限）。用户构思里点名了数量的，以构思为准（一样按「不少于」落实）。0 = 不设下限。默认 5">规划节点下限（0 = 不设）</label>
+            <input id="pp_set_minbeats" class="text_pole textarea_compact" type="number" min="0" max="50" />
             </details>
         </div>
         <div class="pp-section" id="pp_set_preset"></div>
@@ -224,6 +227,7 @@ export const settingsTab = {
         bindNum('#pp_set_maxch', () => settings.retrieval.maxChars, v => settings.retrieval.maxChars = v);
         bindNum('#pp_set_memch', () => settings.retrieval.memChars, v => settings.retrieval.memChars = v);
         bindNum('#pp_set_ctx', () => settings.retrieval.contextLayers, v => settings.retrieval.contextLayers = v);
+        bindNum('#pp_set_minbeats', () => settings.guidance.minBeats, v => settings.guidance.minBeats = Math.min(Math.max(v || 0, 0), 50));
         const thinkOff = container.querySelector('#pp_set_thinkoff');
         thinkOff.checked = settings.api.thinkingOff === true;
         thinkOff.addEventListener('change', () => { settings.api.thinkingOff = thinkOff.checked; save(); });

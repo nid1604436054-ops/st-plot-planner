@@ -28,7 +28,7 @@ const OUTPUT_SCHEMA_BASE = `{
     "plan": {
       "summary": "一句话概括接下来的走向",
       "beats": [
-        { "stage": "阶段名", "content": "该阶段的幕后剧情安排（不出现在对话文本中）" }
+        { "stage": "阶段名", "content": "该阶段的幕后剧情安排（不出现在对话文本中）。不得替 user 编排：不写 user 的动作、台词或心理（对话或构思里 user 已明说的意愿可当前提）；涉及 user 一律写「若 user X，则 Y」的条件式接口，且本节点的核心推进不依赖 user 的回应" }
       ],
       "risks": ["可能跑偏的点；checks 判出、需要后续持续规避的要点也放这里"]__KNOWLEDGE__
     }
@@ -47,14 +47,22 @@ const outputSchema = (withProgress, withKnowledge) => OUTPUT_SCHEMA_BASE.replace
 // 内置指令：保证返回 JSON（程序要解析成检查项 + 规划）。用户预设已全局化——启用中的
 // 由 api.js 的 chatCompletion 出口统一拼进 system 末尾（见 globalPresetBlock），此处不再单独拼。
 // hasActivePlan 为真才要求 progress 字段，与 buildGuidanceMessages 是否附带「进行中剧情」小节同步；
-// hasKnowledge 为真才要求 plan.knowledgeUsed 自报字段（§6.9 用后账），与「知识库材料」小节同步
-export function guidanceSystemPrompt(hasActivePlan = false, hasKnowledge = false) {
+// hasKnowledge 为真才要求 plan.knowledgeUsed 自报字段（§6.9 用后账），与「知识库材料」小节同步；
+// hasSkeleton 为真才带防复刻骨架条款、minBeats>0 才带节点下限条款（均与随行小节/设置同步，
+// 2026-08-31 真机第七轮：时间顺序 / user 不可编排 / 构思硬要求三组无条件常驻——实测病灶全是
+// 系统提示词里没说、模型就按默认分布走）
+export function guidanceSystemPrompt(hasActivePlan = false, hasKnowledge = false, hasSkeleton = false, minBeats = 0) {
     return [
         '你是文字角色扮演的剧情顾问，负责两件事：',
         `1) 检查：结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）、是否与已有剧情重复、文风是否重复${hasActivePlan ? '、正在执行的剧情推进到什么程度' : ''}；`,
         '2) 规划：为后续剧情设计「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
         '要求：判断必须引用对话依据；给出「进行中剧情」时对照它检查进度与重复；给了「随机事件」就将其自然融入规划；给了「路人反应」就视为已发生之事的世界回应口径，规划为其留出呈现空间、不与余波和收束口径冲突；规划要具体、可执行、尊重既有设定；面向当前场景做预编排。',
-        ...(hasKnowledge ? ['给了「知识库材料」小节时：那是用户自建清单里随机抓来的候选素材（反模型偏好用）——选用的素材要自然融入规划，保持条目的核心特征，不生硬罗列、不逐条复述；并在 plan.knowledgeUsed 里如实报出本次选用条目的编号（小节里【编号 x-xx】的写法），一条都没用就给空数组，不算异常。'] : []),
+        '时间顺序：材料各小节与条目的排列顺序不代表时间先后——知识库、世界书、记忆表格各按自己的清单顺序罗列，不构成时间线，不得按罗列顺序安排先后；对话记录或用户构思里给出了当前时间的，一律以它为准排程，接下来的安排从当前时段往后推（现在是上午就排午饭前后，不排晚饭，也不倒排上午）；条目带时段类字段（表头含「时段」或字段值含时间词）的，按该字段排。',
+        'user 不可编排：user 是用户本人扮演的角色，规划只编排角色（char）与世界，不得替 user 决定。三条禁令：①不替 user 做出动作；②不替 user 说出台词或给出回应——「user 答应后」「user 同意之后」这类把 user 的回应写成既成事实的写法同属此列；③不预设 user 的心理反应（user 怎么想、会不会感动，由用户自己写）。唯一豁免：对话记录或用户构思里 user 已明确说出的意愿，可以作为前提使用。涉及 user 的部分只有一种合法写法——条件式接口「若 user X，则 Y」（可以给多个接口、可以分支）；并且每个节点的核心推进必须独立成立、不依赖 user 的任何具体回应：user 接口是挂在节点上的加分分支，不是节点赖以成立的地基，删掉它节点照样走得通。',
+        'user 不可编排的对照示例（学结构、不学内容——示例里的具体事件不要写进规划）：坏：「两人到猫咖，user 抚摸猫咪逗她开心，user 承诺下周再带她来，她感动地靠过来」——替 user 做了动作、许了承诺，节点核心全押在 user 的回应上。好：「两人到猫咖，久违的猫咪围观让她露出少见的放松神态，主动点了两份甜品；若 user 主动逗猫或拍下她与猫的合照，则她顺势把合照设成聊天背景」——节点核心是她自己的状态与行动，user 接口只是加分分支。',
+        ...(minBeats > 0 ? [`节点数量是硬要求：用户构思里点名了数量类要求（节点数、事件数等）的，一律按不少于该数量落实、不得打折；没点名数量时，beats 也不得少于 ${minBeats} 个节点（不设上限——${minBeats} 是下限不是目标值，剧情需要更多就给更多）。`] : []),
+        ...(hasSkeleton ? ['给了「近期草稿骨架」小节时：那是近期被放弃或换掉的规划草稿的骨架清单——新规划的走向、节点顺序与核心桥段不得与其中任何一份高度雷同；要换方向、换顺序、换桥段，不是换个说法把同一版再写一遍。'] : []),
+        ...(hasKnowledge ? ['给了「知识库材料」小节时：那是用户自建清单的候选素材（反模型偏好用），按小节内各分组的口径办——全量清单分组＝该领域内容的完整候选表，规划凡涉及这类内容必须从中选用、不得自拟同类；抽样清单分组＝优先从中选用，选材面没覆盖的方向可以自拟。选用的素材要自然融入规划，保持条目的核心特征，不生硬罗列、不逐条复述；并在 plan.knowledgeUsed 里如实报出本次选用条目的编号（小节里【编号 x-xx】的写法），一条都没用就给空数组，不算异常。'] : []),
         '检查与规划必须耦合：checks 判出的每个问题都要在 plan 里得到处置，判了不改等于白判——OOC 在 beats 里写明怎么拉回人设/事实/关系，剧情与文风重复写明怎么绕开、往哪个新方向走；需要扮演模型后续持续注意的规避要点（如别再重复某类描写）放进 risks；不允许 checks 报了问题而 plan 与之无关。',
         '记忆表格里若已有多条同标签或同类型的既有事件（行尾带标签，如多次约会、多次同类冲突），视为这类事件已经写过：规划可以再安排同类事件，但不要复刻已有记录的流程与桥段，过程或走向须有新意。',
     '文风重复的判定基准：只针对角色（char）的扮演文本——先检查用户（user）近期输入是否自己在重复动作、场景或指令；角色只是跟进用户发起的重复不算文风重复；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判「轻微/明显」，并在 note 里写明用户是否先重复、角色重复了什么。',
@@ -356,13 +364,22 @@ export function materialSections(opts = {}) {
 }
 
 export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', reactionText = '', knowledgePayload = [], activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [] } = options;
-    const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries, reactionText });
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', reactionText = '', knowledgePayload = [], activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [], lorePicks = [], draftSkeletons = [] } = options;
+    const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries, reactionText, lorePicks });
     // 知识库材料小节插在玩法之后、进行中剧情之前（候选素材位；剧情→事件→反应的注入模板序不受影响）
     const kbSection = knowledgeSection(knowledgePayload);
     if (kbSection) {
         const idx = parts.findIndex(p => p.startsWith('## 进行中剧情') || p.startsWith('## 历史剧情摘要'));
         parts.splice(idx === -1 ? parts.length : idx, 0, ...kbSection);
+    }
+    // 近期草稿骨架（第七轮防复刻）：连 roll 收敛的根因＝放弃的草稿不在任何往后看的材料里
+    // （对话/记忆/历史摘要都只记正式剧情）。骨架清单插在剧情类小节之后，新规划不得与之高度雷同
+    const skeletons = (draftSkeletons ?? []).filter(Boolean);
+    if (skeletons.length) {
+        const idx = parts.findIndex(p => p.startsWith('## 进行中剧情') || p.startsWith('## 历史剧情摘要'));
+        parts.splice(idx === -1 ? parts.length : idx, 0,
+            '## 近期草稿骨架（防复刻清单：近期被放弃或换掉的规划草稿，各版一句话概括与节点阶段名——新规划的走向与节点安排不得与其中任何一份高度雷同）',
+            skeletons.map((s, i) => `${i + 1}. ${s}`).join('\n'));
     }
     // 注入模板序固定：剧情 → 事件 → 反应——事件小节插在进行中剧情与路人反应之间
     // （没有进行中剧情时排在材料末尾，仍在反应小节之前），顺序不提供旋钮
@@ -374,7 +391,11 @@ export function buildGuidanceMessages(options = {}) {
     }
     const all = [
         ...parts,
-        ...(previousPlan ? ['## 上一版规划（请按修改意见修订）', previousPlan] : []),
+        // 重新生成的两副面孔（第七轮）：带修改意见＝按意见修订；意见为空＝换一版（上一版随行只是
+        // 为了不与它雷同，不是让它照着续写）——原来无脑「请按修改意见修订」会把模型锚定在上一版上复读
+        ...(previousPlan ? [String(revisionNote ?? '').trim()
+            ? '## 上一版规划（请按修改意见修订）'
+            : '## 上一版规划（换一版：不要沿用它的骨架与内容安排，另行设计——修改意见为空＝要的是全新一版，不是修订）', previousPlan] : []),
         ...(revisionNote ? ['## 修改意见', revisionNote] : []),
         ...(userNote ? ['## 用户剧情构思与补充说明', userNote] : []),
     ];
@@ -393,10 +414,13 @@ export function buildGuidanceMessages(options = {}) {
         });
     }
 
+    // 节点下限（第七轮方案⑤）：设置项「规划节点下限」，0 = 不设；用户构思点名数量时以构思为准
+    // （提示词里已写明点名的按不少于落实，这里的 minBeats 只是没点名时的兜底）
+    const minBeats = Math.min(50, Math.max(0, Math.round(Number(settings.guidance?.minBeats) || 0)));
     return {
         // 预设不在这里拼：启用中的由 chatCompletion 出口统一附加（api.withGlobalPresets），
         // 预览侧用同一个函数拼装，保证「看到的」与「发出的」一致
-        system: guidanceSystemPrompt(Boolean(String(activePlan ?? '').trim()), Boolean(kbSection)),
+        system: guidanceSystemPrompt(Boolean(String(activePlan ?? '').trim()), Boolean(kbSection), skeletons.length > 0, minBeats),
         user: userContent,
         hits: hits.length,
         sections,

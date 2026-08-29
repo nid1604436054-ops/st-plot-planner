@@ -29,9 +29,10 @@ import { storageItemsInEffect } from "../../store.js";
 import { memoryState } from "../../memoryTable.js";
 import { getTavernContext } from "../../context.js";
 import { loadChatData, saveChatData } from "../../chatdata.js";
-import { escapeHtml, estimateTokens } from "../../utils.js";
+import { escapeHtml, estimateTokens, scanUserScripting } from "../../utils.js";
 import { searchToolReady, withGlobalPresets } from "../../api.js";
 import { knowledgeLists, payloadFromIds, grabFromList, entryText, settleCooldown, knowledgeCfg } from "../../knowledge.js";
+import { resolveLorePicks } from "../../lorebook.js";
 import { unitsState, persistUnits, newEventUnit, newReactionUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, eventOriginText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
 
 // 向导状态机：'' 空闲 | collect ① | ready ② 分析前确认 | running 分析实时输出页（不占跳转条步骤）| result ③ | reviewing/report 检查报告
@@ -39,11 +40,13 @@ let step = '';
 const run = {
     note: '',            // 剧情构思方向
     gpIds: null,         // 本次随分析发送的游戏玩法条目 id；null = 未初始化（进第 1 步时默认勾当前生效的）
-    kbIds: [],           // 知识库抓到的条目 id（§6.9）：悬浮面板里抓/踢/重抓，随材料进确认页与生成
+    kbIds: [],           // 知识库抓到的条目 id（§6.9）：悬浮面板里抓/踢/重抓，随材料进确认页与生成（全量清单不走这里——见 wizardKnowledgePayload）
     kbSel: [],           // 「自选」方式下勾上的条目 id（恒为数组、从一条没勾开始、勾谁发谁）
-    kbMode: 'all',       // 采用方式：'all' 全部采用（整把发送、规划模型自己挑）| 'pick' 自选（只发 kbSel 勾上的）——2026-08-30 真机反馈第四轮：全选/让模型挑/点名挑是并列用法，做成显式选择不再硬定单一默认
+    kbMode: 'all',       // 采用方式：'all' 全部采用（整把发送、规划模型自己挑）| 'pick' 自选（只发 kbSel 勾上的）——2026-08-30 真机反馈第四轮：全选/让模型挑/点名挑是并列用法，做成显式选择不再硬定单一默认；只作用于抽样清单（全量清单整表随行、只剩可踢，第七轮）
+    kbKick: [],          // 全量清单里被踢的条目 id（第七轮投喂方式）：踢＝本次不发，整表其余照发；随向导快照留底
     kbSentIds: [],       // 本次分析实际发送的知识条目 id 快照（§6.9 用后账）：冷却结算挪到「确认采用/转隐身注入」时（2026-08-31 真机第五轮）——分析成功只记这份帐，草稿放弃/重写不碰冷却；结算或丢弃后清空
     kbListIds: null,     // 第 1 步勾选的知识库清单 id（按对话记忆存 picks）；null = 未初始化（默认不勾）
+    lorePicks: [],       // 世界书自选勾选键（「bookId:uid」，第七轮 §6.10）：勾中的整条原文随分析进材料；按对话记忆存 picks、随向导快照留底，无冷却
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
     hadActive: false,   // 本次分析发起时是否存在进行中剧情（第 3 步「剧情进度」行只在这种时候显示）
     memModes: null,      // 第 1 步第一层：每张表的召回档位 { [uid]: 'off' 停用 | 'tags' 按标签 | 'always' 常驻全量 }；null = 未动过（全部常驻全量，与旧默认一致）
@@ -129,8 +132,10 @@ function restoreWizard(container) {
         kbIds: Array.isArray(r.kbIds) ? r.kbIds.map(String) : [],
         kbSel: Array.isArray(r.kbSel) ? r.kbSel.map(String) : [],
         kbMode: r.kbMode === 'pick' || (r.kbMode == null && Array.isArray(r.kbSel) && r.kbSel.length > 0) ? 'pick' : 'all',   // 旧快照无此字段：有手勾的按「自选」、没动过的按「全部采用」
+        kbKick: Array.isArray(r.kbKick) ? r.kbKick.map(String) : [],
         kbSentIds: Array.isArray(r.kbSentIds) ? r.kbSentIds.map(String) : [],
         kbListIds: Array.isArray(r.kbListIds) ? r.kbListIds.map(String) : null,
+        lorePicks: Array.isArray(r.lorePicks) ? r.lorePicks.map(String) : [],
         result: r.result ?? null,
         raw: r.raw ?? '',
         hits: r.hits ?? 0,
@@ -468,13 +473,14 @@ function wireUnitAreaCard(cardEl, unit, rerender, refreshCounts) {
 // 读的就是这份按对话存的勾选（第 1 步每次变动立即写回，永远与所见一致）
 function readMemPicks() {
     const p = loadChatData('picks', null);
-    if (!p) return { memModes: null, memTags: [], memRecent: 0, gpIds: null, kbListIds: null };
+    if (!p) return { memModes: null, memTags: [], memRecent: 0, gpIds: null, kbListIds: null, lorePicks: [] };
     return {
         memModes: normalizeMemModes(p.memModes) ?? memModesFromLegacy(p),
         memTags: Array.isArray(p.memTags) ? p.memTags : [],
         memRecent: Math.max(0, Math.round(Number(p.memRecent) || 0)),
         gpIds: Array.isArray(p.gpIds) ? p.gpIds : null,
         kbListIds: Array.isArray(p.kbListIds) ? p.kbListIds.map(String) : null,
+        lorePicks: Array.isArray(p.lorePicks) ? p.lorePicks.map(String) : [],
     };
 }
 
@@ -485,6 +491,7 @@ function applyPicks() {
     run.memRecent = p.memRecent;
     run.gpIds = p.gpIds;
     run.kbListIds = p.kbListIds;
+    run.lorePicks = p.lorePicks;
 }
 
 function savePicks() {
@@ -495,6 +502,7 @@ function savePicks() {
         memRecent: run.memRecent,
         gpIds: run.gpIds,
         kbListIds: run.kbListIds ?? [],
+        lorePicks: run.lorePicks ?? [],
     });
 }
 
@@ -545,7 +553,7 @@ export function resetGuidance() {
     closeViewer();   // 开着的悬浮查看器（两个工具面板/提示词预览）一并关掉，不带到新聊天
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
     Object.assign(run, {
-        note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbSentIds: [], kbListIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+        note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbKick: [], kbSentIds: [], kbListIds: null, lorePicks: [], result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
         memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
     });
     evImports.clear();
@@ -799,13 +807,26 @@ function wizardStorageItems() {
 // 知识库抓取载荷（§6.9）：抓到的条目 id → 发送载荷，只保留「仍在第 1 步勾选中的清单」名下、
 // 按「采用方式」发送的——「全部采用」＝整把发（规划模型自己挑着用，随机候选的主用法，默认）；
 // 「自选」＝只发勾上的（2026-08-30 真机反馈第四轮：两种用法并列成显式选择，不再硬定单一默认）。
+// 全量清单（第七轮投喂方式）不走 kbIds：勾选中的全量清单整表可用条目现场并入（冷却中的跳过、
+// 踢进 kbKick 的本次不发）——「抓取」这个动作对全量清单不存在，发送集永远跟着清单现状走。
 // （取消勾选清单＝这张清单本次不带；条目/清单被删的 id 由 payloadFromIds 静默丢弃）
 function wizardKnowledgePayload() {
     const checked = new Set(run.kbListIds ?? []);
-    const ids = run.kbMode === 'pick'
+    const kicks = new Set(run.kbKick ?? []);
+    const fullIds = new Set();
+    for (const list of knowledgeLists()) {
+        if (list.feed !== 'full' || !checked.has(list.id)) continue;
+        for (const e of list.entries) {
+            if (Number(e.cooldown) > 0 || kicks.has(e.id)) continue;
+            fullIds.add(e.id);
+        }
+    }
+    const sampleIds = run.kbMode === 'pick'
         ? (run.kbIds ?? []).filter(id => (run.kbSel ?? []).includes(id))
         : (run.kbIds ?? []);
-    return payloadFromIds(ids).filter(p => checked.has(p.list.id));
+    // 抽样清单走 kbIds/kbSel；后来改成全量的清单，旧抓取集让位给整表现算（冷却/踢单对它生效）
+    return payloadFromIds([...sampleIds, ...fullIds]).filter(p => checked.has(p.list.id)
+        && (p.list.feed !== 'full' || fullIds.has(p.entry.id)));
 }
 
 // 第 1 步「插入单元」勾选的单元正文（从两工具的暂存池取）：事件进「随机事件」小节、反应进
@@ -901,17 +922,19 @@ function renderCollect(container, main) {
             || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
         ${kbLists.length ? `
-        <label class="pp-label" title="知识库＝自建素材清单（「知识库」页签管理），反模型偏好用。勾选的清单点开「知识库抓取」各按轮换抓一小把（整张清单洗牌按序发，一轮内不重复），随分析发给规划模型；确认采用时选用的条目进冷却（放弃草稿不冷却）。勾选随当前对话记忆保存">知识库清单</label>
+        <label class="pp-label" title="知识库＝自建素材清单（「知识库」页签管理），反模型偏好用。清单分两种投喂方式（「知识库」页签建清单时定、展开区可改）：抽样＝点「知识库抓取」按轮换抓一小把（一轮内不重复）；全量＝整表条目全部随分析发给模型挑（礼物这类「整张候选表都该在场」的清单）。确认采用时选用的条目进冷却（放弃草稿不冷却）。勾选随当前对话记忆保存">知识库清单</label>
         <div class="pp-gd-selp">
             ${kbLists.map(l => {
                 const coolN = l.entries.filter(e => Number(e.cooldown) > 0).length;
-                return `<label title="勾选后这张清单参与抓取（点下方「知识库抓取」抓条目，抓到后逐条勾选采用、随材料发送）"><input type="checkbox" data-c1k="${escapeHtml(l.id)}" ${(run.kbListIds ?? []).includes(l.id) ? 'checked' : ''}/> ${escapeHtml(l.name)}（${l.entries.length} 条${coolN ? ` · ${coolN} 条冷却中` : ''}）</label>`;
+                const feed = l.feed === 'full' ? '全量' : '抽样';
+                return `<label title="勾选后这张清单参与本次规划（${feed}清单——${feed === '全量' ? '整表条目全部随行、单条可踢' : '点下方「知识库抓取」抓条目，抓到后逐条勾选采用'}，随材料发送）"><input type="checkbox" data-c1k="${escapeHtml(l.id)}" ${(run.kbListIds ?? []).includes(l.id) ? 'checked' : ''}/> ${escapeHtml(l.name)}（${feed} · ${l.entries.length} 条${coolN ? ` · ${coolN} 条冷却中` : ''}）</label>`;
             }).join('')}
         </div>` : ''}
         <div class="pp-btn-row">
             <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内生成——掷骰 / 大模型随机 / 按意见生成三键与意见二选一（意见框有字时只剩「按意见生成」能点），生成先出草稿、点草稿上的「立为单元」入池，暂存最多 3 个。大模型随机无条件把事件库已有条目作为防复刻清单随行（不做勾选）。生成材料自动带本页上方同一批，也可勾选导入路人反应的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的；生成的事件必须与它咬合：顺着它描述的世界状态发展、不复写同一件事；仅随机两键生效；已生效注入不自动带，防双算；导入产物正文自带前因，删掉原始单元也不丢）。入池单元在本页下方「插入单元」区点开查看、勾选随分析发送、转隐身注入；采纳规划后暂存不清空，清空键在「插入单元」区">随机事件</span>
             <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见（可选）、点「生成反应卡」出草稿、点草稿上「立为单元」入池（材料自动带本页上方同一批，也可导入随机事件的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的）——导入的事件按将要且一定会发生对待，反应卡围绕它出；导入产物正文自带前因，删掉原始单元也不丢；模型会顺带给浓缩短标题作单元名）。入池单元在本页下方「插入单元」区点开查看与操作——勾选随分析发送 / 转隐身注入（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径，两路互斥）；产物最多暂存 3 个，清空键在「插入单元」区">路人反应</span>
-            <span id="pp_gd_kb_panel" class="menu_button" title="知识库抓取（悬浮面板，与随机事件/路人反应同款交互）：勾选中的每张清单各按轮换抓一小把（条数在「设置 → 知识库」，默认 5；轮换制＝整张清单洗牌按序发，全部条目各发一次之前不重复、发完一轮自动重洗；不按语境过滤；冷却中的条目本轮跳过），抓到的条目在面板里看得见——采用方式二选一：「全部采用」＝整把发给规划模型让它自己挑（默认），「自选」＝你勾哪条发哪条；单条可踢、每张清单可整把换新；发送的随材料进第 2 步确认页。清单与条目在「知识库」页签管理">知识库抓取</span>
+            <span id="pp_gd_kb_panel" class="menu_button" title="知识库抓取（悬浮面板，与随机事件/路人反应同款交互）：抽样清单各按轮换抓一小把（条数在「设置 → 知识库」，默认 5；轮换制＝整张清单洗牌按序发，全部条目各发一次之前不重复、发完一轮自动重洗；不按语境过滤；冷却中的条目本轮跳过），抓到的条目在面板里看得见——采用方式二选一：「全部采用」＝整把发给规划模型让它自己挑（默认），「自选」＝你勾哪条发哪条；单条可踢、每张清单可整把换新。全量清单不抓取——整表可用条目全部随行（模型从中挑、挑中的进冷却；冷却中跳过；单条可踢可还原）。发送的随材料进第 2 步确认页。清单与条目在「知识库」页签管理">知识库抓取</span>
+            <span id="pp_gd_lore_panel" class="menu_button" title="世界书自选（悬浮面板，与知识库抓取同款交互）：按书分组勾条目，勾中的整条原文随分析进材料——「照着写」的材料（性知识/世界观口径这类，每次都该在场），与知识库「选着用」（候选素材、挑中进冷却）分工。不看关键词/常驻/书与条目的启用状态（勾选是唯一口径，禁用的照样能勾）；与检索命中自动去重（自选优先）；勾选随对话记忆保存，无冷却">世界书自选</span>
         </div>
         <div id="pp_gd_c1_units"></div>
         <label class="pp-label" title="已有的想法、约束或重点（可选，随分析发给模型）">剧情构思方向</label>
@@ -945,12 +968,13 @@ function renderCollect(container, main) {
             : `记忆表格 ${st.memChars} 字（${memScopeDesc()}）`;
         const gpDesc = gpItems.length ? ` · 玩法 ${(run.gpIds ?? []).length} 条` : '';
         const kbSeg = (() => { const n = wizardKnowledgePayload().length; return n ? ` · 知识库 ${n} 条` : ''; })();
+        const loreSeg = (() => { const n = resolveLorePicks(run.lorePicks).length; return n ? ` · 自选世界书 ${n} 条` : ''; })();
         const us = unitsState();
         const evN = us.eventUnits.filter(u => u.inPlan).length;
         const rxN = us.reactionUnits.filter(u => u.inPlan).length;
         // 单元数常驻显示（0 也显示）：第 2 步确认页与这里同口径，有没有单元一眼可见
         const unitSeg = ` · 单元：随机事件 ${evN} · 路人反应 ${rxN}`;
-        return `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}${kbSeg}${unitSeg}`;
+        return `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}${kbSeg}${loreSeg}${unitSeg}`;
     };
     // 标签列下方的即时提示：只在该说话时出现（档位/标签没配对上、或标签档要空手）
     const memTipText = () => {
@@ -1061,12 +1085,15 @@ function renderCollect(container, main) {
     const evBtnEl = main.querySelector('#pp_gd_ev_panel');
     const rxBtnEl = main.querySelector('#pp_gd_rx_panel');
     const kbBtnEl = main.querySelector('#pp_gd_kb_panel');
+    const loreBtnEl = main.querySelector('#pp_gd_lore_panel');
     const syncToolBtns = () => {
         const us = unitsState();
         evBtnEl.textContent = us.eventUnits.length ? `随机事件（${us.eventUnits.length}）` : '随机事件';
         rxBtnEl.textContent = us.reactionUnits.length ? `路人反应（${us.reactionUnits.length}）` : '路人反应';
         const kbN = wizardKnowledgePayload().length;
         kbBtnEl.textContent = kbN ? `知识库抓取（${kbN}）` : '知识库抓取';
+        const loreN = resolveLorePicks(run.lorePicks).length;
+        loreBtnEl.textContent = loreN ? `世界书自选（${loreN}）` : '世界书自选';
     };
     syncToolBtns();
     // 第 1 步「插入单元」区：入池单元统一在这里查看与操作（工具面板只管生成，2026-08-26 E8 外置）——
@@ -1113,6 +1140,7 @@ function renderCollect(container, main) {
     evBtnEl.addEventListener('click', () => openEvPanel(onPanelChange));
     rxBtnEl.addEventListener('click', () => openRxPanel(onPanelChange));
     kbBtnEl.addEventListener('click', () => openKbPanel(onPanelChange));
+    loreBtnEl.addEventListener('click', () => openLorePanel(onPanelChange));
 
     // 完整提示词预览走悬浮查看器：按材料类型分块折叠（系统提示词 + 世界书/记忆表格/
     // 最近对话…各一块，块头显示小节名与精确字数），统计行带检索（命中的块自动展开高亮、
@@ -1126,6 +1154,8 @@ function renderCollect(container, main) {
                 eventText: ut.eventText,
                 reactionText: ut.reactionText,
                 knowledgePayload: wizardKnowledgePayload(),
+                lorePicks: run.lorePicks ?? [],   // 世界书自选（第七轮）：预览与真实调用同一批
+                draftSkeletons: draftSkeletonList(),   // 近期草稿骨架（第七轮）：同上，看到的＝发出的
                 activePlan: activeStory()?.planText ?? '',
                 historySummaries: s.history.filter(h => h.id !== s.activeId).map(h => h.summary),
                 memoryTags: wizardMemoryTags(),
@@ -1208,25 +1238,36 @@ function renderReady(container, main) {
     const rxNames = us.reactionUnits.filter(u => u.inPlan).map(u => u.title || '(未命名)');
     const gpNames = wizardStorageItems().map(i => i.name || '(未命名)');
     const ut = wizardUnitTexts();
-    // 知识库细账：抓取面板里勾上的条目按清单分组点名（助手默认：随材料进确认页，与单元/玩法同一核对口径）
+    // 知识库细账：发送的条目按清单分组点名（助手默认：随材料进确认页，与单元/玩法同一核对口径）；
+    // 全量清单只报「全量 N 条」不逐条列编号（整表都在场，列几十个编号没有核对价值——第七轮）
     const kbPayload = wizardKnowledgePayload();
     const kbGroups = new Map();
     for (const p of kbPayload) {
-        const g = kbGroups.get(p.list.name) ?? [];
+        const g = kbGroups.get(p.list) ?? [];
         g.push(`${p.listPos}-${p.entry.code}`);
-        kbGroups.set(p.list.name, g);
+        kbGroups.set(p.list, g);
     }
-    const kbDesc = [...kbGroups.entries()].map(([name, codes]) => `${escapeHtml(name)} ${codes.length} 条（${codes.map(escapeHtml).join('、')}）`).join(' · ');
+    const kbDesc = [...kbGroups.entries()].map(([list, codes]) => list.feed === 'full'
+        ? `${escapeHtml(list.name)} 全量 ${codes.length} 条`
+        : `${escapeHtml(list.name)} ${codes.length} 条（${codes.map(escapeHtml).join('、')}）`).join(' · ');
     // 空手状态点名提醒（不分采用方式）：勾了清单却一条都不发是合法但容易被忘的状态
     const kbListsOn = (run.kbListIds ?? []).length;
     const kbText = kbDesc || (kbListsOn ? `无（第 1 步勾了 ${kbListsOn} 张清单，但还没有要发送的条目——要带材料回第 1 步点「知识库抓取」，不带就这样开始）` : '无');
+    // 世界书自选细账：按书点名条数（原文整条随行，第 1 步「世界书自选」面板里勾的）
+    const lorePicked = resolveLorePicks(run.lorePicks);
+    const loreByBook = new Map();
+    for (const p of lorePicked) loreByBook.set(p.book.name, (loreByBook.get(p.book.name) ?? 0) + 1);
+    const loreText = lorePicked.length
+        ? `${lorePicked.length} 条（${[...loreByBook.entries()].map(([n, c]) => `${escapeHtml(n)}×${c}`).join('、')}）`
+        : '无';
     main.innerHTML = `
     <div class="pp-section">
         <div class="pp-gd-stephead" title="记忆表格、对话层数、世界书命中、预设等其余材料清单在第 1 步「查看完整提示词」弹窗开头"><b>第 2 步 · 分析前确认</b></div>
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的随机事件单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 随机事件：${evNames.length ? escapeHtml(evNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的路人反应单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 路人反应：${rxNames.length ? escapeHtml(rxNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步勾选的游戏玩法条目，作为材料随分析发送，规划按这些规则设计">玩法：${gpNames.length ? escapeHtml(gpNames.join('、')) : '无'}</div>
-        <div class="pp-gd-stat" title="第 1 步「知识库抓取」面板里决定发送的条目（按清单分组，编号＝清单号-条目号；「全部采用」＝整把发送让模型挑、「自选」＝只发勾上的），随材料发送——规划从中选用素材，确认采用时选用的进冷却（放弃草稿不冷却）">知识库：${kbText}</div>
+        <div class="pp-gd-stat" title="第 1 步「知识库抓取」面板里决定发送的条目（抽样清单＝编号逐条点名；全量清单＝整表随行只报条数；编号＝清单号-条目号），随材料发送——规划从中选用素材，确认采用时选用的进冷却（放弃草稿不冷却）">知识库：${kbText}</div>
+        <div class="pp-gd-stat" title="第 1 步「世界书自选」面板里勾的条目（原文整条随材料发送——「照着写」的材料，不挑不冷却；与检索命中自动去重、这边优先），按书点名条数">自选世界书：${loreText}</div>
         <div class="pp-gd-stat" title="联网搜索总开关在「设置」页；开着时分析前先轻量判断是否需要现实信息（或直接检索），纪要附进分析材料">联网搜索：${searchToolActive() ? '开' : '关'}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">开始分析</span>
@@ -1599,12 +1640,15 @@ function clampInjectLayers(v) {
 function openKbPanel(onChange) {
     const body = openViewer('知识库抓取').querySelector('.pp-viewer-body');
     const cfg = knowledgeCfg();
+    const kicks = () => new Set(run.kbKick ?? []);
 
     const listIdsOf = list => new Set(list.entries.map(e => e.id));
     const grabbedOf = list => {
         const ids = listIdsOf(list);
         return (run.kbIds ?? []).filter(id => ids.has(id));
     };
+    // 全量清单（第七轮投喂方式）的本次发送集＝整表可用条目 − 被踢的（现场算，不存 kbIds）
+    const fullSendOf = list => list.entries.filter(e => !(Number(e.cooldown) > 0) && !kicks().has(e.id));
     // kbSel＝「自选」方式下勾上的条目（从一条没勾开始）；首开/重抓新进来的不勾（「全部采用」下不用勾）
     const selSetOf = () => new Set(run.kbSel ?? []);
     const reggrab = list => {
@@ -1626,14 +1670,46 @@ function openKbPanel(onChange) {
         }
         const sel = selSetOf();
         const pick = run.kbMode === 'pick';
-        body.innerHTML = `
+        // 「采用方式」只对抽样清单有意义（全量＝整表都在场，只剩可踢）；全是全量清单时不显示选择器
+        const hasSample = checked.some(l => l.feed !== 'full');
+        const modeSeg = !hasSample ? '' : `
         <div class="pp-gd-ughead">
-            <label class="pp-label" title="两种用法二选一，随向导快照留底（刷新不丢）：让模型从抓到的一把里挑，或你自己点名挑">采用方式</label>
+            <label class="pp-label" title="两种用法二选一，随向导快照留底（刷新不丢）：让模型从抓到的一把里挑，或你自己点名挑。只作用于抽样清单——全量清单整表随行，不在此列">采用方式（抽样清单）</label>
             <span class="pp-seg">
                 <span class="pp-seg-opt${pick ? '' : ' on'}" data-kbmode="all" title="抓到的整把都随本次分析发给规划模型，它自己挑着用——随机抓一把让模型挑＝这个功能的主用法（默认）">全部采用</span>
                 <span class="pp-seg-opt${pick ? ' on' : ''}" data-kbmode="pick" title="你勾哪条发哪条（从一条没勾开始，已勾的随向导留底）；一条不勾＝本次不带知识材料">自选</span>
             </span>
-        </div>` + checked.map(list => {
+        </div>`;
+        body.innerHTML = modeSeg + checked.map(list => {
+            // —— 全量清单：整表展示，单条可踢（踢＝本次不发，可还原），无抓取/重抓/本轮剩 ——
+            if (list.feed === 'full') {
+                const kickSet = kicks();
+                const sending = fullSendOf(list);
+                const chars = sending.reduce((n, e) => n + entryText(list, e).length, 0);
+                const cooling = list.entries.filter(e => Number(e.cooldown) > 0).length;
+                const kicked = list.entries.filter(e => kickSet.has(e.id) && !(Number(e.cooldown) > 0));
+                return `
+            <div class="pp-gd-ughead">
+                <label class="pp-label" title="全量清单（投喂方式在「知识库」页签的清单展开区改）：整表可用条目全部随分析发给规划模型、它从中挑——挑中的进冷却（确认采用时结算）。不抓取不重抓、不占轮换队列；踢掉的本次不发（点「还原」放回来）；冷却中的条目自动跳过">${escapeHtml(list.name)}（全量 ${sending.length} 条 · 约 ${chars} 字${cooling ? ` · ${cooling} 条冷却中跳过` : ''}${kicked.length ? ` · 已踢 ${kicked.length}` : ''}）</label>
+            </div>
+            ${payloadFromIds(sending.map(e => e.id)).filter(p => p.list.id === list.id).map(({ listPos, entry }) => `
+            <div class="pp-kb-erow">
+                <span class="pp-muted pp-kb-ecode">${listPos}-${escapeHtml(entry.code)}</span>
+                <span class="pp-kb-ebody" title="${escapeHtml(entryText(list, entry))}">${escapeHtml(entryText(list, entry) || '（空条目）')}</span>
+                <span class="menu_button" data-kbkick="${escapeHtml(entry.id)}" title="踢掉这条：本次分析不发它（整表其余照发）；重开面板或点「还原」可放回来">踢</span>
+            </div>`).join('') || '<div class="pp-muted">这张清单没有可发送的条目（全部被踢或冷却中）</div>'}
+            ${kicked.length ? `
+            <div class="pp-gd-ughead">
+                <label class="pp-muted">已踢 ${kicked.length} 条（本次不发）</label>
+            </div>
+            ${kicked.map(entry => `
+            <div class="pp-kb-erow pp-kb-unsel">
+                <span class="pp-muted pp-kb-ecode">${escapeHtml(entry.code)}</span>
+                <span class="pp-kb-ebody pp-muted" title="${escapeHtml(entryText(list, entry))}">${escapeHtml(entryText(list, entry) || '（空条目）')}</span>
+                <span class="menu_button" data-kbunkick="${escapeHtml(entry.id)}" title="放回本次发送集">还原</span>
+            </div>`).join('')}` : ''}`;
+            }
+            // —— 抽样清单：原轮换抓取流程 ——
             const grabbed = grabbedOf(list);
             const payload = payloadFromIds(grabbed).filter(p => p.list.id === list.id);
             const selN = grabbed.filter(id => sel.has(id)).length;
@@ -1646,7 +1722,7 @@ function openKbPanel(onChange) {
             }).length;
             return `
             <div class="pp-gd-ughead">
-                <label class="pp-label" title="轮换制：整张清单洗成一条队按序发，全部条目各发一次之前不重复，发完一轮自动重洗开新一轮（新一轮可与上一轮重复）。本轮剩＝这条队里还没发到的条数（含冷却中等着的；轮到时在冷却就跳过出本轮，下轮回归）">${escapeHtml(list.name)}（已抓 ${payload.length}${pick ? ` · 勾上 ${selN}` : ' · 全部发送'} · 可用 ${available} 条 · 本轮剩 ${leftInRound}${cooling ? ` · ${cooling} 条冷却中` : ''}）</label>
+                <label class="pp-label" title="抽样清单 · 轮换制：整张清单洗成一条队按序发，全部条目各发一次之前不重复，发完一轮自动重洗开新一轮（新一轮可与上一轮重复）。本轮剩＝这条队里还没发到的条数（含冷却中等着的；轮到时在冷却就跳过出本轮，下轮回归）">${escapeHtml(list.name)}（已抓 ${payload.length}${pick ? ` · 勾上 ${selN}` : ' · 全部发送'} · 可用 ${available} 条 · 本轮剩 ${leftInRound}${cooling ? ` · ${cooling} 条冷却中` : ''}）</label>
                 <span class="menu_button" data-kbregrab="${escapeHtml(list.id)}" title="这张清单整把换新：丢弃当前抓到的，按轮换队列发下一批（丢掉的和发过的都算本轮已发，要等下一轮才回来；「全部采用」下新一批照旧整把发送；「自选」下新一批默认不勾、要发的自己勾上）">重抓</span>
             </div>
             ${payload.map(({ listPos, entry }) => {
@@ -1659,7 +1735,7 @@ function openKbPanel(onChange) {
                 <span class="menu_button" data-kbkick="${escapeHtml(entry.id)}" title="踢掉这条：从这把里移除、不补抓（「自选」下不勾只是不发、行还在；踢＝这条看得都嫌烦，行都不要见）">踢</span>
             </div>`; }).join('') || '<div class="pp-muted">这张清单还没抓到条目（点「重抓」或回「知识库」页签加条目）</div>'}`;
         }).join('') + `
-        <div class="pp-muted" style="margin-top:6px" title="轮换制随机、无语境过滤（设计定稿）；条数与冷却次数在「设置 → 知识库」">抓取＝每清单按轮换发 ${cfg.grabCount} 条：整张清单洗牌按序发，全部条目各发一次之前不重复，发完一轮自动重洗；冷却中的条目本轮跳过（下轮回归）；重抓＝发下一批，丢掉的要等下一轮；踢掉不补抓。「全部采用」＝整把发给规划模型让它挑着用；「自选」＝你勾哪条发哪条，一条不勾＝本次不带知识材料。发送的条目进第 2 步确认页细账，确认采用时选用的进冷却（放弃草稿不冷却；「知识库」页点冷却徽章可清零）</div>`;
+        <div class="pp-muted" style="margin-top:6px" title="清单的投喂方式（抽样/全量）在「知识库」页签的清单展开区改；条数与冷却次数在「设置 → 知识库」">抽样清单＝每张按轮换发 ${cfg.grabCount} 条（整张清单洗牌按序发，一轮内不重复、发完自动重洗；冷却中的本轮跳过；重抓＝发下一批；踢掉不补抓）——「全部采用」整把发给规划模型让它挑、「自选」你勾哪条发哪条。全量清单＝整表可用条目全部随行（模型从中挑，挑中的确认采用时进冷却；冷却中的自动跳过；踢＝本次不发、可还原）。发送的条目进第 2 步确认页细账，确认采用时选用的进冷却（放弃草稿不冷却；「知识库」页点冷却徽章可清零）</div>`;
 
         body.querySelectorAll('[data-kbmode]').forEach(el => el.addEventListener('click', () => {
             run.kbMode = el.dataset.kbmode;
@@ -1676,8 +1752,20 @@ function openKbPanel(onChange) {
             onChange();
         }));
         body.querySelectorAll('[data-kbkick]').forEach(btn => btn.addEventListener('click', () => {
-            run.kbIds = (run.kbIds ?? []).filter(id => id !== btn.dataset.kbkick);
-            run.kbSel = (run.kbSel ?? []).filter(id => id !== btn.dataset.kbkick);
+            const list = knowledgeLists().find(l => l.entries.some(e => e.id === btn.dataset.kbkick));
+            if (list?.feed === 'full') {
+                // 全量清单：踢＝记进 kbKick（本次不发，可还原）——发送集现场算，不碰 kbIds
+                run.kbKick = [...new Set([...(run.kbKick ?? []), btn.dataset.kbkick])];
+            } else {
+                run.kbIds = (run.kbIds ?? []).filter(id => id !== btn.dataset.kbkick);
+                run.kbSel = (run.kbSel ?? []).filter(id => id !== btn.dataset.kbkick);
+            }
+            persistWizard();
+            render();
+            onChange();
+        }));
+        body.querySelectorAll('[data-kbunkick]').forEach(btn => btn.addEventListener('click', () => {
+            run.kbKick = (run.kbKick ?? []).filter(id => id !== btn.dataset.kbunkick);
             persistWizard();
             render();
             onChange();
@@ -1690,16 +1778,102 @@ function openKbPanel(onChange) {
         }));
     };
 
-    // 首开自动抓：勾选中、kbIds 里还没有它条目的清单各抓一把（重开面板不重抓已抓的）
+    // 首开自动抓：勾选中、kbIds 里还没有它条目的**抽样**清单各抓一把（重开面板不重抓已抓的；
+    // 全量清单不抓取——整表本来就要发，发送集在面板与载荷里现场算）
     let auto = false;
     for (const list of knowledgeLists()) {
         if (!(run.kbListIds ?? []).includes(list.id)) continue;
+        if (list.feed === 'full') continue;
         if (grabbedOf(list).length) continue;
         const { picked } = grabFromList(list, cfg.grabCount);
         run.kbIds = [...(run.kbIds ?? []), ...picked.map(e => e.id)];   // 新抓的不勾，等用户自己勾
         auto = true;
     }
     if (auto) persistWizard();
+    render();
+    onChange();
+}
+
+// ---------------------------------------------------------------------------
+// 世界书自选悬浮面板（第七轮 §6.10，照知识库抓取面板同款交互）：按书分组勾条目，
+// 勾中的整条原文随分析进材料——「照着写」的材料（性知识/世界观口径这类，每次都该在场），
+// 区别于知识库的「选着用」（候选素材、挑中进冷却）。不看关键词/常驻/书与条目的启用状态
+// （勾选是唯一口径，禁用的照样能勾——三档位管的是自动检索那条路，与本面板无关）；
+// 与检索命中自动去重（自选优先）；勾选随对话记忆保存（picks 块），无冷却。
+// 材料小节与发送在 materials.js / planner.js（lorePicks 一路传下去），本面板只管勾选
+// ---------------------------------------------------------------------------
+
+function openLorePanel(onChange) {
+    const body = openViewer('世界书自选').querySelector('.pp-viewer-body');
+    let query = '';
+    const selSet = () => new Set(run.lorePicks ?? []);
+
+    const render = () => {
+        const books = settings.lorebooks ?? [];
+        const sel = selSet();
+        if (!books.length) {
+            body.innerHTML = '<div class="pp-muted">还没有世界书——在「世界书」页签导入或新建后再来</div>';
+            return;
+        }
+        const q = query.trim().toLowerCase();
+        const groupHtml = books.map(book => {
+            const entries = (book.entries ?? []).filter(e => !q
+                || String(e.comment ?? '').toLowerCase().includes(q)
+                || String(e.content ?? '').toLowerCase().includes(q)
+                || (Array.isArray(e.keys) ? e.keys : []).some(k => String(k).toLowerCase().includes(q)));
+            if (!entries.length) return '';
+            const onN = entries.filter(e => sel.has(`${book.id}:${e.uid}`)).length;
+            const allOn = entries.length > 0 && onN === entries.length;
+            return `
+        <div class="pp-gd-ughead">
+            <label class="pp-label" title="整本书一起勾/一起清（已勾＝全勾；再点＝全清）——性知识这类「整本书照着写」的书一键全选"><input type="checkbox" data-lbook="${escapeHtml(book.id)}" ${allOn ? 'checked' : ''} /> ${escapeHtml(book.name)}（已勾 ${onN}/${entries.length}）</label>
+        </div>
+        ${entries.map(e => {
+            const key = `${book.id}:${e.uid}`;
+            const on = sel.has(key);
+            const preview = String(e.content ?? '').replace(/\s+/g, ' ').slice(0, 80);
+            return `
+        <div class="pp-kb-erow${on ? '' : ' pp-kb-unsel'}">
+            <label title="勾上＝这条的原文整条随分析进材料（照着写，不是选着用）"><input type="checkbox" data-lore="${escapeHtml(key)}" ${on ? 'checked' : ''} /></label>
+            <span class="pp-kb-ebody" title="${escapeHtml(String(e.content ?? ''))}">${escapeHtml(String(e.comment ?? `条目 ${e.uid + 1}`))} —— ${escapeHtml(preview)}${String(e.content ?? '').length > 80 ? '…' : ''}</span>
+        </div>`; }).join('')}`;
+        }).join('');
+        body.innerHTML = `
+        <input type="text" class="text_pole textarea_compact" id="pp_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动勾选…" value="${escapeHtml(query)}" style="width:100%" />
+        ${groupHtml || '<div class="pp-muted">没有命中检索词的条目，清空检索词看全部</div>'}
+        <div class="pp-muted" style="margin-top:6px" title="与「知识库抓取」的分工：知识库清单是候选素材（模型挑着用、挑中的进冷却、礼物这类「选着用」的走那边）；自选世界书是照着写的材料（原文整条随行、每次都在、无冷却）。三档位（停用/关键词/常驻）与对话书单管的是自动检索那条路，与本面板无关">勾上＝整条原文随分析进材料（照着写）。不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与「检索命中」自动去重（这边优先，同一条不会进材料两次）。勾选随对话记忆保存（本对话下次规划回来还在），无冷却</div>`;
+
+        // 搜索框就地重画后焦点与光标回位（每轮 render 重新接线，输入不掉链）
+        const qEl = body.querySelector('#pp_lore_q');
+        qEl?.addEventListener('input', () => {
+            query = qEl.value;
+            render();
+            const nq = body.querySelector('#pp_lore_q');
+            nq?.focus();
+            nq?.setSelectionRange(nq.value.length, nq.value.length);
+        });
+        const apply = keys => {
+            run.lorePicks = [...keys];
+            savePicks();
+            persistWizard();
+            render();
+            onChange();
+        };
+        body.querySelectorAll('[data-lore]').forEach(cb => cb.addEventListener('change', () => {
+            const s = selSet();
+            if (cb.checked) s.add(cb.dataset.lore); else s.delete(cb.dataset.lore);
+            apply(s);
+        }));
+        body.querySelectorAll('[data-lbook]').forEach(cb => cb.addEventListener('change', () => {
+            const s = selSet();
+            const book = (settings.lorebooks ?? []).find(b => b.id === cb.dataset.lbook);
+            for (const e of book?.entries ?? []) {
+                const key = `${book.id}:${e.uid}`;
+                if (cb.checked) s.add(key); else s.delete(key);
+            }
+            apply(s);
+        }));
+    };
     render();
     onChange();
 }
@@ -1727,6 +1901,10 @@ async function startAnalyze(container, { revise = false } = {}) {
     run.hadActive = Boolean(activePlan.trim());
     renderMain(container);
     try {
+        // 第七轮防复刻：重 roll（含从第 3 步跳回第 1 步直接再分析）前，被顶掉的旧草稿先入
+        // 骨架账——它没走「放弃保存」，但一样不该被这一版复刻。修订（revise）不走这：
+        // 上一版规划本身会随行（按意见修订/换一版），不需要骨架清单代劳
+        if (!revise) pushDraftSkeleton();
         const ut = wizardUnitTexts();   // 第 1 步「插入单元」勾选的单元正文：事件与反应各自合并成小节材料
         const kbPayload = wizardKnowledgePayload();   // 知识库抓取面板勾选采用的条目（§6.9）：只进本次规划向导
         const data = await runPlotGuidance({
@@ -1736,6 +1914,8 @@ async function startAnalyze(container, { revise = false } = {}) {
             eventText: ut.eventText,
             reactionText: ut.reactionText,
             knowledgePayload: kbPayload,
+            lorePicks: run.lorePicks ?? [],   // 世界书自选（第七轮 §6.10）：勾中的整条原文随行
+            draftSkeletons: draftSkeletonList(),   // 近期草稿骨架（第七轮防复刻）：放弃/换掉的草稿清单随行
             activePlan,
             historySummaries: historySummaries(),
             memoryTags: wizardMemoryTags(),
@@ -1796,12 +1976,45 @@ function settleKbCharge() {
     if (usedN) toastr.info(`知识库：规划选用 ${usedN} 条进冷却（接下来 ${cfg.cooldownGens} 次采用内抓取跳过；「知识库」页点冷却徽章可提前清零）`);
 }
 
+// ---------------------------------------------------------------------------
+// 近期草稿骨架（第七轮防复刻）：放弃/换掉的草稿哪边材料都不在（对话/记忆/历史摘要只记
+// 正式剧情）——连 roll 收敛的根因。入账＝一句话概括＋各节点阶段名（一行一条），最近 5 份
+// 为限；随行成「近期草稿骨架」小节（planner.buildGuidanceMessages），新规划不得与之高度
+// 雷同。确认采用/转隐身注入后清空——草稿上场成为正式剧情后，自然进了往后看的那些材料
+// ---------------------------------------------------------------------------
+
+const DRAFT_SKELETON_MAX = 5;
+
+function draftSkeletonList() {
+    return loadChatData('planDrafts', () => []);
+}
+
+function pushDraftSkeleton() {
+    const plan = run.result?.plan;
+    if (!plan) return false;
+    const stages = (Array.isArray(plan.beats) ? plan.beats : []).map(b => String(b?.stage ?? '').trim()).filter(Boolean);
+    const summary = String(plan.summary ?? '').trim() || '（无概括）';
+    const line = `${summary}——${stages.length ? stages.join('→') : '（无节点）'}`;
+    const list = draftSkeletonList();
+    if (list[list.length - 1] === line) return false;   // 同一份草稿不重复入账
+    list.push(line);
+    if (list.length > DRAFT_SKELETON_MAX) list.splice(0, list.length - DRAFT_SKELETON_MAX);
+    saveChatData('planDrafts', list);
+    return true;
+}
+
+function clearDraftSkeletons() {
+    saveChatData('planDrafts', []);
+}
+
 function renderResult(container, main) {
     const checks = run.result?.checks ?? {};
     const ooc = checks.ooc;
     const items = Array.isArray(ooc?.items) ? ooc.items : [];
     const checkRow = (name, body) => `<div class="pp-gd-check"><b>${name}</b>${body}</div>`;
     const inj = settings.guidance.inject;
+    // 本地黄牌（第七轮）：正则粗扫规划文本里疑似替 user 编排的句子——只提醒不拦截
+    const yellow = scanUserScripting(run.planText);
 
     main.innerHTML = `
     <div class="pp-section">
@@ -1809,6 +2022,10 @@ function renderResult(container, main) {
         ${checkRow('OOC', ooc?.found && items.length
             ? items.map(it => `<div class="pp-hit"><b>${escapeHtml(it.aspect ?? '')} · ${escapeHtml(it.severity ?? '')}</b><div>${escapeHtml(it.evidence ?? '')}</div><div class="pp-muted">建议：${escapeHtml(it.fix ?? '')}</div></div>`).join('')
             : '<span class="pp-muted">未发现明显 OOC</span>')}
+        ${checkRow('user 编排黄牌', yellow.length
+            ? yellow.map(s => `<div class="pp-hit"><b>疑似替 user 编排</b><div>${escapeHtml(s)}</div></div>`).join('')
+                + '<div class="pp-muted">本地粗扫（只提醒不拦截）：上面这些句子疑似替 user 做了动作/说了话/把 user 的回应写成了既成事实；涉及 user 的合法写法只有「若 user X，则 Y」的条件式接口——可改规划文本，也可直接采用</div>'
+            : '<span class="pp-muted">未扫到疑似替 user 编排的句式</span>')}
         ${checkRow('与已有剧情重复', checks.plotRepeat?.found
             ? `<div>${escapeHtml(checks.plotRepeat.note || '存在重复')}</div>`
             : '<span class="pp-muted">未发现重复</span>')}
@@ -1878,10 +2095,12 @@ function renderResult(container, main) {
     main.querySelector('#pp_gd_revise').addEventListener('click', () => startAnalyze(container, { revise: true }));
     main.querySelector('#pp_gd_discard').addEventListener('click', () => {
         // 2026-08-31 真机第五轮：放弃保存不再清知识库抓取——抓到的条目/勾选/方式都留着，
-        // 回第 1 步改改就能原班材料再次分析；只清这份生成结果与它的冷却结算帐（放弃不冷却）
+        // 回第 1 步改改就能原班材料再次分析；只清这份生成结果与它的冷却结算帐（放弃不冷却）。
+        // 第七轮防复刻：被放弃的草稿先入「近期草稿骨架」账——再分析随行，下一版不得复刻它
+        pushDraftSkeleton();
         Object.assign(run, { result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false, research: null, kbSentIds: [] });
         step = 'collect';
-        toastr.info('已丢弃本次生成（构思与第 1 步材料保留——知识库抓到的还在，可直接再次开始分析；冷却没记，选用过的条目不受影响）');
+        toastr.info('已丢弃本次生成（构思与第 1 步材料保留——知识库抓到的还在，可直接再次开始分析；冷却没记；这份草稿的骨架已记入防复刻清单，再分析不会出同一版）');
         renderMain(container);
     });
     main.querySelector('#pp_gd_adopt').addEventListener('click', () => {
@@ -1890,6 +2109,7 @@ function renderResult(container, main) {
             return;
         }
         settleKbCharge();   // 规划正式上场：知识库用后账在这结算（草稿阶段一直没动冷却）
+        clearDraftSkeletons();   // 第七轮防复刻：草稿上场成为正式剧情，骨架清单功成身退
         confirmPlot({
             planText: run.planText,
             summary: run.result?.plan?.summary ?? '',
@@ -1902,7 +2122,7 @@ function renderResult(container, main) {
         // 第 1 步勾选存在对话记忆里，下一轮进第 1 步自动恢复，这里照常清工作副本。
         // 单元池不随采用清空（DESIGN §2.5）：清理由各工具面板的一键清理键手动执行
         Object.assign(run, {
-            note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbSentIds: [], kbListIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+            note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbKick: [], kbSentIds: [], kbListIds: null, lorePicks: [], result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
             memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
         });
         report = null;
@@ -1917,6 +2137,7 @@ function renderResult(container, main) {
             return;
         }
         settleKbCharge();   // 转注入也是正式上场（与「确认采用」共用结算，同一份草稿只结一次）
+        clearDraftSkeletons();   // 同上：上场了就不再需要防它复刻（助手默认，可驳）
         addInjection({
             id: newId('inj-'),
             label: `剧情规划 ${new Date().toLocaleTimeString()}`,

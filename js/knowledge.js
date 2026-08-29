@@ -34,10 +34,12 @@ export function findList(id) {
 }
 
 /**
- * 新建清单。fields = 表头字段名数组（自定义：字段名任意，导入时定死永不迁移）。
+ * 新建清单。fields = 表头字段名数组（自定义：字段名任意，导入时定死永不迁移）；
+ * feed = 投喂方式（2026-08-31 真机第七轮）：'sample' 抽样（默认，轮换抓一小把让模型挑）|
+ * 'full' 全量（整表条目全部随分析发给模型挑，不消费轮换队列——礼物这类「整张候选表都该在场」的清单）。
  * 名字与字段不合法直接抛错（调用方 toast）。
  */
-export function createList(name, fields) {
+export function createList(name, fields, { feed = 'sample' } = {}) {
     const listName = String(name ?? '').trim().slice(0, 30);
     if (!listName) throw new Error('清单名不能为空');
     const clean = [...new Set((fields ?? []).map(f => String(f ?? '').trim()).filter(Boolean))].map(f => f.slice(0, 20));
@@ -47,6 +49,7 @@ export function createList(name, fields) {
         id: newId('kb-'),
         name: listName,
         fields: clean,
+        feed: feed === 'full' ? 'full' : 'sample',
         entries: [],
         nextCode: 1,
         createdAt: Date.now(),
@@ -54,6 +57,15 @@ export function createList(name, fields) {
     knowledgeLists().push(list);
     save();
     return list;
+}
+
+// 改投喂方式（清单展开区可改）：全量清单不抓取不重抓、整表随行（冷却中的照样跳过）；
+// 已在向导里抓到的抽样条目不受影响——本次发送按新方式在向导侧现算
+export function setListFeed(id, feed) {
+    const list = findList(id);
+    if (!list) return;
+    list.feed = feed === 'full' ? 'full' : 'sample';
+    save();
 }
 
 export function renameList(id, name) {
@@ -138,6 +150,12 @@ export function updateEntry(listId, entryId, values) {
  * @returns {{picked:Array, available:number}} available = 冷却外的全部条目数（面板提示用）
  */
 export function grabFromList(list, n) {
+    // 全量清单（第七轮）：整表可用条目一次给齐，不消费轮换队列、不抓取不重抓——
+    // 「抓取」这个动作在全量下不存在，调用方的面板对全量清单也不显示抓取/重抓/本轮剩
+    if (list?.feed === 'full') {
+        const available = (list.entries ?? []).filter(e => !(Number(e.cooldown) > 0));
+        return { picked: available, available: available.length };
+    }
     const wanted = Math.max(0, Math.round(n) || 0);
     const entries = list?.entries ?? [];
     const available = entries.filter(e => !(Number(e.cooldown) > 0));
@@ -186,14 +204,34 @@ export function payloadFromIds(ids) {
     return out;
 }
 
-// 材料小节（planner.js 插进「进行中剧情」之前；只进规划向导，其他调用方一概不带）
+// 材料小节（planner.js 插进「进行中剧情」之前；只进规划向导，其他调用方一概不带）。
+// 按投喂方式分组（第七轮）：全量清单＝硬口径（该领域内容必须从中选、不得自拟同类）、
+// 抽样清单＝软口径（优先选用、没覆盖的方向可自拟）；两种清单同场时各成一个分组、各自带口径。
+// 小节标题同时声明「排列顺序不代表时间先后」——第七轮实测病灶：清单按序拼接被模型当时间线读
 export function knowledgeSection(payload) {
-    const lines = (payload ?? []).map(({ listPos, list, entry }) =>
-        `【编号 ${listPos}-${entry.code}】${entryText(list, entry) || '（空条目）'}`);
-    if (!lines.length) return null;
+    const items = payload ?? [];
+    const linesOf = arr => arr.map(({ listPos, list, entry }) =>
+        `【编号 ${listPos}-${entry.code}】${entryText(list, entry) || '（空条目）'}`).join('\n');
+    const groups = [];
+    const full = items.filter(p => p.list.feed === 'full');
+    const sample = items.filter(p => p.list.feed !== 'full');
+    if (full.length) {
+        const names = [...new Set(full.map(p => p.list.name))].join('、');
+        groups.push(
+            `### 全量清单（${names}）：下面是这张（些）清单的完整候选表——规划凡涉及这类内容，必须从下列条目里选用，不得自拟同类`,
+            linesOf(full),
+        );
+    }
+    if (sample.length) {
+        groups.push(
+            '### 抽样清单：从用户清单里随机抽出的候选素材——优先从下列条目里选用，选材面没覆盖的方向可以自拟',
+            linesOf(sample),
+        );
+    }
+    if (!groups.length) return null;
     return [
-        '## 知识库材料（从用户清单随机抓取的候选素材：规划从中选用并自然融入——保持条目核心特征，不生硬罗列、不改成清单复述）',
-        lines.join('\n'),
+        '## 知识库材料（用户自建清单的候选素材：按各分组的口径选用并自然融入规划——保持条目核心特征，不生硬罗列、不逐条复述；条目的排列顺序不代表时间先后，排程看时间信息不看罗列顺序）',
+        groups.join('\n'),
     ];
 }
 

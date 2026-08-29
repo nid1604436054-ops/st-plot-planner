@@ -37,6 +37,7 @@ const DEFAULTS = {
             expires: 'never',   // 'never' 永久 | 'layers' N 层后过期
             layers: 20,
         },
+        minBeats: 5,        // 规划节点数下限（第七轮：用户构思没点名数量时的兜底；节点是将来监听挂载的判断点——0 = 不设下限）
     },
     events: {
         branches: {         // 掷骰三板块：每次掷骰先在勾选板块里按权重抽一个，再走该板块的抽取逻辑
@@ -99,6 +100,7 @@ function ensureDefaults() {
     store.api.profiles ??= [];        // 老安装补供应商方案列表
     store.retrieval.memChars ??= 4000;
     store.guidance.inject ??= { depth: 4, role: 'system', expires: 'never', layers: 20 };
+    store.guidance.minBeats ??= 5;   // 老安装补规划节点下限（第七轮，默认 5）
     store.storageScanLayers ??= 20;   // 老安装补玩法触发词扫描窗口（沿用此前写死的 20）
     store.storageConsult ??= { idea: '', usePlan: false, useGp: false, draft: null };   // 玩法咨询的思路/材料勾选/草案（随全局设置留底）
     store.lorebookTrash ??= [];       // 老安装补世界书回收站

@@ -15,7 +15,7 @@
 // 结构化导入长草稿自动分批＋解析报错带解析器原文（截断输出补闭合抢救前段）。
 import { settings, save } from "../../settings.js";
 import {
-    knowledgeLists, findList, createList, renameList, deleteList,
+    knowledgeLists, findList, createList, renameList, deleteList, setListFeed,
     addEntries, deleteEntry, updateEntry, entryText, structureImport, clearCooldown,
 } from "../../knowledge.js";
 import { escapeHtml } from "../../utils.js";
@@ -57,7 +57,8 @@ function tagTokens(v) {
 function listRowHtml(list) {
     const cooling = list.entries.filter(e => Number(e.cooldown) > 0).length;
     const open = view?.listId === list.id;   // 条目区/导入区任一展开都算开（箭头朝下）
-    const meta = `${list.entries.length} 条${cooling ? ` · ${cooling} 条冷却中` : ''} · 表头：${list.fields.join('、')}`;
+    const feedName = list.feed === 'full' ? '全量' : '抽样';
+    const meta = `${list.entries.length} 条${cooling ? ` · ${cooling} 条冷却中` : ''} · ${feedName} · 表头：${list.fields.join('、')}`;
     return `
     <div class="pp-item pp-kb-lrow" data-klist="${escapeHtml(list.id)}" title="点这一行展开/收起条目">
         <span class="menu_button pp-kb-chev fa-solid ${open ? 'fa-chevron-down' : 'fa-chevron-right'}" data-ktoggle="${escapeHtml(list.id)}" title="展开/收起条目"></span>
@@ -183,6 +184,10 @@ export const knowledgeTab = {
             <div class="pp-kb-entries">
                 <div class="pp-kb-toolrow">
                     <input type="text" id="pp_kb_query" class="text_pole textarea_compact" placeholder="搜索编号或任意字段内容…" value="${escapeHtml(query)}" style="flex:1 1 auto" />
+                    <span class="pp-seg" id="pp_kb_feed" title="这张清单怎么随规划发送（建好后随时可改）：抽样＝「知识库抓取」按轮换抓一小把让模型挑（一轮内不重复）；全量＝整表条目全部随分析发给模型挑、挑中的进冷却（冷却中的自动跳过）——礼物这类「整张候选表都该在场」的清单用全量">
+                        <span class="pp-seg-opt${viewList.feed === 'full' ? '' : ' on'}" data-kfeed="sample">抽样</span>
+                        <span class="pp-seg-opt${viewList.feed === 'full' ? ' on' : ''}" data-kfeed="full">全量</span>
+                    </span>
                     <span class="menu_button" id="pp_kb_add" title="手动添加一条空条目，插到条目列表最上面（展开填写各字段）"><i class="fa-solid fa-plus"></i> 添加条目</span>
                     <span class="menu_button" id="pp_kb_import" title="粘贴外部起草的原始文本，模型照表头（${escapeHtml(viewList.fields.join('、'))}）结构化成条目草稿，审后入库">导入</span>
                 </div>
@@ -196,6 +201,10 @@ export const knowledgeTab = {
             <div class="pp-kb-toolrow">
                 <input type="text" id="pp_kb_newname" class="text_pole textarea_compact" placeholder="新清单名，如：约会地点" style="flex:1 1 140px" />
                 <input type="text" id="pp_kb_newfields" class="text_pole textarea_compact" placeholder="表头字段，顿号分隔，如：名字、说明、标签" style="flex:2 1 260px" title="每张清单自定义表头（字段名任意定）——新建后定死、永不迁移；模型结构化导入时照它填，抓取按条抓" />
+                <span class="pp-seg" id="pp_kb_newfeed" title="投喂方式（建好后随时在清单展开区改）：抽样＝规划时按轮换抓一小把让模型挑；全量＝整表条目全部发给模型挑、挑中的进冷却——礼物这类清单用全量">
+                    <span class="pp-seg-opt on" data-newfeed="sample">抽样</span>
+                    <span class="pp-seg-opt" data-newfeed="full">全量</span>
+                </span>
                 <span class="menu_button" id="pp_kb_newcreate" title="建一张空清单，随后在展开区的「导入」里粘贴草稿结构化，或手动添加条目"><i class="fa-solid fa-plus"></i> 新建清单</span>
             </div>
             ${lists.map(list => listRowHtml(list) + (viewList?.id === list.id ? panelHtml : '')).join('')}
@@ -262,19 +271,25 @@ export const knowledgeTab = {
             if (e.key === 'Escape') { renamingId = null; rerender(); }
         });
 
-        // 新建清单：名字 + 表头（顿号/逗号分隔）
+        // 新建清单：名字 + 表头（顿号/逗号分隔）+ 投喂方式（第七轮：抽样/全量二选一，建好可改）
+        let newFeed = 'sample';
+        const newFeedSeg = container.querySelector('#pp_kb_newfeed');
+        newFeedSeg?.querySelectorAll('.pp-seg-opt').forEach(opt => opt.addEventListener('click', () => {
+            newFeed = opt.dataset.newfeed;
+            newFeedSeg.querySelectorAll('.pp-seg-opt').forEach(o => o.classList.toggle('on', o === opt));
+        }));
         container.querySelector('#pp_kb_newcreate').addEventListener('click', () => {
             const name = container.querySelector('#pp_kb_newname').value;
             const fields = container.querySelector('#pp_kb_newfields').value.split(/[、,，]/);
             try {
-                const list = createList(name, fields);
+                const list = createList(name, fields, { feed: newFeed });
                 container.querySelector('#pp_kb_newname').value = '';
                 container.querySelector('#pp_kb_newfields').value = '';
                 view = { type: 'import', listId: list.id };   // 新建后直接进导入区
                 query = ''; tagFilter = null; editingEntryId = null;
                 persistUi();
                 rerender();
-                toastr.success(`清单「${list.name}」已建好（表头：${list.fields.join('、')}）——粘贴草稿开始导入`);
+                toastr.success(`清单「${list.name}」已建好（${list.feed === 'full' ? '全量' : '抽样'} · 表头：${list.fields.join('、')}）——粘贴草稿开始导入`);
             } catch (err) {
                 toastr.warning(String(err.message ?? err));
             }
@@ -284,9 +299,20 @@ export const knowledgeTab = {
         if (view?.type === 'entries' && viewList) this.wireEntries(container, viewList, rerender);
         if (view?.type === 'import' && viewList) this.wireImport(container, viewList, rerender);
     },
-    // 条目区接线：搜索就地刷新列表（输入框在刷新区外不掉焦点）/ 标签筛选 / 行展开编辑 / 删除 / 手动添加
+    // 条目区接线：搜索就地刷新列表（输入框在刷新区外不掉焦点）/ 标签筛选 / 行展开编辑 / 删除 / 手动添加 / 投喂方式切换
     wireEntries(container, list, rerender) {
         const elist = container.querySelector('#pp_kb_elist');
+        // 投喂方式切换（第七轮）：抽样/全量二段钮，点一下即改即存
+        const feedSeg = container.querySelector('#pp_kb_feed');
+        feedSeg?.querySelectorAll('.pp-seg-opt').forEach(opt => opt.addEventListener('click', () => {
+            const next = opt.dataset.kfeed;
+            if (list.feed === next) return;
+            setListFeed(list.id, next);
+            rerender();
+            toastr.info(next === 'full'
+                ? `「${list.name}」改为全量：整表条目全部随分析发给模型挑（冷却中的自动跳过），不再抓取/重抓、不占轮换队列`
+                : `「${list.name}」改为抽样：规划时在「知识库抓取」面板按轮换抓一小把`);
+        }));
         const refreshList = () => {
             if (!elist) { rerender(); return; }
             elist.innerHTML = entriesListHtml(list);

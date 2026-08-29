@@ -131,6 +131,26 @@ export function fingerprint(text) {
     return `${s.length} 字 · ${h.toString(16).padStart(8, '0')}`;
 }
 
+// user 编排黄牌扫描（第七轮 user 不可编排的本地粗扫）：正则扫规划文本里「替 user 编排」的
+// 句式，逐句亮牌——只提醒不拦截，采用与否仍由用户定（模型侧条款在规划系统提示词与 beats
+// 字段说明，这里是给人工二检的最后一道肉眼辅助）。「若 user X，则 Y」是唯一合法写法，
+// 扫描时让行（lead 以 若/如果/一旦/当 结尾的不算）。纯逻辑放 utils：离线测试台可直接覆盖
+export function scanUserScripting(text) {
+    const hits = [];
+    const seen = new Set();
+    const clauseRe = /[^\n，。；]*user[^\n，。；]*(?:说|说道|开口|回答|答道|问|答应|同意|承诺|承认|拒绝|主动|提出|邀请|帮)[^\n，。；]*/gi;
+    for (const m of String(text ?? '').matchAll(clauseRe)) {
+        const clause = m[0];
+        const lead = clause.slice(0, clause.toLowerCase().indexOf('user')).trim();
+        if (/(若|如果|一旦|当)$/.test(lead)) continue;   // 「若 user 主动…」＝合法的条件式接口
+        const key = clause.trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        hits.push(key);
+    }
+    return hits;
+}
+
 export function readFileAsText(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();

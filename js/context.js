@@ -38,10 +38,12 @@ export function formatChatLog(list) {
 // 最近对话取 contextLayers 层，世界书检索只扫其中最近 scanDepth 层（0 = 不限）。
 // 以后改检索口径只动这里，各调用方不再各写一遍。
 // enabledIds：调用方自带书单时用它覆盖本对话的启用书单（反应卡的独立勾选用；缺省 = 本对话书单）
-export function collectPlanningContext({ enabledIds } = {}) {
+// loreExclude（第七轮世界书自选）：「bookId:uid」键集合——自选勾中的条目从检索结果里让位
+// （自选优先，同一条不进材料两次），透传给 scanLorebooks
+export function collectPlanningContext({ enabledIds, loreExclude } = {}) {
     const chatList = collectRecentChat(settings.retrieval.contextLayers);
     const scanText = formatChatLog(chatList.slice(-settings.retrieval.scanDepth));
-    const hits = scanLorebooks(scanText, { enabledIds: enabledIds ?? chatEnabledBookIds() });
+    const hits = scanLorebooks(scanText, { enabledIds: enabledIds ?? chatEnabledBookIds(), excludeKeys: loreExclude });
     return { chatList, scanText, hits };
 }
 
