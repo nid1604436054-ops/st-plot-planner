@@ -446,7 +446,7 @@ export function buildGuidanceMessages(options = {}) {
 /**
  * 运行一次剧情规划分析（检查 + 设计）。参数见 buildGuidanceMessages。
  * @param {AbortSignal} [options.signal]       中断（运行页「中断」键）：一路传到 fetch
- * @param {(reasonChars:number)=>void} [options.onReasoning] 流式思考增量累计回调（诊断「关闭思考」是否被执行）
+ * @param {(reasonText:string)=>void} [options.onReasoning] 流式思考增量累计回调，收思考全文（长度即字数；诊断「关闭思考」是否被执行）
  * @returns {Promise<{result: object, raw: string, hits: number, usage: object, search: object|null}>}
  *          usage/search＝本次全部调用的实报账单与检索信息（界面留页展示用）
  */

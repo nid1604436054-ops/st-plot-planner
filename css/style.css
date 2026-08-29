@@ -544,7 +544,8 @@
     font-size: 0.9em;
 }
 
-/* 分析/检查中的流式输出区：模型原始输出（JSON）逐字滚入，限高滚动、自动贴底 */
+/* 分析/检查中的流式输出区：模型原始输出（JSON）逐字滚入，限高滚动；
+   贴底跟随见 updateStreamView（第九轮改为「在底才跟、翻上不顶」） */
 .pp-gd-stream {
     max-height: 280px;
     overflow-y: auto;
@@ -552,6 +553,22 @@
     word-break: break-word;
     font-size: 1em;
     margin: 6px 0 0;
+}
+
+/* 流式框外包一层（第九轮）：给「回到底部」浮键定位 */
+.pp-gd-streamwrap {
+    position: relative;
+}
+
+/* 「回到底部」浮键：翻上去看旧输出时出现在流式框右下角，贴底跟随时隐藏 */
+.pp-gd-tobot {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    padding: 3px 10px;
+}
+.pp-gd-tobot[hidden] {
+    display: none;   /* 酒馆的 menu_button 若带 display 样式会盖过 [hidden]，这里钉死 */
 }
 
 /* 运行状态条（第八轮）：模型名 · 用时 · 思考计数 · 中断键，占满一行不换页宽 */

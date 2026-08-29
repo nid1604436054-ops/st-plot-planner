@@ -513,6 +513,7 @@ let analyzeToken = 0;
 let analyzeBusy = false;
 let streamText = '';
 let streamStage = '';
+let streamReason = '';   // 思考全文（第九轮）：流式页「【思考 N 字】」段上屏用；正文与思考分开收
 
 // 运行状态条（2026-08-31 第八轮真机反馈：分析途中没有中断键、看不到运行状态/用时/token/
 // 模型名，报错只有一闪而过的 toast 不留页）。runMeta 随每次分析/检查重置；报错与中断
@@ -547,6 +548,12 @@ function usageText(u) {
     if (!u) return '';
     if (u.promptTokens || u.completionTokens) return `输入 ${Number(u.promptTokens || 0).toLocaleString()} · 输出 ${Number(u.completionTokens || 0).toLocaleString()} tokens（实报）`;
     return u.streamNoUsage ? '无实报 token（流式未回传 usage）' : '';
+}
+
+// 思考字数的账单段（结果页/报告页头部共用，第九轮）：思考过就报字数；「关闭思考」开着
+// 且为 0 也报——事后查「上次到底思考没有」不用一直盯着运行条
+function thinkMetaText(m) {
+    return m && (m.thinkChars > 0 || m.thinkingOff) ? ` · 思考 ${m.thinkChars} 字` : '';
 }
 
 // 运行条实时刷新（用时 + 思考计数）；token 实报只在调用结束才知道，结束后由横幅/结果页展示
@@ -592,7 +599,10 @@ function renderRunBanner(container) {
     });
 }
 
-function updateStreamView(token) {
+// 贴底跟随（第九轮真机反馈：旧版每来一个字都把滚动条拽回底部，翻上去看已输出内容根本
+// 看不成）：只有看的人本来就在最底下才跟着滚；翻上去了就不动，右下角给「回到底部」键
+// 随时跳回最新。force＝运行页刚挂载（跳走再回来）时直接给最新输出
+function updateStreamView(token, force = false) {
     if (token !== analyzeToken) return;
     const outEl = document.getElementById('pp_gd_run_stream');
     if (!outEl) return;
@@ -600,8 +610,15 @@ function updateStreamView(token) {
     if (stageEl) stageEl.textContent = streamStage === 'gate'
         ? '联网判断/检索中……'
         : `模型输出中 · 已接收 ${streamText.length} 字`;
-    outEl.textContent = streamText || '等待模型输出……';
-    outEl.scrollTop = outEl.scrollHeight;
+    const nearBottom = force || outEl.scrollHeight - outEl.scrollTop - outEl.clientHeight < 48;
+    // 思考原文上屏（第九轮）：之前只计数不显示，「思考 N 字」在涨却无处可看——现在思考
+    // 全文带段头排在正文前面，翻上去就能边看出流边核对是不是真在思考
+    outEl.textContent = streamReason
+        ? `【思考 ${streamReason.length} 字】\n${streamReason}\n\n【正文】\n${streamText || '等待模型输出……'}`
+        : (streamText || '等待模型输出……');
+    if (nearBottom) outEl.scrollTop = outEl.scrollHeight;
+    const botEl = document.getElementById('pp_gd_run_tobot');
+    if (botEl) botEl.hidden = nearBottom;
 }
 
 export const guidanceTab = {
@@ -830,10 +847,17 @@ function renderStepPage(container, main) {
                 <span class="menu_button" id="pp_gd_run_abort" title="中断本次调用：页面停留在半途输出上（报「已中断」横幅，可再试一次）；中断前已开始/完成的调用与已生成的部分，服务商照常计费"><i class="fa-solid fa-stop"></i> 中断</span>
             </div>
             <div id="pp_gd_run_banner"></div>
-            <pre id="pp_gd_run_stream" class="pp-gd-stream pp-muted">等待模型输出……</pre>
+            <div class="pp-gd-streamwrap">
+                <pre id="pp_gd_run_stream" class="pp-gd-stream pp-muted">等待模型输出……</pre>
+                <span class="menu_button pp-gd-tobot" id="pp_gd_run_tobot" hidden title="跳回最新输出：翻上去看的时候输出还在继续，不会再把你顶下来"><i class="fa-solid fa-arrow-down"></i> 回到底部</span>
+            </div>
         </div>`;
         main.querySelector('#pp_gd_run_abort').addEventListener('click', () => runCtl?.abort());
-        updateStreamView(analyzeToken);
+        main.querySelector('#pp_gd_run_tobot').addEventListener('click', () => {
+            const el = document.getElementById('pp_gd_run_stream');
+            if (el) el.scrollTop = el.scrollHeight;
+        });
+        updateStreamView(analyzeToken, true);
         updateRunBar(analyzeToken);
         renderRunBanner(container);
         return;
@@ -843,7 +867,7 @@ function renderStepPage(container, main) {
     if (step === 'report' && report) {
         main.innerHTML = `
         <div class="pp-section">
-            <b>检查报告</b>${runMeta?.state === 'done' && runMeta.kind === 'review' ? `<span class="pp-muted">模型 ${escapeHtml(runMeta.model)} · 用时 ${runDurText()} · ${usageText(runMeta.usage) || '无实报 token'}</span>` : ''}
+            <b>检查报告</b>${runMeta?.state === 'done' && runMeta.kind === 'review' ? `<span class="pp-muted">模型 ${escapeHtml(runMeta.model)} · 用时 ${runDurText()}${thinkMetaText(runMeta)} · ${usageText(runMeta.usage) || '无实报 token'}</span>` : ''}
             ${reportCardHtml(report)}
             <div class="pp-btn-row">
                 <span id="pp_gd_rp_again" class="menu_button">重新检查</span>
@@ -2010,6 +2034,7 @@ async function startAnalyze(container, { revise = false } = {}) {
     analyzeBusy = true;
     streamText = '';
     streamStage = '';
+    streamReason = '';
     runCtl = new AbortController();
     startRunMeta('analysis', { revise });
     step = 'running';
@@ -2040,7 +2065,7 @@ async function startAnalyze(container, { revise = false } = {}) {
             storageItems: wizardStorageItems(),
             onDelta: t => { streamText = t; updateStreamView(token); },
             onStage: s => { streamStage = s; updateStreamView(token); },
-            onReasoning: n => { if (runMeta) { runMeta.thinkChars = n; updateRunBar(token); } },
+            onReasoning: t => { streamReason = t; if (runMeta) runMeta.thinkChars = t.length; updateRunBar(token); updateStreamView(token); },
             signal: runCtl.signal,   // 运行页「中断」键（第八轮）：一路传到 fetch
             // 打回重写不吃预跑缓存：修改意见可能把检索方向带偏，重写一律重新判断
             researchPrefetch: revise ? null : run.research,
@@ -2147,7 +2172,7 @@ function renderResult(container, main) {
 
     main.innerHTML = `
     <div class="pp-section">
-        <div class="pp-gd-stephead"><b>第 3 步 · 人工二检</b><span class="pp-muted">世界书命中 ${run.hits} 条</span>${runMeta?.state === 'done' && runMeta.kind === 'analysis' ? `<span class="pp-muted" title="本次分析用的模型、用时与 token 实报（联网判断/检索的调用也计在内）">模型 ${escapeHtml(runMeta.model)} · 用时 ${runDurText()} · ${usageText(runMeta.usage) || '无实报 token'}</span>` : ''}</div>
+        <div class="pp-gd-stephead"><b>第 3 步 · 人工二检</b><span class="pp-muted">世界书命中 ${run.hits} 条</span>${runMeta?.state === 'done' && runMeta.kind === 'analysis' ? `<span class="pp-muted" title="本次分析用的模型、用时、思考字数与 token 实报（联网判断/检索的调用也计在内）">模型 ${escapeHtml(runMeta.model)} · 用时 ${runDurText()}${thinkMetaText(runMeta)} · ${usageText(runMeta.usage) || '无实报 token'}</span>` : ''}</div>
         ${checkRow('OOC', ooc?.found && items.length
             ? items.map(it => `<div class="pp-hit"><b>${escapeHtml(it.aspect ?? '')} · ${escapeHtml(it.severity ?? '')}</b><div>${escapeHtml(it.evidence ?? '')}</div><div class="pp-muted">建议：${escapeHtml(it.fix ?? '')}</div></div>`).join('')
             : '<span class="pp-muted">未发现明显 OOC</span>')}
@@ -2300,6 +2325,7 @@ async function reviewStory(container) {
     const token = ++analyzeToken;
     streamText = '';
     streamStage = '';
+    streamReason = '';
     runCtl = new AbortController();
     startRunMeta('review');
     step = 'reviewing';
@@ -2315,7 +2341,7 @@ async function reviewStory(container) {
             memoryRecent: picks.memRecent,
             onDelta: t => { streamText = t; updateStreamView(token); },
             onStage: s => { streamStage = s; updateStreamView(token); },
-            onReasoning: n => { if (runMeta) { runMeta.thinkChars = n; updateRunBar(token); } },
+            onReasoning: t => { streamReason = t; if (runMeta) runMeta.thinkChars = t.length; updateRunBar(token); updateStreamView(token); },
             signal: runCtl.signal,   // 运行页「中断」键（第八轮）
         });
         if (token !== analyzeToken) return;   // 期间切了聊天：报告丢弃

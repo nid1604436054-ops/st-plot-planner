@@ -71,8 +71,8 @@ function pickContent(message, { finishReason = '', completionTokens = null, prom
  * @param {number} [options.maxTokens]    缺省用设置里的值
  * @param {AbortSignal} [options.signal]
  * @param {(fullText:string)=>void} [options.onDelta]  提供时走 SSE 流式，逐步回调累计文本
- * @param {(reasonChars:number)=>void} [options.onReasoning] 流式收到思考增量时回调累计思考字数
- *        （正文与思考分开流时才有；「关闭思考」开着却一直涨＝端点没执行关闭参数，界面据此提示）
+ * @param {(reasonText:string)=>void} [options.onReasoning] 流式收到思考增量时回调累计思考全文
+ *        （长度即字数；正文与思考分开流时才有；「关闭思考」开着却一直在涨＝端点没执行关闭参数，界面据此提示）
  * @param {(usage:object)=>void} [options.onUsage]     回传服务商实报 usage：非流式必有；
  *        流式时请求带 stream_options.include_usage、服务商在末包附上才回调（不附就不回调）
  * @param {boolean} [options.skipPresets]  true 时跳过全局预设注入（仅连通性测试用）
@@ -133,8 +133,10 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
     try {
         // 附加参数两来源：关闭思考全家（设置开关）＋流式对账 stream_options。端点不认时按
         // 重试梯子走：全量 → 去掉**报错点名**的参数 → 只留最通用的 thinking 一档 → 全去。
-        // 失败的 400/422 请求不产 token，多试两次不花成本；把「只留 thinking」垫在「全去」
-        // 之前＝deepseek/GLM 官方口径优先保住，全去是最后手段（那等于放任思考回来）
+        // 失败的 400/422 请求不产 token，多试几次不花成本；把「只留 thinking」垫在「全去」
+        // 之前＝deepseek/GLM 官方口径优先保住，全去是最后手段（那等于放任思考回来）。
+        // 上限四发（第九轮放宽自三发）：deepseek 官方端点正是「严格点名陌生参数」型且倾向
+        // 一次只点一个名——四家里的三家方言要三轮点名才去完，三发上限会在中途报错断掉
         const streamOpt = stream && typeof onUsage === 'function' ? { stream_options: { include_usage: true } } : {};
         let attempt = { ...thinkingOffParams(), ...streamOpt };
         let sent = attempt;
@@ -154,7 +156,7 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
         for (let round = 0; ; round++) {
             sent = attempt;
             res = await doFetch(sent);
-            if (res.ok || (res.status !== 400 && res.status !== 422) || !Object.keys(sent).length || round >= 2) break;
+            if (res.ok || (res.status !== 400 && res.status !== 422) || !Object.keys(sent).length || round >= 3) break;
             lastErrText = await res.text().catch(() => '');
             const blamed = blameKeys(Object.keys(sent));
             if (blamed.length) {
@@ -221,7 +223,7 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
                     onDelta(full);
                 } else if (delta && (delta.reasoning_content || delta.reasoning)) {
                     reasoning += String(delta.reasoning_content ?? delta.reasoning ?? '');
-                    if (typeof onReasoning === 'function') onReasoning(reasoning.length);
+                    if (typeof onReasoning === 'function') onReasoning(reasoning);
                 }
             } catch {
                 // 忽略无法解析的心跳/注释行
