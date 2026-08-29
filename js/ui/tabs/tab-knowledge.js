@@ -348,7 +348,7 @@ export const knowledgeTab = {
                 refreshList();
                 rerender();   // 头行的条目计数也要跟
             }));
-            // 冷却徽章点击＝清零这条的冷却（2026-08-31 真机第五轮：冷却此前无处取消）
+            // 冷却徽章点击＝清零这条的冷却（2026-08-29 真机第五轮：冷却此前无处取消）
             elist.querySelectorAll('[data-kclear]').forEach(b => b.addEventListener('click', () => {
                 clearCooldown(list.id, b.dataset.kclear);
                 refreshList();

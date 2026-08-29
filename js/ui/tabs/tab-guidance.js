@@ -44,7 +44,7 @@ const run = {
     kbSel: [],           // 「自选」方式下勾上的条目 id（恒为数组、从一条没勾开始、勾谁发谁）
     kbMode: 'all',       // 采用方式：'all' 全部采用（整把发送、规划模型自己挑）| 'pick' 自选（只发 kbSel 勾上的）——2026-08-30 真机反馈第四轮：全选/让模型挑/点名挑是并列用法，做成显式选择不再硬定单一默认；只作用于抽样清单（全量清单整表随行、只剩可踢，第七轮）
     kbKick: [],          // 全量清单里被踢的条目 id（第七轮投喂方式）：踢＝本次不发，整表其余照发；随向导快照留底
-    kbSentIds: [],       // 本次分析实际发送的知识条目 id 快照（§6.9 用后账）：冷却结算挪到「确认采用/转隐身注入」时（2026-08-31 真机第五轮）——分析成功只记这份帐，草稿放弃/重写不碰冷却；结算或丢弃后清空
+    kbSentIds: [],       // 本次分析实际发送的知识条目 id 快照（§6.9 用后账）：冷却结算挪到「确认采用/转隐身注入」时（2026-08-29 真机第五轮）——分析成功只记这份帐，草稿放弃/重写不碰冷却；结算或丢弃后清空
     kbListIds: null,     // 第 1 步勾选的知识库清单 id（按对话记忆存 picks）；null = 未初始化（默认不勾）
     lorePicks: [],       // 世界书自选勾选键（「bookId:uid」，第七轮 §6.10）：勾中的整条原文随分析进材料；按对话记忆存 picks、随向导快照留底，无冷却
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
@@ -515,7 +515,7 @@ let streamText = '';
 let streamStage = '';
 let streamReason = '';   // 思考全文（第九轮）：流式页「【思考 N 字】」段上屏用；正文与思考分开收
 
-// 运行状态条（2026-08-31 第八轮真机反馈：分析途中没有中断键、看不到运行状态/用时/token/
+// 运行状态条（2026-08-30 第八轮真机反馈：分析途中没有中断键、看不到运行状态/用时/token/
 // 模型名，报错只有一闪而过的 toast 不留页）。runMeta 随每次分析/检查重置；报错与中断
 // 停在运行页上出横幅（去路：再试一次 / 回第 1 步），不再自动跳走
 let runCtl = null;      // 中断闸：AbortController，signal 一路传到 fetch；切聊天也 abort（白跑的计费省下来）
@@ -2078,7 +2078,7 @@ async function startAnalyze(container, { revise = false } = {}) {
         runMeta.state = 'done';
         runMeta.endAt = Date.now();
         runMeta.usage = data.usage;
-        // 知识库用后账（§6.9，2026-08-31 真机第五轮改定）：分析成功只快照「本次发了哪些条目」，
+        // 知识库用后账（§6.9，2026-08-29 真机第五轮改定）：分析成功只快照「本次发了哪些条目」，
         // 冷却结算挪到「确认采用/转为隐身注入」（settleKbCharge）——草稿放弃/重写不算用过，不碰冷却
         run.kbSentIds = kbPayload.map(p => p.entry.id);
         persistWizard();
@@ -2118,7 +2118,7 @@ function formatPlan(plan) {
     return [plan.summary ?? '', beats, risks].filter(Boolean).join('\n\n');
 }
 
-// 知识库冷却结算（§6.9，2026-08-31 真机第五轮改定）：只在「确认采用」或「转为隐身注入」时执行——
+// 知识库冷却结算（§6.9，2026-08-29 真机第五轮改定）：只在「确认采用」或「转为隐身注入」时执行——
 // 规划真正上场（进档案或注入主对话）才算用过；同一份草稿两条路都走只结一次（结完清 kbSentIds）。
 // 结算口径不变：全部条目冷却 -1（空选也照走）、自报导选用过的重置为上限、使用次数 +1
 function settleKbCharge() {
@@ -2177,8 +2177,7 @@ function renderResult(container, main) {
             ? items.map(it => `<div class="pp-hit"><b>${escapeHtml(it.aspect ?? '')} · ${escapeHtml(it.severity ?? '')}</b><div>${escapeHtml(it.evidence ?? '')}</div><div class="pp-muted">建议：${escapeHtml(it.fix ?? '')}</div></div>`).join('')
             : '<span class="pp-muted">未发现明显 OOC</span>')}
         ${checkRow('user 编排黄牌', yellow.length
-            ? yellow.map(s => `<div class="pp-hit"><b>疑似替 user 编排</b><div>${escapeHtml(s)}</div></div>`).join('')
-                + '<div class="pp-muted">本地粗扫（只提醒不拦截）：上面这些句子疑似替 user 做了动作/说了话/把 user 的回应写成了既成事实；涉及 user 的合法写法只有「若 user X，则 Y」的条件式接口——可改规划文本，也可直接采用</div>'
+            ? `<div>发现 <b>${yellow.length}</b> 处疑似替 user 编排的句子</div><div class="pp-muted">本地粗扫（只提醒不拦截）：涉及 user 的合法写法只有「若 user X，则 Y」的条件式接口——可在下方规划文本里自行检查，也可直接采用</div>`
             : '<span class="pp-muted">未扫到疑似替 user 编排的句式</span>')}
         ${checkRow('与已有剧情重复', checks.plotRepeat?.found
             ? `<div>${escapeHtml(checks.plotRepeat.note || '存在重复')}</div>`
@@ -2248,7 +2247,7 @@ function renderResult(container, main) {
 
     main.querySelector('#pp_gd_revise').addEventListener('click', () => startAnalyze(container, { revise: true }));
     main.querySelector('#pp_gd_discard').addEventListener('click', () => {
-        // 2026-08-31 真机第五轮：放弃保存不再清知识库抓取——抓到的条目/勾选/方式都留着，
+        // 2026-08-29 真机第五轮：放弃保存不再清知识库抓取——抓到的条目/勾选/方式都留着，
         // 回第 1 步改改就能原班材料再次分析；只清这份生成结果与它的冷却结算帐（放弃不冷却）。
         // 第七轮防复刻：被放弃的草稿先入「近期草稿骨架」账——再分析随行，下一版不得复刻它
         pushDraftSkeleton();

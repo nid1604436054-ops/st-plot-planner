@@ -22,7 +22,7 @@ function requireConfig(conn) {
 // deepseek/GLM 认 thinking、Qwen 认 enable_thinking、OpenAI 系认 reasoning_effort、
 // vLLM 部署的混合思考模型认 chat_template_kwargs，一并带上。
 // 端点对陌生参数直接报 400/422 时按报错点名的参数**定向去除**重发（见 chatCompletion），
-// 不再一刀全去——一刀全去＝把「关闭思考」一起丢掉、思考静默回来（2026-08-31 第八轮真机
+// 不再一刀全去——一刀全去＝把「关闭思考」一起丢掉、思考静默回来（2026-08-30 第八轮真机
 // 教训：V4-Flash 思考默认开、effort 默认 high，一刀切后一万多输出）
 function thinkingOffParams() {
     return settings.api.thinkingOff ? {
