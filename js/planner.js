@@ -80,19 +80,24 @@ export function guidanceSystemPrompt(hasActivePlan = false, hasKnowledge = false
 ].join('\n');
 }
 
-// 第二遍对齐审校的系统提示词（第十二轮，用户拍板两遍调用：第一次生成、第二次对齐要求修改）。
-// 生成态（第一遍）被规划的体裁惯性拽着走，审校态（第二遍）手里只有一份草稿和一份对账清单——
-// 同一个模型换到审校位上，相对时间不再跟着「下一段最常写什么」漂。只重发 plan：checks 是对
-// 对话的判断，不随 plan 修订而变，重查重发纯属多花输出 token
-export function alignSystemPrompt(hasKnowledge = false) {
+// 第二遍对齐审校的追加尾巴（第十二轮落地两遍调用；第十三轮尾巴化）。生成态（第一遍）被规划的
+// 体裁惯性拽着走，审校态（第二遍）手里只有一份草稿和一份对账清单——同一个模型换到审校位上，
+// 相对时间不再跟着「下一段最常写什么」漂。只重发 plan：checks 是对对话的判断，不随 plan 修订
+// 而变，重查重发纯属多花输出 token。
+// 尾巴化（第十三轮，用户拍板走前缀缓存）：前缀缓存按请求开头逐字节匹配计费，第二遍若换掉
+// system，前缀从第一个字节分叉、缓存全灭。故第二遍 messages 与第一遍逐字节相同，本尾巴追加
+// 在 user 消息末尾（其后紧跟第一遍草稿）——第二遍新增输入只剩这一段。规则不在尾巴里复述
+// （时间顺序/事实一致性/user 不可编排/点名要求 system 里都在、走缓存价），只留四条对账要点；
+// 「覆盖上文的生成任务与输出要求」一句负责压过 system 末尾的输出结构（checks 不再输出）
+export function alignTailPrompt(hasKnowledge = false) {
     return [
-        '你是剧情规划的对齐审校员。用户会用同一份材料生成过一版剧情规划草稿（随材料附上），你的任务不是重写，是逐条对账后把草稿里违反要求的地方改对：',
-        '①时间基准：先从材料（对话记录、用户构思、记忆表格、历史摘要）重读「现在是什么时候」写进 plan.currentTime——第一遍把今天上午的事排成第二天、把刚发生的写成昨天是常见病；草稿里所有相对时间（今天/明天/第二天/昨晚/上午/晚上）一律以你读出的基准为锚，已发生的事留在它实际发生的那天，后续排程只从既定事实之后往后推。',
-        '②既定事实与设定：材料里已发生的事是既定事实，发生在哪天就是哪天，不得挪动；角色与 user 的既定设定（年龄、身份、能力、资格——从对话、人设卡、记忆表格里读到的）是硬约束，不得安排设定不允许的事（如未成年角色开车）。',
+        '## 第二遍任务：对齐审校（覆盖上文的生成任务与输出要求）',
+        '同一份材料你刚生成过一版剧情规划草稿（附在本节之后）。现在换到审校位：不是重新生成，是逐条对账后只把草稿里违反要求的地方改对。对账清单：',
+        '①时间基准：从材料（对话记录、用户构思、记忆表格、历史摘要）重读「现在是什么时候」写进 plan.currentTime；草稿里所有相对时间（今天/明天/第二天/昨晚/上午/晚上）一律以它为锚——第一遍把今天上午的事排成第二天、把刚发生的写成昨天是常见病；已发生的事留在它实际发生的那天，后续排程只从既定事实之后往后推。',
+        '②既定事实与设定：材料里已发生的事不得挪动；角色与 user 的既定设定（年龄、身份、能力、资格——从对话、人设卡、记忆表格里读到的）是硬约束，不得安排设定不允许的事（如未成年角色开车）。',
         '③点名要求：用户构思与修改意见里点名的要求（数量、价位或金额、时间日期、由谁发起或由谁挑选、地点、身份资格）逐条落实，不得打折、不得反着写、不得自作主张换方案；点名了发起权归谁就不得转手，尤其不得转给 user。',
         '④user 不可编排：不替 user 做动作、不说台词、不预设心理（对话或构思里 user 已明说的意愿可当前提）；涉及 user 只能写「若 user X，则 Y」的条件式接口，且每个节点的核心推进不依赖 user 的回应。',
-        '只改违反上述各项的地方，其余原样保留——这是校对不是重写：走向、节点结构、选材与 plan.knowledgeUsed 都不动，改完仍是同一版规划。每处改动在 fixes 里逐条报出（改了哪里、从什么改成什么、依据哪条要求）；草稿本就全对就原样返回、fixes 给空数组。',
-        '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
+        '只改违反上述各项的地方，其余原样保留——这是校对不是重写：走向、节点结构、选材与 plan.knowledgeUsed 都不动，改完仍是同一版规划。每处改动在 fixes 里逐条报出（改了哪里、从什么改成什么、依据哪条要求）；草稿本就全对就原样返回、fixes 给空数组。本次不输出 checks（第一遍的检查沿用）。',
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         `{
   "plan": ${planSchemaBlock(hasKnowledge)},
@@ -379,7 +384,7 @@ function reactionSection(header, extraText = '') {
  * @param {Array}  [options.knowledgePayload]    知识库抓取载荷（knowledge.payloadFromIds 的返回；
  *                                               只进规划向导——随机事件/路人反应/检查报告不带，
  *                                               §6.9 清单只喂剧情规划类生成）。
- *                                               进「知识库材料」小节，位置在玩法之后、进行中剧情之前
+ *                                               进「知识库材料」小节，第十三轮重排后垫在检索命中/最近对话之前（抽样轮换＝开头会变的小节）
  * @param {string} [options.activePlan]          进行中剧情全文（查重与进度对照）
  * @param {string[]} [options.historySummaries]  历史剧情摘要（查重用）
  * @param {*}      [options.memoryTags]          记忆表格召回标签：['a','b']=按标签（只作用于「标签」档的表），
@@ -400,10 +405,17 @@ function reactionSection(header, extraText = '') {
 // opts.reactionText = 第 1 步「插入单元」勾选的未注入反应单元正文（与生效注入合并成一节）。
 // 注入模板序固定：剧情 → 事件 → 反应——反应小节插在进行中剧情之后（事件小节由
 // buildGuidanceMessages 再插在两者中间），不给排顺序的旋钮
+// 第十三轮插入锚点：剧情类插入小节统一锚在「历史剧情摘要」之前（无摘要时退到检索命中/
+// 最近对话之前）——材料重排后这三节是「开头会变」的垫底小节，插在它们之前才留在稳定区、
+// 不破跨调用缓存。剧情→事件→反应相邻序保持：反应锚稳定区头、事件锚反应之前
+const stableTailIdx = parts => parts.findIndex(p => p.startsWith('## 历史剧情摘要')
+    || p.startsWith('## 检索命中的世界书条目')
+    || p.startsWith('## 最近对话记录'));
+
 export function materialSections(opts = {}) {
     const { parts, hits } = baseMaterialSections(opts);
-    const idx = parts.findIndex(p => p.startsWith('## 进行中剧情'));
-    parts.splice(idx === -1 ? parts.length : idx + 2, 0,
+    const at = stableTailIdx(parts);
+    parts.splice(at === -1 ? parts.length : at, 0,
         ...reactionSection('## 路人反应（世界对引人注目之事的回应口径，后续剧情安排与其余波、收束口径一致）', opts.reactionText));
     return { parts, hits };
 }
@@ -411,27 +423,28 @@ export function materialSections(opts = {}) {
 export function buildGuidanceMessages(options = {}) {
     const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', reactionText = '', knowledgePayload = [], activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [], lorePicks = [], draftSkeletons = [] } = options;
     const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries, reactionText, lorePicks });
-    // 知识库材料小节插在玩法之后、进行中剧情之前（候选素材位；剧情→事件→反应的注入模板序不受影响）
-    const kbSection = knowledgeSection(knowledgePayload);
-    if (kbSection) {
-        const idx = parts.findIndex(p => p.startsWith('## 进行中剧情') || p.startsWith('## 历史剧情摘要'));
-        parts.splice(idx === -1 ? parts.length : idx, 0, ...kbSection);
-    }
-    // 近期草稿骨架（第七轮防复刻）：连 roll 收敛的根因＝放弃的草稿不在任何往后看的材料里
-    // （对话/记忆/历史摘要都只记正式剧情）。骨架清单插在剧情类小节之后，新规划不得与之高度雷同
+    // 知识库材料小节与近期草稿骨架（第七轮防复刻：连 roll 收敛的根因＝放弃的草稿不在任何
+    // 往后看的材料里，对话/记忆/历史摘要都只记正式剧情）同锚插在检索命中之前——第十三轮
+    // 重排：知识库抽样分组每把轮换换新＝「开头会变」的小节，与检索命中/对话一起垫底，别让
+    // 它断掉前面稳定小节的缓存；骨架（少变）排在知识库（每把换新）之前。同锚一次插入：
+    // 分两次 findIndex 的话先插的一节会让锚点后移、后插的落到它后面去
     const skeletons = (draftSkeletons ?? []).filter(Boolean);
-    if (skeletons.length) {
-        const idx = parts.findIndex(p => p.startsWith('## 进行中剧情') || p.startsWith('## 历史剧情摘要'));
+    const kbSection = knowledgeSection(knowledgePayload);
+    if (kbSection || skeletons.length) {
+        const idx = parts.findIndex(p => p.startsWith('## 检索命中的世界书条目') || p.startsWith('## 最近对话记录'));
         parts.splice(idx === -1 ? parts.length : idx, 0,
-            '## 近期草稿骨架（防复刻清单：近期被放弃或换掉的规划草稿，各版一句话概括与节点阶段名——新规划的走向与节点安排不得与其中任何一份高度雷同）',
-            skeletons.map((s, i) => `${i + 1}. ${s}`).join('\n'));
+            ...(skeletons.length ? [
+                '## 近期草稿骨架（防复刻清单：近期被放弃或换掉的规划草稿，各版一句话概括与节点阶段名——新规划的走向与节点安排不得与其中任何一份高度雷同）',
+                skeletons.map((s, i) => `${i + 1}. ${s}`).join('\n'),
+            ] : []),
+            ...(kbSection ?? []));
     }
-    // 注入模板序固定：剧情 → 事件 → 反应——事件小节插在进行中剧情与路人反应之间
-    // （没有进行中剧情时排在材料末尾，仍在反应小节之前），顺序不提供旋钮
+    // 注入模板序固定：剧情 → 事件 → 反应——事件小节插在路人反应之前（无反应小节时退到
+    // 稳定区头，仍在检索命中/对话之前），顺序不提供旋钮
     const evt = String(eventText ?? '').trim();
     if (evt) {
-        const idx = parts.findIndex(p => p.startsWith('## 进行中剧情'));
-        const at = idx === -1 ? parts.findIndex(p => p.startsWith('## 路人反应')) : idx + 2;
+        const rIdx = parts.findIndex(p => p.startsWith('## 路人反应'));
+        const at = rIdx !== -1 ? rIdx : stableTailIdx(parts);
         parts.splice(at === -1 ? parts.length : at, 0, '## 随机事件（本次规划需要融入的事件与走向）', evt);
     }
     const all = [
@@ -519,16 +532,18 @@ export async function runPlotGuidance(options = {}) {
 }
 
 // 第二遍对齐审校（第十二轮）：同一份材料（联网纪要已在正文里，联网不重判）＋第一遍 plan 草稿
-// 再发一次。只改违反四类要求的地方（见 alignSystemPrompt）；失败/被中断不报废第一遍——
+// 再发一次。只改违反四类要求的地方（见 alignTailPrompt）；失败/被中断不报废第一遍——
 // 结果照常交付、alignState 如实标注，两遍计费都实报累计（中断前已生成的部分服务商照常计费）
+// 第十三轮尾巴化：messages 原样保留、不再换 system——第二遍请求与第一遍逐字节共享前缀，
+// 支持前缀缓存的服务商（DeepSeek/部分中转）第二遍的输入大头走缓存价；审校指令以追加尾巴
+// 挂在最后一条 user 消息末尾（联网纪要之后、第一遍草稿之前），差异只出现在请求最末尾
 async function alignPass(done, messages, { hasKnowledge = false, onDelta, onStage, signal, onReasoning } = {}) {
     const draft = done.result.plan;
-    const alignMessages = [
-        { role: 'system', content: alignSystemPrompt(hasKnowledge) },
-        ...messages.slice(1).map(m => (m.role === 'user'
-            ? { ...m, content: `${m.content}\n\n## 第一遍草稿（第二遍对齐审校的对象——只改违反要求处，其余原样保留）\n${JSON.stringify(draft, null, 2)}` }
-            : m)),
-    ];
+    const tail = `${alignTailPrompt(hasKnowledge)}\n\n## 第一遍草稿（对齐审校的对象——只改违反要求处，其余原样保留）\n${JSON.stringify(draft, null, 2)}`;
+    const lastUser = messages.map(m => m.role === 'user').lastIndexOf(true);
+    const alignMessages = messages.map((m, i) => (i === lastUser
+        ? { ...m, content: `${m.content}\n\n${tail}` }
+        : m));
     const alignUsage = { promptTokens: 0, completionTokens: 0 };
     const mergeBill = () => {
         done.usage = {
@@ -593,18 +608,20 @@ export async function runStoryReview({ planText = '', userNote = '', memoryTags 
 
     const memoryText = buildMemoryContext({ tagFilter: memoryTags, sheetModes: memoryModes, latestPerSheet: memoryRecent });
 
+    // 第十三轮重排（与 buildGuidanceMessages 同款原则）：检查对象/玩法/反应/记忆这些跨次
+    // 调用稳定的小节在前，检索命中（按最近楼层重扫）与最近对话（滑动窗口）垫底
     const userContent = [
         '## 角色设定摘要',
         characterSummary() || '（无角色卡）',
         '## 正在执行的剧情规划（检查对象）',
         String(planText || '（空）'),
-        '## 最近对话记录',
-        formatChatLog(chatList),
-        '## 检索命中的世界书条目',
-        buildLoreContext(hits),
-        ...(memoryText ? [memorySectionHeader(memoryTags, '已有剧情事件记录，用于查重与推新参考', memoryRecent, memoryModes), memoryText] : []),
         ...gameplaySection(storageItemsInEffect(), '## 游戏玩法（当前生效的玩法规则，检查执行情况时对照它）'),
         ...reactionSection('## 路人反应（当前生效的反应卡，检查执行情况时对照它）'),
+        ...(memoryText ? [memorySectionHeader(memoryTags, '已有剧情事件记录，用于查重与推新参考', memoryRecent, memoryModes), memoryText] : []),
+        '## 检索命中的世界书条目',
+        buildLoreContext(hits),
+        '## 最近对话记录',
+        formatChatLog(chatList),
         ...(userNote ? ['## 用户补充说明', userNote] : []),
     ].join('\n\n');
 

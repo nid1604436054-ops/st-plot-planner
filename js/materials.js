@@ -84,21 +84,26 @@ export function materialSections({ memoryTags = null, memorySheets = null, memor
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets, sheetModes: memoryModes, latestPerSheet: memoryRecent });
     const summaries = (historySummaries ?? []).filter(Boolean);
+    // 第十三轮排序：稳定小节在前、「开头会变」的小节（检索命中、最近对话）垫底——前缀缓存
+    // 按请求开头逐字节匹配，第一个变化字节之后全部按未命中计价。对话记录是滑动窗口（取最近
+    // N 层，每轮聊天后窗口头就变）、检索命中按最近楼层重扫，这两节放最后，其余小节跨次调用
+    // 字节不变；记忆表格/历史摘要只追加（旧行不变），放前面同样吃缓存。排列顺序系统提示词里
+    // 已声明不代表时间先后，重排无语义迁移
     const parts = [
         '## 角色设定摘要',
         characterSummary() || '（无角色卡）',
-        '## 最近对话记录',
-        formatChatLog(chatList),
         ...(picks.length ? [
             '## 自选世界书条目（用户点名随行的材料：原文整条、照着写——设定与口径以此为准；排列顺序不代表时间先后）',
             picks.map(p => `【${p.book.name} / ${p.entry.comment}】\n${p.entry.content}`).join('\n\n'),
         ] : []),
-        '## 检索命中的世界书条目',
-        buildLoreContext(hits),
-        ...(memoryText ? [memorySectionHeader(memoryTags, headers.memoryPurpose, memoryRecent, memoryModes), memoryText] : []),
         ...gameplaySection(storageItems, headers.gameplay ?? '## 游戏玩法（当前生效的玩法规则，规划必须遵守其约束）'),
+        ...(memoryText ? [memorySectionHeader(memoryTags, headers.memoryPurpose, memoryRecent, memoryModes), memoryText] : []),
         ...(activePlan ? [headers.activePlan ?? '## 进行中剧情（正在执行的规划，检查进度与重复时对照它）', activePlan] : []),
         ...(summaries.length ? ['## 历史剧情摘要（只用于查重）', summaries.map((s, i) => `${i + 1}. ${s}`).join('\n')] : []),
+        '## 检索命中的世界书条目',
+        buildLoreContext(hits),
+        '## 最近对话记录',
+        formatChatLog(chatList),
     ];
     return { parts, hits };
 }
