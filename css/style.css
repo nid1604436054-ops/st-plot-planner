@@ -792,6 +792,47 @@
     opacity: 1;
 }
 
+/* 知识库条目行（§6.9）：紧凑一行一条——编号 + 内容 + 徽章/操作，内容超出省略。
+   双作用域：知识库页签在抽屉里、抓取面板在查看器里（§13 铁则 5：查看器不吃抽屉规则） */
+.pp-drawer .pp-kb-erow, .pp-viewer .pp-kb-erow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    min-width: 0;
+}
+
+.pp-kb-ecode { flex: 0 0 auto; }
+
+.pp-kb-ebody {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 知识库页签的工具行（搜索+按钮 / 供应商+结构化）与草稿行（勾选+各字段输入）：保横排不折行 */
+.pp-drawer .pp-kb-toolrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.pp-drawer .pp-kb-drow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.pp-drawer .pp-kb-drow input[type="text"] {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+
 /* 向导步骤头：步骤名 + 右侧动作（如「查看完整提示词」）同行排开 */
 .pp-gd-stephead {
     display: flex;

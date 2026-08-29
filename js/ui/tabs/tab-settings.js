@@ -15,7 +15,7 @@ let modelIds = [];
 // true = 手动填模型名（拉取的列表里没有时用），false = 下拉选择
 let manualModel = false;
 // 大区块折叠状态（页签会话内保留）：大模型连接默认展开，其余默认收起
-const secFolds = { conn: true, search: false, listener: false, advanced: false, backup: false };
+const secFolds = { conn: true, search: false, listener: false, kb: false, advanced: false, backup: false };
 
 // 重建模型下拉框；当前已保存的模型若不在列表里，作为「当前自定义」置顶保留
 function rebuildModelSelect(container) {
@@ -152,6 +152,21 @@ export const settingsTab = {
             </details>
         </div>
         <div class="pp-section">
+            <details class="pp-fold" data-secfold="kb" ${secFolds.kb ? 'open' : ''}>
+                <summary title="知识库（自建素材清单，§6.9）的抓取与冷却参数；清单与条目在「知识库」页签管理"><i class="fa-solid fa-lightbulb"></i> 知识库</summary>
+                <div class="pp-grid2">
+                    <div>
+                        <label class="pp-label" title="剧情指导页第 1 步「知识库抓取」时，每张勾选的清单各随机抓多少条（纯随机、不按语境过滤；冷却中的条目自动跳过；可用不足时有多少抓多少）">每清单抓取条数</label>
+                        <input id="pp_set_kb_grab" class="text_pole textarea_compact" type="number" min="1" max="20" />
+                    </div>
+                    <div>
+                        <label class="pp-label" title="规划生成自报导选用过的条目进冷却：接下来 N 次带知识材料的生成里，抓取自动跳过它——防模型从小把里连挑最熟那条。0 = 不冷却。默认 3 为提案值，用实感调整">冷却生成次数</label>
+                        <input id="pp_set_kb_cool" class="text_pole textarea_compact" type="number" min="0" max="50" />
+                    </div>
+                </div>
+            </details>
+        </div>
+        <div class="pp-section">
             <details class="pp-fold" data-secfold="advanced" ${secFolds.advanced ? 'open' : ''}>
                 <summary title="保持默认即可"><i class="fa-solid fa-gear"></i> 高级设置</summary>
                 <div class="pp-grid2">
@@ -254,6 +269,11 @@ export const settingsTab = {
         const lsMem = container.querySelector('#pp_set_ls_mem');
         lsMem.checked = ls.withMemory !== false;
         lsMem.addEventListener('change', () => { ls.withMemory = lsMem.checked; save(); });
+
+        // 知识库区：每清单抓取条数 / 冷却生成次数（清单与条目在「知识库」页签管理）
+        const kb = settings.knowledge ?? {};
+        bindNum('#pp_set_kb_grab', () => kb.grabCount ?? 5, v => { settings.knowledge.grabCount = Math.min(Math.max(v || 5, 1), 20); });
+        bindNum('#pp_set_kb_cool', () => kb.cooldownGens ?? 3, v => { settings.knowledge.cooldownGens = Math.min(Math.max(Number.isFinite(v) ? v : 3, 0), 50); });
 
         applyModelMode(container);
         container.querySelector('#pp_set_model').addEventListener('change', () => {

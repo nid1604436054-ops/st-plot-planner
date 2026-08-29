@@ -7,6 +7,7 @@ import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
 import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
+import { knowledgeSection } from "./knowledge.js";
 import { materialSections as baseMaterialSections, gameplaySection, memorySectionHeader } from "./materials.js";
 import { extractJson, fingerprint } from "./utils.js";
 
@@ -24,30 +25,36 @@ const OUTPUT_SCHEMA_BASE = `{
     "plotRepeat": { "found": false, "note": "已完结情节被当新剧情重演、或复刻已有桥段之处；同一剧情线的延续不算；没有则空字符串" },
     "styleRepeat": { "level": "无|轻微|明显", "note": "仅判 char 的自发重复：user 是否先重复、char 重复了什么" }__PROGRESS__
   },
-  "plan": {
-    "summary": "一句话概括接下来的走向",
-    "beats": [
-      { "stage": "阶段名", "content": "该阶段的幕后剧情安排（不出现在对话文本中）" }
-    ],
-    "risks": ["可能跑偏的点；checks 判出、需要后续持续规避的要点也放这里"]
-  }
+    "plan": {
+      "summary": "一句话概括接下来的走向",
+      "beats": [
+        { "stage": "阶段名", "content": "该阶段的幕后剧情安排（不出现在对话文本中）" }
+      ],
+      "risks": ["可能跑偏的点；checks 判出、需要后续持续规避的要点也放这里"]__KNOWLEDGE__
+    }
 }`;
 
-const outputSchema = withProgress => OUTPUT_SCHEMA_BASE.replace(
+const outputSchema = (withProgress, withKnowledge) => OUTPUT_SCHEMA_BASE.replace(
     '__PROGRESS__',
     withProgress ? `,
     "progress": { "stage": "进行中剧情推进到哪个阶段", "pct": "约x%", "note": "判断依据" }` : '',
+).replace(
+    '__KNOWLEDGE__',
+    withKnowledge ? `,
+      "knowledgeUsed": ["从「知识库材料」小节选用条目的编号（形如 1-03）；一条都没用给空数组"]` : '',
 );
 
 // 内置指令：保证返回 JSON（程序要解析成检查项 + 规划）。用户预设已全局化——启用中的
 // 由 api.js 的 chatCompletion 出口统一拼进 system 末尾（见 globalPresetBlock），此处不再单独拼。
-// hasActivePlan 为真才要求 progress 字段，与 buildGuidanceMessages 是否附带「进行中剧情」小节同步
-export function guidanceSystemPrompt(hasActivePlan = false) {
+// hasActivePlan 为真才要求 progress 字段，与 buildGuidanceMessages 是否附带「进行中剧情」小节同步；
+// hasKnowledge 为真才要求 plan.knowledgeUsed 自报字段（§6.9 用后账），与「知识库材料」小节同步
+export function guidanceSystemPrompt(hasActivePlan = false, hasKnowledge = false) {
     return [
         '你是文字角色扮演的剧情顾问，负责两件事：',
         `1) 检查：结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）、是否与已有剧情重复、文风是否重复${hasActivePlan ? '、正在执行的剧情推进到什么程度' : ''}；`,
         '2) 规划：为后续剧情设计「隐藏剧本」——只作为幕后指导的剧情安排，不会以对话形式呈现给用户。',
         '要求：判断必须引用对话依据；给出「进行中剧情」时对照它检查进度与重复；给了「随机事件」就将其自然融入规划；给了「路人反应」就视为已发生之事的世界回应口径，规划为其留出呈现空间、不与余波和收束口径冲突；规划要具体、可执行、尊重既有设定；面向当前场景做预编排。',
+        ...(hasKnowledge ? ['给了「知识库材料」小节时：那是用户自建清单里随机抓来的候选素材（反模型偏好用）——选用的素材要自然融入规划，保持条目的核心特征，不生硬罗列、不逐条复述；并在 plan.knowledgeUsed 里如实报出本次选用条目的编号（小节里【编号 x-xx】的写法），一条都没用就给空数组，不算异常。'] : []),
         '检查与规划必须耦合：checks 判出的每个问题都要在 plan 里得到处置，判了不改等于白判——OOC 在 beats 里写明怎么拉回人设/事实/关系，剧情与文风重复写明怎么绕开、往哪个新方向走；需要扮演模型后续持续注意的规避要点（如别再重复某类描写）放进 risks；不允许 checks 报了问题而 plan 与之无关。',
         '记忆表格里若已有多条同标签或同类型的既有事件（行尾带标签，如多次约会、多次同类冲突），视为这类事件已经写过：规划可以再安排同类事件，但不要复刻已有记录的流程与桥段，过程或走向须有新意。',
     '文风重复的判定基准：只针对角色（char）的扮演文本——先检查用户（user）近期输入是否自己在重复动作、场景或指令；角色只是跟进用户发起的重复不算文风重复；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判「轻微/明显」，并在 note 里写明用户是否先重复、角色重复了什么。',
@@ -55,7 +62,7 @@ export function guidanceSystemPrompt(hasActivePlan = false) {
     '剧情重复的判定基准：同一剧情线的自然延续不算重复——「进行中剧情」正是该接着写的走向；历史摘要与记忆表格里同一剧情线有多条记录，只说明它跨度大、还在发展，对照它们看的是推进到哪一步，而非是否重复；只有把已完结、已发生并被总结过的情节当作新剧情原样重演，或复刻已有记录的流程与桥段，才判重复。',
     '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
     '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
-    outputSchema(hasActivePlan),
+    outputSchema(hasActivePlan, hasKnowledge),
 ].join('\n');
 }
 
@@ -316,6 +323,10 @@ function reactionSection(header, extraText = '') {
  *                                               调用方拼好；进「随机事件」小节，位置在剧情与反应之间）
  * @param {string} [options.reactionText]         第 1 步「插入单元」勾选的未注入反应单元正文
  *                                               （与生效中的反应注入合并进「路人反应」小节）
+ * @param {Array}  [options.knowledgePayload]    知识库抓取载荷（knowledge.payloadFromIds 的返回；
+ *                                               只进规划向导——随机事件/路人反应/检查报告不带，
+ *                                               §6.9 清单只喂剧情规划类生成）。
+ *                                               进「知识库材料」小节，位置在玩法之后、进行中剧情之前
  * @param {string} [options.activePlan]          进行中剧情全文（查重与进度对照）
  * @param {string[]} [options.historySummaries]  历史剧情摘要（查重用）
  * @param {*}      [options.memoryTags]          记忆表格召回标签：['a','b']=按标签（只作用于「标签」档的表），
@@ -345,8 +356,14 @@ export function materialSections(opts = {}) {
 }
 
 export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', reactionText = '', activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [] } = options;
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', reactionText = '', knowledgePayload = [], activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [] } = options;
     const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries, reactionText });
+    // 知识库材料小节插在玩法之后、进行中剧情之前（候选素材位；剧情→事件→反应的注入模板序不受影响）
+    const kbSection = knowledgeSection(knowledgePayload);
+    if (kbSection) {
+        const idx = parts.findIndex(p => p.startsWith('## 进行中剧情') || p.startsWith('## 历史剧情摘要'));
+        parts.splice(idx === -1 ? parts.length : idx, 0, ...kbSection);
+    }
     // 注入模板序固定：剧情 → 事件 → 反应——事件小节插在进行中剧情与路人反应之间
     // （没有进行中剧情时排在材料末尾，仍在反应小节之前），顺序不提供旋钮
     const evt = String(eventText ?? '').trim();
@@ -379,7 +396,7 @@ export function buildGuidanceMessages(options = {}) {
     return {
         // 预设不在这里拼：启用中的由 chatCompletion 出口统一附加（api.withGlobalPresets），
         // 预览侧用同一个函数拼装，保证「看到的」与「发出的」一致
-        system: guidanceSystemPrompt(Boolean(String(activePlan ?? '').trim())),
+        system: guidanceSystemPrompt(Boolean(String(activePlan ?? '').trim()), Boolean(kbSection)),
         user: userContent,
         hits: hits.length,
         sections,

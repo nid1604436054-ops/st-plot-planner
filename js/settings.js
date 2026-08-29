@@ -48,6 +48,11 @@ const DEFAULTS = {
     },
     lorebooks: [],          // M1 世界书库
     lorebookTrash: [],      // 世界书回收站：删的书/条目先进这里，页面上可恢复或彻底删除
+    knowledge: {            // 2.0 知识库（§6.9）：全局共享（不绑聊天不绑角色），条目与冷却账都在这
+        grabCount: 5,       // 每张清单每次抓取的条数（设置页可调）
+        cooldownGens: 3,    // 选用条目的冷却生成次数（提案值待数值终审；0 = 不冷却）
+        lists: [],          // 清单 {id, name, fields[], entries[], nextCode}：fields = 自定义表头，导入时定死永不迁移
+    },
     listener: {             // 2.0 监听（全局项；逐轮留痕/挂载单位在 chatdata 的 listener 块按聊天走）
         enabled: false,     // 总开关：关 = 不分析、不注入、不扣发送（默认关，打开前不上路，防意外计费）
         providerId: '',     // 监听模型固定项：供应商方案 id；空 = 用方案库第一个；方案库空 = 退回主连接
@@ -97,6 +102,8 @@ function ensureDefaults() {
     store.storageScanLayers ??= 20;   // 老安装补玩法触发词扫描窗口（沿用此前写死的 20）
     store.storageConsult ??= { idea: '', usePlan: false, useGp: false, draft: null };   // 玩法咨询的思路/材料勾选/草案（随全局设置留底）
     store.lorebookTrash ??= [];       // 老安装补世界书回收站
+    store.knowledge ??= { grabCount: 5, cooldownGens: 3, lists: [] };   // 老安装补知识库（§6.9）
+    store.knowledge.lists ??= [];
     store.chatData ??= {};            // 老安装补每聊天数据冷层
     // 搜索开关拆分迁移：旧 toolMode（总闸+判断一体）折算成 enabled，preJudge 默认开（保持原行为）
     store.search.enabled ??= store.search.toolMode !== false;
