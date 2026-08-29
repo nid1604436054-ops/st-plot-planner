@@ -2167,7 +2167,9 @@ function renderResult(container, main) {
     const items = Array.isArray(ooc?.items) ? ooc.items : [];
     const checkRow = (name, body) => `<div class="pp-gd-check"><b>${name}</b>${body}</div>`;
     const inj = settings.guidance.inject;
-    // 本地黄牌（第七轮）：正则粗扫规划文本里疑似替 user 编排的句子——只提醒不拦截
+    // 本地黄牌（第七轮）：正则粗扫规划文本里疑似替 user 编排的句子——只提醒不拦截。
+    // 展示合成一张卡（第十一轮）：总数一行＋触发句子逐句列在同一张卡里，不再每处各开一张
+    // 粗体标题卡（第九轮形态），也不能只剩总数不说哪里（第十轮过头形态）
     const yellow = scanUserScripting(run.planText);
 
     main.innerHTML = `
@@ -2177,7 +2179,7 @@ function renderResult(container, main) {
             ? items.map(it => `<div class="pp-hit"><b>${escapeHtml(it.aspect ?? '')} · ${escapeHtml(it.severity ?? '')}</b><div>${escapeHtml(it.evidence ?? '')}</div><div class="pp-muted">建议：${escapeHtml(it.fix ?? '')}</div></div>`).join('')
             : '<span class="pp-muted">未发现明显 OOC</span>')}
         ${checkRow('user 编排黄牌', yellow.length
-            ? `<div>发现 <b>${yellow.length}</b> 处疑似替 user 编排的句子</div><div class="pp-muted">本地粗扫（只提醒不拦截）：涉及 user 的合法写法只有「若 user X，则 Y」的条件式接口——可在下方规划文本里自行检查，也可直接采用</div>`
+            ? `<div>发现 <b>${yellow.length}</b> 处疑似替 user 编排的句子：</div><div class="pp-hit">${yellow.map(s => `<div>${escapeHtml(s)}</div>`).join('')}</div><div class="pp-muted">本地粗扫（只提醒不拦截）：涉及 user 的合法写法只有「若 user X，则 Y」的条件式接口——可在下方规划文本里对照检查，也可直接采用</div>`
             : '<span class="pp-muted">未扫到疑似替 user 编排的句式</span>')}
         ${checkRow('与已有剧情重复', checks.plotRepeat?.found
             ? `<div>${escapeHtml(checks.plotRepeat.note || '存在重复')}</div>`

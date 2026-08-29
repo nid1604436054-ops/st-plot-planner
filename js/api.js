@@ -63,6 +63,35 @@ function pickContent(message, { finishReason = '', completionTokens = null, prom
     throw new ApiError(`模型返回了空内容（${evidence}）。finish_reason=stop 却无正文，多半是服务商内容安全过滤（命中敏感内容时返回 200 但正文置空，可换模型/服务商或精简对话再试），也可能是回答放在了上面「消息原文」里不认识的字段——把这段报错发维护者即可适配`);
 }
 
+// 思考标头检测（第十一轮）：deepseek 等推理模型经部分中转会把思考段直接写进正文、开头打
+// 「## 思考（Thinking）」类标头。本插件所有生成任务都要求 JSON 开场，正文以思考标头开场
+// ＝思考混进了正文——照单全收不但污染实时输出框，思考还可能把输出 token 耗光截断 JSON。
+// 只认「#/标题/行尾」的独立标头行：正文的思考内容千奇百怪，但标头形态稳定且无合法撞车
+// （JSON 以 { 开场，正常小节标题不该以「思考/Thinking」为题）
+const THINKING_HEADER_RE = /^#{1,4}[ \t]*(?:思考过程|思考|Thinking|Thought)[ \t]*(?:[（(][ \t]*(?:Thinking|Thought|思考|过程)?[ \t]*[)）])?[ \t]*[:：]?[ \t]*(?:\r?\n|$)/i;
+
+/** 输出开头是否是思考标头（自动重试的判定依据；纯函数，离线测试台直接覆盖） */
+export function looksLikeThinkingHeader(text) {
+    return THINKING_HEADER_RE.test(String(text ?? '').replace(/^[\s\uFEFF]+/, ''));
+}
+
+// 流式前缀判定：首行还没流全（没见换行也没攒够长度）时按「待定」挂着，不提前下结论——
+// 「## 思」这样的半截标头既不能算命中也不能放行
+function thinkingHeaderPrefixState(full) {
+    const s = String(full ?? '').replace(/^[\s\uFEFF]+/, '');
+    if (!s) return 'wait';
+    if (!s.startsWith('#')) return 'no';
+    if (!s.includes('\n') && s.length < 48) return 'wait';
+    return THINKING_HEADER_RE.test(s) ? 'yes' : 'no';
+}
+
+class ThinkingHeaderError extends Error {
+    constructor() {
+        super('输出以思考标头开场');
+        this.name = 'ThinkingHeaderError';
+    }
+}
+
 /**
  * 发起一次对话补全。
  * @param {object} options
@@ -79,7 +108,8 @@ function pickContent(message, { finishReason = '', completionTokens = null, prom
  * @param {{baseUrl:string,apiKey:string,model:string}} [options.provider]
  *        独立连接覆盖（监听模型固定项用）：提供时地址/密钥/模型走这一套，
  *        不提供走当前主连接；温度等其余参数全局共用
- * @returns {Promise<string>} 模型输出的文本（启用中的预设已随 system 消息附带）
+ * @returns {Promise<string>} 模型输出的文本（启用中的预设已随 system 消息附带）。
+ *          输出以思考标头（「## 思考（Thinking）」类）开场时自动重试一次（见下方包装）。
  */
 // ---------------------------------------------------------------------------
 // 全局预设：设置页「预设」勾选启用后，插件发给大模型的每一次调用都自动附上
@@ -104,7 +134,36 @@ export function withGlobalPresets(messages) {
     return messages.map((m, i) => i === idx ? { ...m, content: `${m.content}\n\n${block}` } : m);
 }
 
-export async function chatCompletion({ messages, temperature, maxTokens, signal, onDelta, onUsage, onReasoning, skipPresets = false, provider } = {}) {
+// 思考标头自动重试（第十一轮）：外层包装单发请求——第一发带标头检测（流式在标头刚露头时
+// 掐断省 token、非流式收完判定），命中就以原请求重试一次；重试的一发不再掐断（再掐可能把
+// 思考段后的完整内容丢在半路），仍带标头就按原样返回、toast 提示。重试多发的请求服务商
+// 照常计费：onUsage 回传会累进上层对账（planner 侧是累加制，口径诚实）；流式掐断的那发
+// 收不到 usage，实报会比真实账单少一截——与用户手动「中断」同口径
+export async function chatCompletion(options = {}) {
+    const once = tolerate => chatCompletionOnce(options, tolerate);
+    let text;
+    let retried = false;
+    try {
+        text = await once(false);
+    } catch (err) {
+        if (!(err instanceof ThinkingHeaderError)) throw err;
+        retried = true;
+        toastr.info('检测到输出以思考标头（「## 思考（Thinking）」类）开场，已掐断并自动重试一次——掐断前已生成的部分服务商照常计费');
+        if (typeof options.onDelta === 'function') options.onDelta('');   // 输出框先清掉标头残影再接新流
+        text = await once(true);
+    }
+    if (!looksLikeThinkingHeader(text)) return text;
+    if (!retried) {   // 非流式整收后才判出标头：同样补一次重试
+        retried = true;
+        toastr.info('检测到模型把思考段写进了正文（输出以思考标头开场），自动重试一次');
+        text = await once(true);
+        if (!looksLikeThinkingHeader(text)) return text;
+    }
+    toastr.warning('重试后输出仍以思考标头开场——本次按原样返回（思考段之后的内容若完整仍可用）；这个端点/模型总把思考写进正文，建议在设置里勾「关闭思考」或换模型');
+    return text;
+}
+
+async function chatCompletionOnce({ messages, temperature, maxTokens, signal, onDelta, onUsage, onReasoning, skipPresets = false, provider } = {}, tolerateThinkingHeader = false) {
     const conn = provider ?? settings.api;
     requireConfig(conn);
     const url = `${conn.baseUrl.replace(/\/+$/, '')}/chat/completions`;
@@ -199,6 +258,7 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
     let full = '';
     let reasoning = '';
     let usage = null;
+    let watchHeader = !tolerateThinkingHeader;   // 思考标头监视：第一发才看，重发的一发放行收完
     const finish = () => {
         if (usage && typeof onUsage === 'function') onUsage(usage);
         return full || reasoning;
@@ -220,14 +280,24 @@ export async function chatCompletion({ messages, temperature, maxTokens, signal,
                 const delta = chunk?.choices?.[0]?.delta;
                 if (typeof delta?.content === 'string' && delta.content) {
                     full += delta.content;
+                    // 思考标头监视：首行流全即判定，命中就掐断流、抛给外层重试（见 chatCompletion）
+                    if (watchHeader) {
+                        const st = thinkingHeaderPrefixState(full);
+                        if (st === 'yes') {
+                            await reader.cancel().catch(() => {});
+                            throw new ThinkingHeaderError();
+                        }
+                        if (st === 'no') watchHeader = false;   // 定了不是标头：后续增量不再逐块判定
+                    }
                     onDelta(full);
                 } else if (delta && (delta.reasoning_content || delta.reasoning)) {
                     reasoning += String(delta.reasoning_content ?? delta.reasoning ?? '');
                     if (typeof onReasoning === 'function') onReasoning(reasoning);
                 }
-            } catch {
-                // 忽略无法解析的心跳/注释行
-            }
+                } catch (err) {
+                    if (err instanceof ThinkingHeaderError) throw err;   // 心跳行兜底不吃思考标头掐断（2026-08-30 第十一轮测试台抓出的吞错）
+                    // 忽略无法解析的心跳/注释行
+                }
         }
     }
     return finish();   // 流没等到 [DONE] 就断了：按已收到的内容收尾
