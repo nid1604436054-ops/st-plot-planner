@@ -5,7 +5,10 @@
 // 手动添加/编辑/删除、冷却账查看（选过的条目冷却期内抓取自动跳过）。
 // 内容生产流程＝用户在外部用提示词批量起草 → 粘贴 → 模型照表头结构化 → 审后入库；
 // 条目全局共享（不绑聊天不绑角色）。内嵌区互斥展开（条目区 / 导入区同时只开一个，E13 同款）。
-// 搜索框放在刷新区外（完整提示词预览同款处理）：列表就地重画，输入不掉焦点不劈 IME
+// 搜索框放在刷新区外（完整提示词预览同款处理）：列表就地重画，输入不掉焦点不劈 IME。
+// 2026-08-29 真机反馈五条 UI 修订：标题块移出灰底常驻显示（与清单行拉开区分度）、
+// 「新建清单」置顶、清单行压成单行（展开箭头取代「条目」钮、「改名」与清单名同行、
+// 「导入」入口从清单行撤下挪进展开后的条目区工具行）、条目列表自带滚动条（原地翻看）。
 import { settings } from "../../settings.js";
 import {
     knowledgeLists, findList, createList, renameList, deleteList,
@@ -37,21 +40,23 @@ function tagTokens(v) {
     return String(v ?? '').split(/[、,，\s]+/).map(t => t.trim()).filter(Boolean);
 }
 
-// 清单头行（条目数 / 冷却数 / 表头只读展示）
+// 清单行（单行紧凑）：展开箭头 + 名字（+改名同行）+ 条目数/表头（省略号，全文在悬浮说明）+ 删。
+// 点行或箭头展开/收起条目（2026-08-29 真机反馈：原「条目/导入/改名」三钮把行撑成两三行，压回一行）
 function listRowHtml(list) {
     const cooling = list.entries.filter(e => Number(e.cooldown) > 0).length;
+    const open = view?.listId === list.id;   // 条目区/导入区任一展开都算开（箭头朝下）
+    const meta = `${list.entries.length} 条${cooling ? ` · ${cooling} 条冷却中` : ''} · 表头：${list.fields.join('、')}`;
     return `
-    <div class="pp-item" data-klist="${escapeHtml(list.id)}">
+    <div class="pp-item pp-kb-lrow" data-klist="${escapeHtml(list.id)}" title="点这一行展开/收起条目">
+        <span class="menu_button pp-kb-chev fa-solid ${open ? 'fa-chevron-down' : 'fa-chevron-right'}" data-ktoggle="${escapeHtml(list.id)}" title="展开/收起条目"></span>
         <div class="pp-item-main">
             ${renamingId === list.id
-                ? `<input type="text" class="text_pole" data-krename="${escapeHtml(list.id)}" value="${escapeHtml(list.name)}" title="回车确认，Esc 取消" />`
+                ? `<input type="text" class="text_pole" data-krename="${escapeHtml(list.id)}" value="${escapeHtml(list.name)}" title="回车确认，Esc 取消" style="flex:1 1 auto; min-width:0" />`
                 : `<span class="pp-item-title" title="${escapeHtml(list.name)}">${escapeHtml(list.name)}</span>
-                   <span class="pp-muted">${list.entries.length} 条${cooling ? ` · ${cooling} 条冷却中` : ''} · 表头：${escapeHtml(list.fields.join('、'))}</span>`}
+                   <span class="pp-kb-lmeta pp-muted" title="${escapeHtml(meta)}">${escapeHtml(meta)}</span>`}
         </div>
         <div class="pp-item-ops">
-            <span class="menu_button" data-kentries="${escapeHtml(list.id)}">${view?.type === 'entries' && view.listId === list.id ? '收起' : '条目'}</span>
-            <span class="menu_button" data-kimport="${escapeHtml(list.id)}" title="粘贴外部起草的原始文本，模型照表头结构化成条目草稿，审后入库">导入</span>
-            <span class="menu_button" data-krenamebtn="${escapeHtml(list.id)}">改名</span>
+            <span class="menu_button" data-krenamebtn="${escapeHtml(list.id)}" title="给这张清单改名">改名</span>
             <span class="menu_button fa-solid fa-trash" data-kdel="${escapeHtml(list.id)}" title="删除整张清单（条目与冷却账一并删除；原始文本在手可重导）"></span>
         </div>
     </div>`;
@@ -154,24 +159,25 @@ export const knowledgeTab = {
         if (view && !lists.some(l => l.id === view.listId)) view = null;
         const viewList = view ? findList(view.listId) : null;
         container.innerHTML = `
+        <div class="pp-kb-head" title="知识库＝反模型偏好的候选池：模型在「约会去哪、消费什么」这类选择上换模型重 roll 也只在几个常见选项里打转，清单把候选集合整个换掉。清单只喂剧情规划向导（剧情指导页第 1 步勾清单→「知识库抓取」抓一小把随材料发送→选用过的条目自动进冷却）；随机事件、路人反应与扮演模型注入不碰知识库">
+            <b>素材清单</b><span class="pp-muted">${lists.length ? `${lists.length} 张清单 · 共 ${lists.reduce((n, l) => n + l.entries.length, 0)} 条` : '还没有清单，先在下面新建一张'}</span>
+        </div>
         <div class="pp-section">
-            <div class="pp-item" title="知识库＝反模型偏好的候选池：模型在「约会去哪、消费什么」这类选择上换模型重 roll 也只在几个常见选项里打转，清单把候选集合整个换掉。清单只喂剧情规划向导（剧情指导页第 1 步勾清单→「知识库抓取」抓一小把随材料发送→选用过的条目自动进冷却）；随机事件、路人反应与扮演模型注入不碰知识库">
-                <div class="pp-item-main"><b>素材清单</b><span class="pp-muted">${lists.length ? `${lists.length} 张清单 · 共 ${lists.reduce((n, l) => n + l.entries.length, 0)} 条` : '还没有清单，先在下面新建一张'}</span></div>
+            <div class="pp-kb-toolrow">
+                <input type="text" id="pp_kb_newname" class="text_pole textarea_compact" placeholder="新清单名，如：约会地点" style="flex:1 1 140px" />
+                <input type="text" id="pp_kb_newfields" class="text_pole textarea_compact" placeholder="表头字段，顿号分隔，如：名字、说明、标签" style="flex:2 1 260px" title="每张清单自定义表头（字段名任意定）——新建后定死、永不迁移；模型结构化导入时照它填，抓取按条抓" />
+                <span class="menu_button" id="pp_kb_newcreate" title="建一张空清单，随后在展开区的「导入」里粘贴草稿结构化，或手动添加条目"><i class="fa-solid fa-plus"></i> 新建清单</span>
             </div>
             ${lists.map(listRowHtml).join('')}
             ${viewList ? (view.type === 'entries' ? `
             <div class="pp-kb-entries">
                 <div class="pp-kb-toolrow">
-                    <input type="text" id="pp_kb_query" class="text_pole textarea_compact" placeholder="搜索编号或任意字段内容…" value="${escapeHtml(query)}" />
+                    <input type="text" id="pp_kb_query" class="text_pole textarea_compact" placeholder="搜索编号或任意字段内容…" value="${escapeHtml(query)}" style="flex:1 1 auto" />
                     <span class="menu_button" id="pp_kb_add" title="手动添加一条空条目（各字段随后填写）"><i class="fa-solid fa-plus"></i> 添加条目</span>
+                    <span class="menu_button" id="pp_kb_import" title="粘贴外部起草的原始文本，模型照表头（${escapeHtml(viewList.fields.join('、'))}）结构化成条目草稿，审后入库">导入</span>
                 </div>
                 <div id="pp_kb_elist">${entriesListHtml(viewList)}</div>
             </div>` : importHtml(viewList)) : ''}
-            <div class="pp-kb-toolrow" style="margin-top:8px">
-                <input type="text" id="pp_kb_newname" class="text_pole textarea_compact" placeholder="新清单名，如：约会地点" style="flex:1 1 140px" />
-                <input type="text" id="pp_kb_newfields" class="text_pole textarea_compact" placeholder="表头字段，顿号分隔，如：名字、说明、标签" style="flex:2 1 260px" title="每张清单自定义表头（字段名任意定）——新建后定死、永不迁移；模型结构化导入时照它填，抓取按条抓" />
-                <span class="menu_button" id="pp_kb_newcreate" title="建一张空清单，随后在「导入」里粘贴草稿结构化，或手动添加条目"><i class="fa-solid fa-plus"></i> 新建清单</span>
-            </div>
         </div>`;
         this.wire(container);
     },
@@ -179,20 +185,30 @@ export const knowledgeTab = {
         const rerender = () => { this.render(container); };
         const closeView = () => { view = null; editingEntryId = null; draft = null; query = ''; tagFilter = null; };
 
-        container.querySelectorAll('[data-kentries]').forEach(btn => btn.addEventListener('click', () => {
-            const id = btn.dataset.kentries;
-            if (view?.type === 'entries' && view.listId === id) { closeView(); rerender(); return; }
+        // 展开/收起：点清单行或箭头开条目区（再点收起）；同一张清单内条目↔导入互切时草稿保留
+        const openEntries = id => {
+            const sameList = view?.listId === id;
             view = { type: 'entries', listId: id };
-            editingEntryId = null; draft = null; query = ''; tagFilter = null;
-            rerender();
-        }));
-        container.querySelectorAll('[data-kimport]').forEach(btn => btn.addEventListener('click', () => {
-            const id = btn.dataset.kimport;
-            if (view?.type === 'import' && view.listId === id) { closeView(); rerender(); return; }
-            view = { type: 'import', listId: id };
             editingEntryId = null; query = ''; tagFilter = null;
+            if (!sameList) draft = null;
             rerender();
+        };
+        container.querySelectorAll('[data-klist]').forEach(row => row.addEventListener('click', e => {
+            if (e.target.closest('input, .menu_button')) return;   // 改名框/按钮各走各的
+            openEntries(row.dataset.klist);
         }));
+        container.querySelectorAll('[data-ktoggle]').forEach(btn => btn.addEventListener('click', () => {
+            const id = btn.dataset.ktoggle;
+            if (view?.type === 'entries' && view.listId === id) { closeView(); rerender(); return; }
+            openEntries(id);
+        }));
+        // 「导入」入口在条目区工具行（2026-08-29 从清单行撤下挪进来）：切到这张清单的导入区
+        container.querySelector('#pp_kb_import')?.addEventListener('click', () => {
+            if (!view || view.type !== 'entries') return;
+            view = { type: 'import', listId: view.listId };
+            editingEntryId = null;
+            rerender();
+        });
         container.querySelectorAll('[data-kdel]').forEach(btn => btn.addEventListener('click', () => {
             const list = findList(btn.dataset.kdel);
             if (!list) return;

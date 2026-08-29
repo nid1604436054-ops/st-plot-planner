@@ -832,6 +832,53 @@
     min-width: 0;
 }
 
+/* 知识库页标题（2026-08-29 真机反馈）：移出灰底区块、常驻显示——与灰底里的清单行拉开区分度 */
+.pp-kb-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* 清单行压成单行（真机反馈）：不折行、点行展开；名字＋说明横排，说明超出省略（全文在悬浮说明） */
+.pp-drawer .pp-kb-lrow {
+    flex-wrap: nowrap;
+    align-items: center;
+    cursor: pointer;
+}
+
+.pp-drawer .pp-kb-lrow .pp-item-main {
+    flex-direction: row;
+    align-items: baseline;
+    flex: 1 1 auto;
+    gap: 8px;
+}
+
+.pp-drawer .pp-kb-lrow .pp-item-title { flex: 0 0 auto; }
+
+.pp-kb-chev { flex: 0 0 auto; }
+
+.pp-drawer .pp-kb-lmeta {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 条目列表自带滚动条（真机反馈）：原地翻看，不用拖整页；标签行与计数留在滚动区外 */
+.pp-drawer .pp-kb-list {
+    max-height: min(60vh, 560px);
+    overflow-y: auto;
+}
+
+/* 抓取面板未勾选行灰显（真机反馈：逐条勾选直接选用；未勾＝留在面板不随材料发送）。
+   双作用域：知识库页签在抽屉里、抓取面板在查看器里 */
+.pp-drawer .pp-kb-erow.pp-kb-unsel,
+.pp-viewer .pp-kb-erow.pp-kb-unsel {
+    opacity: 0.5;
+}
+
 
 /* 向导步骤头：步骤名 + 右侧动作（如「查看完整提示词」）同行排开 */
 .pp-gd-stephead {
