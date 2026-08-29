@@ -40,7 +40,7 @@ const run = {
     note: '',            // 剧情构思方向
     gpIds: null,         // 本次随分析发送的游戏玩法条目 id；null = 未初始化（进第 1 步时默认勾当前生效的）
     kbIds: [],           // 知识库抓到的条目 id（§6.9）：悬浮面板里抓/踢/重抓，随材料进确认页与生成
-    kbSel: null,         // 抓取面板里勾选「直接选用」的条目 id（2026-08-29 真机反馈：不必靠踢留单条）；null＝没动过勾选＝全部发送
+    kbSel: [],           // 抓取面板里勾上的条目 id，恒为数组、默认全不勾、勾谁发谁（2026-08-30 真机反馈第三轮：原 null＝全发把「直接选用」做反成了反着取消）
     kbListIds: null,     // 第 1 步勾选的知识库清单 id（按对话记忆存 picks）；null = 未初始化（默认不勾）
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
     hadActive: false,   // 本次分析发起时是否存在进行中剧情（第 3 步「剧情进度」行只在这种时候显示）
@@ -125,7 +125,7 @@ function restoreWizard(container) {
         note: r.note ?? '',
         gpIds: Array.isArray(r.gpIds) ? r.gpIds : null,
         kbIds: Array.isArray(r.kbIds) ? r.kbIds.map(String) : [],
-        kbSel: Array.isArray(r.kbSel) ? r.kbSel.map(String) : null,
+        kbSel: Array.isArray(r.kbSel) ? r.kbSel.map(String) : [],   // 旧快照 null（原义＝全发）按空处理：默认全不勾
         kbListIds: Array.isArray(r.kbListIds) ? r.kbListIds.map(String) : null,
         result: r.result ?? null,
         raw: r.raw ?? '',
@@ -541,7 +541,7 @@ export function resetGuidance() {
     closeViewer();   // 开着的悬浮查看器（两个工具面板/提示词预览）一并关掉，不带到新聊天
     analyzeToken++;   // 在途的分析/检查流式回调与结果全部作废（不写进新聊天）
     Object.assign(run, {
-        note: '', gpIds: null, kbIds: [], kbSel: null, kbListIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+        note: '', gpIds: null, kbIds: [], kbSel: [], kbListIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
         memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
     });
     evImports.clear();
@@ -793,11 +793,12 @@ function wizardStorageItems() {
 }
 
 // 知识库抓取载荷（§6.9）：抓到的条目 id → 发送载荷，只保留「仍在第 1 步勾选中的清单」名下、
-// 且「抓取面板里勾选采用」的（kbSel null＝没动过勾选＝全发；取消勾选＝留在面板但不发送）。
+// 且「抓取面板里勾上」的（默认全不勾、勾谁发谁——2026-08-30 真机反馈第三轮；不勾＝留在面板不发送）。
 // （取消勾选清单＝这张清单本次不带；条目/清单被删的 id 由 payloadFromIds 静默丢弃）
 function wizardKnowledgePayload() {
     const checked = new Set(run.kbListIds ?? []);
-    const ids = run.kbSel === null ? (run.kbIds ?? []) : (run.kbIds ?? []).filter(id => run.kbSel.includes(id));
+    const sel = new Set(run.kbSel ?? []);
+    const ids = (run.kbIds ?? []).filter(id => sel.has(id));
     return payloadFromIds(ids).filter(p => checked.has(p.list.id));
 }
 
@@ -904,7 +905,7 @@ function renderCollect(container, main) {
         <div class="pp-btn-row">
             <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内生成——掷骰 / 大模型随机 / 按意见生成三键与意见二选一（意见框有字时只剩「按意见生成」能点），生成先出草稿、点草稿上的「立为单元」入池，暂存最多 3 个。大模型随机无条件把事件库已有条目作为防复刻清单随行（不做勾选）。生成材料自动带本页上方同一批，也可勾选导入路人反应的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的；生成的事件必须与它咬合：顺着它描述的世界状态发展、不复写同一件事；仅随机两键生效；已生效注入不自动带，防双算；导入产物正文自带前因，删掉原始单元也不丢）。入池单元在本页下方「插入单元」区点开查看、勾选随分析发送、转隐身注入；采纳规划后暂存不清空，清空键在「插入单元」区">随机事件</span>
             <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见（可选）、点「生成反应卡」出草稿、点草稿上「立为单元」入池（材料自动带本页上方同一批，也可导入随机事件的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的）——导入的事件按将要且一定会发生对待，反应卡围绕它出；导入产物正文自带前因，删掉原始单元也不丢；模型会顺带给浓缩短标题作单元名）。入池单元在本页下方「插入单元」区点开查看与操作——勾选随分析发送 / 转隐身注入（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径，两路互斥）；产物最多暂存 3 个，清空键在「插入单元」区">路人反应</span>
-            <span id="pp_gd_kb_panel" class="menu_button" title="知识库抓取（悬浮面板，与随机事件/路人反应同款交互）：勾选中的每张清单各随机抓一小把（条数在「设置 → 知识库」，默认 5、纯随机不按语境过滤、冷却中的条目自动跳过），抓到的条目在面板里看得见——逐条勾选采用、单条可踢、每张清单可整把重抓；勾选采用的随材料进第 2 步确认页。清单与条目在「知识库」页签管理">知识库抓取</span>
+            <span id="pp_gd_kb_panel" class="menu_button" title="知识库抓取（悬浮面板，与随机事件/路人反应同款交互）：勾选中的每张清单各随机抓一小把（条数在「设置 → 知识库」，默认 5、纯随机不按语境过滤、冷却中的条目自动跳过），抓到的条目在面板里看得见——默认全不勾、勾上谁发谁，单条可踢、每张清单可整把重抓；勾上的随材料进第 2 步确认页。清单与条目在「知识库」页签管理">知识库抓取</span>
         </div>
         <div id="pp_gd_c1_units"></div>
         <label class="pp-label" title="已有的想法、约束或重点（可选，随分析发给模型）">剧情构思方向</label>
@@ -1201,7 +1202,7 @@ function renderReady(container, main) {
     const rxNames = us.reactionUnits.filter(u => u.inPlan).map(u => u.title || '(未命名)');
     const gpNames = wizardStorageItems().map(i => i.name || '(未命名)');
     const ut = wizardUnitTexts();
-    // 知识库细账：抓取面板里勾选采用的条目按清单分组点名（助手默认：随材料进确认页，与单元/玩法同一核对口径）
+    // 知识库细账：抓取面板里勾上的条目按清单分组点名（助手默认：随材料进确认页，与单元/玩法同一核对口径）
     const kbPayload = wizardKnowledgePayload();
     const kbGroups = new Map();
     for (const p of kbPayload) {
@@ -1210,13 +1211,16 @@ function renderReady(container, main) {
         kbGroups.set(p.list.name, g);
     }
     const kbDesc = [...kbGroups.entries()].map(([name, codes]) => `${escapeHtml(name)} ${codes.length} 条（${codes.map(escapeHtml).join('、')}）`).join(' · ');
+    // 默认全不勾后（2026-08-30 第三轮），勾了清单却一条没勾是合法但容易被忘的空手状态：点名提醒
+    const kbListsOn = (run.kbListIds ?? []).length;
+    const kbText = kbDesc || (kbListsOn ? `无（第 1 步勾了 ${kbListsOn} 张清单、抓取面板里一条没勾——要带材料回第 1 步点「知识库抓取」勾上，不带就这样开始）` : '无');
     main.innerHTML = `
     <div class="pp-section">
         <div class="pp-gd-stephead" title="记忆表格、对话层数、世界书命中、预设等其余材料清单在第 1 步「查看完整提示词」弹窗开头"><b>第 2 步 · 分析前确认</b></div>
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的随机事件单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 随机事件：${evNames.length ? escapeHtml(evNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的路人反应单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 路人反应：${rxNames.length ? escapeHtml(rxNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步勾选的游戏玩法条目，作为材料随分析发送，规划按这些规则设计">玩法：${gpNames.length ? escapeHtml(gpNames.join('、')) : '无'}</div>
-        <div class="pp-gd-stat" title="第 1 步「知识库抓取」面板里勾选采用的条目（按清单分组，编号＝清单号-条目号），随材料发送——规划从中选用素材，选用的进冷却">知识库：${kbDesc || '无'}</div>
+        <div class="pp-gd-stat" title="第 1 步「知识库抓取」面板里勾上的条目（按清单分组，编号＝清单号-条目号；默认全不勾、勾谁发谁），随材料发送——规划从中选用素材，选用的进冷却">知识库：${kbText}</div>
         <div class="pp-gd-stat" title="联网搜索总开关在「设置」页；开着时分析前先轻量判断是否需要现实信息（或直接检索），纪要附进分析材料">联网搜索：${searchToolActive() ? '开' : '关'}</div>
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">开始分析</span>
@@ -1578,10 +1582,11 @@ function clampInjectLayers(v) {
 
 // ---------------------------------------------------------------------------
 // 知识库抓取悬浮面板（§6.9，与随机事件/路人反应同款交互）：只管抓与把关——
-// 首开自动给「勾选中且还没抓过」的清单各抓一把；面板里抓到的条目看得见，逐条勾选
-// 「直接选用」（2026-08-29 真机反馈：不想靠踢走四条留一条）、单条可踢（不补抓）、
-// 每张清单可整把重抓；勾选采用的随材料进第 2 步确认页。
-// 清单与条目的管理在「知识库」页签。用户是最后一道闸：不合理的内容进不了生成层
+// 首开自动给「勾选中且还没抓过」的清单各抓一把；面板里抓到的条目看得见，勾上＝随本次
+// 分析发送（默认全不勾、勾谁发谁——2026-08-30 真机反馈第三轮：上轮落成「默认全勾、
+// 反着取消」与靠踢留一条工作量相同，方向做反了「直接选用」）、单条可踢（不补抓）、
+// 每张清单可整把重抓（新抓进来的一律不勾）。清单与条目的管理在「知识库」页签。
+// 用户是最后一道闸：不合理的内容进不了生成层
 // ---------------------------------------------------------------------------
 
 function openKbPanel(onChange) {
@@ -1593,22 +1598,14 @@ function openKbPanel(onChange) {
         const ids = listIdsOf(list);
         return (run.kbIds ?? []).filter(id => ids.has(id));
     };
-    // kbSel null＝没动过勾选＝全部发送；动过一次就落成数组。抓到新条目并入已勾集合（新抓的默认勾上）
-    const selSetOf = () => new Set(run.kbSel === null ? (run.kbIds ?? []) : run.kbSel);
-    const mergeIntoSel = newIds => {
-        if (run.kbSel === null) return;
-        const s = selSetOf();
-        for (const id of newIds) s.add(id);
-        run.kbSel = [...s];
-    };
+    // kbSel＝当前勾上的条目（默认全不勾）；首开/重抓新进来的条目一律不勾，用户自己勾
+    const selSetOf = () => new Set(run.kbSel ?? []);
     const reggrab = list => {
         // 整把重抓：这张清单当前抓到的全部替换成新一把（纯随机、冷却跳过、可用不足有多少抓多少）
         const old = new Set(grabbedOf(list));
         const { picked } = grabFromList(list, cfg.grabCount);
         run.kbIds = (run.kbIds ?? []).filter(id => !old.has(id)).concat(picked.map(e => e.id));
-        if (Array.isArray(run.kbSel)) {
-            run.kbSel = run.kbSel.filter(id => !old.has(id)).concat(picked.map(e => e.id));
-        }
+        run.kbSel = (run.kbSel ?? []).filter(id => !old.has(id));   // 换掉的清出勾选；新一把默认不勾
         persistWizard();
         if (!picked.length) toastr.info(`清单「${list.name}」没有可抓的条目（全部冷却中或清单为空）`);
     };
@@ -1629,19 +1626,19 @@ function openKbPanel(onChange) {
             return `
             <div class="pp-gd-ughead">
                 <label class="pp-label">${escapeHtml(list.name)}（已抓 ${payload.length} · 勾选采用 ${selN} · 可用 ${available} 条${cooling ? ` · ${cooling} 条冷却中` : ''}）</label>
-                <span class="menu_button" data-kbregrab="${escapeHtml(list.id)}" title="这张清单整把重抓：丢弃当前抓到的，重新随机抓一批（重抓回来的默认全部勾选）">重抓</span>
+                <span class="menu_button" data-kbregrab="${escapeHtml(list.id)}" title="这张清单整把重抓：丢弃当前抓到的，重新随机抓一批（重抓回来的默认不勾，要发的自己勾上）">重抓</span>
             </div>
             ${payload.map(({ listPos, entry }) => {
                 const on = sel.has(entry.id);
                 return `
             <div class="pp-kb-erow${on ? '' : ' pp-kb-unsel'}">
-                <label title="勾选＝随本次分析发送给规划模型；取消勾选＝留在面板但不发送"><input type="checkbox" data-kbsel="${escapeHtml(entry.id)}" ${on ? 'checked' : ''} /></label>
+                <label title="勾上＝这一条随本次分析发给规划模型；不勾＝不发（默认全不勾）"><input type="checkbox" data-kbsel="${escapeHtml(entry.id)}" ${on ? 'checked' : ''} /></label>
                 <span class="pp-muted pp-kb-ecode">${listPos}-${escapeHtml(entry.code)}</span>
                 <span class="pp-kb-ebody" title="${escapeHtml(entryText(list, entry))}">${escapeHtml(entryText(list, entry) || '（空条目）')}</span>
                 <span class="menu_button" data-kbkick="${escapeHtml(entry.id)}" title="踢掉这条：从这把里移除、不补抓（只是本次不想发送，用取消勾选就行；踢＝这条看得都嫌烦）">踢</span>
             </div>`; }).join('') || '<div class="pp-muted">这张清单还没抓到条目（点「重抓」或回「知识库」页签加条目）</div>'}`;
         }).join('') + `
-        <div class="pp-muted" style="margin-top:6px" title="纯随机、无语境过滤（设计定稿）；条数与冷却次数在「设置 → 知识库」">抓取＝每清单纯随机 ${cfg.grabCount} 条，冷却中的条目自动跳过；踢掉不补抓。勾选采用的随材料进第 2 步确认页，规划选用的进冷却；全部取消勾选＝本次不带知识材料</div>`;
+        <div class="pp-muted" style="margin-top:6px" title="纯随机、无语境过滤（设计定稿）；条数与冷却次数在「设置 → 知识库」">抓取＝每清单纯随机 ${cfg.grabCount} 条，冷却中的条目自动跳过；踢掉不补抓。默认全不勾：勾上谁发谁，一条不勾＝本次不带知识材料；勾上的随材料进第 2 步确认页，规划选用的进冷却</div>`;
 
         body.querySelectorAll('[data-kbsel]').forEach(cb => cb.addEventListener('change', () => {
             const s = selSetOf();
@@ -1653,7 +1650,7 @@ function openKbPanel(onChange) {
         }));
         body.querySelectorAll('[data-kbkick]').forEach(btn => btn.addEventListener('click', () => {
             run.kbIds = (run.kbIds ?? []).filter(id => id !== btn.dataset.kbkick);
-            if (Array.isArray(run.kbSel)) run.kbSel = run.kbSel.filter(id => id !== btn.dataset.kbkick);
+            run.kbSel = (run.kbSel ?? []).filter(id => id !== btn.dataset.kbkick);
             persistWizard();
             render();
             onChange();
@@ -1672,8 +1669,7 @@ function openKbPanel(onChange) {
         if (!(run.kbListIds ?? []).includes(list.id)) continue;
         if (grabbedOf(list).length) continue;
         const { picked } = grabFromList(list, cfg.grabCount);
-        run.kbIds = [...(run.kbIds ?? []), ...picked.map(e => e.id)];
-        mergeIntoSel(picked.map(e => e.id));
+        run.kbIds = [...(run.kbIds ?? []), ...picked.map(e => e.id)];   // 新抓的不勾，等用户自己勾
         auto = true;
     }
     if (auto) persistWizard();
@@ -1847,7 +1843,7 @@ function renderResult(container, main) {
 
     main.querySelector('#pp_gd_revise').addEventListener('click', () => startAnalyze(container, { revise: true }));
     main.querySelector('#pp_gd_discard').addEventListener('click', () => {
-        Object.assign(run, { result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false, research: null, kbIds: [], kbSel: null });
+        Object.assign(run, { result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false, research: null, kbIds: [], kbSel: [] });
         step = 'collect';
         toastr.info('已丢弃本次生成（构思、预设与事件选择保留）');
         renderMain(container);
@@ -1869,7 +1865,7 @@ function renderResult(container, main) {
         // 第 1 步勾选存在对话记忆里，下一轮进第 1 步自动恢复，这里照常清工作副本。
         // 单元池不随采用清空（DESIGN §2.5）：清理由各工具面板的一键清理键手动执行
         Object.assign(run, {
-            note: '', gpIds: null, kbIds: [], kbSel: null, kbListIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+            note: '', gpIds: null, kbIds: [], kbSel: [], kbListIds: null, result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
             memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
         });
         report = null;
