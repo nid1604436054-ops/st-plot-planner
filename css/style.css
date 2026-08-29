@@ -872,6 +872,12 @@
     overflow-y: auto;
 }
 
+/* 展开区跟在自家清单行正下方（真机反馈第二轮）：缩进一点表明从属，不折横排 */
+.pp-drawer .pp-kb-entries,
+.pp-drawer .pp-kb-import {
+    margin: 2px 0 10px 22px;
+}
+
 /* 抓取面板未勾选行灰显（真机反馈：逐条勾选直接选用；未勾＝留在面板不随材料发送）。
    双作用域：知识库页签在抽屉里、抓取面板在查看器里 */
 .pp-drawer .pp-kb-erow.pp-kb-unsel,

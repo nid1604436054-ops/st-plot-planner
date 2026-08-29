@@ -85,12 +85,12 @@ export function entryText(list, entry) {
     return vals.join('｜');
 }
 
-export function addEntries(listId, valuesArr) {
+export function addEntries(listId, valuesArr, { prepend = false } = {}) {
     const list = findList(listId);
     if (!list) return 0;
-    let n = 0;
+    const fresh = [];
     for (const values of valuesArr ?? []) {
-        list.entries.push({
+        fresh.push({
             id: newId('ke-'),
             code: String(list.nextCode++).padStart(2, '0'),
             values: normalizeValues(list, values),
@@ -98,10 +98,14 @@ export function addEntries(listId, valuesArr) {
             used: 0,
             at: Date.now(),
         });
-        n++;
     }
-    if (n) save();
-    return n;
+    if (!fresh.length) return 0;
+    // 手动添加走 prepend（新条目插到列表最上面，2026-08-29 真机反馈：加条目不该翻到列表底）；
+    // 结构化入库走默认 append（成批进来看起来是按草稿顺序接着排）
+    if (prepend) list.entries.unshift(...fresh);
+    else list.entries.push(...fresh);
+    save();
+    return fresh.length;
 }
 
 export function deleteEntry(listId, entryId) {
@@ -218,33 +222,73 @@ function structureSystemPrompt(list) {
         '- 你的工作是分类归位，不是改写：保留原文的事实与措辞，不扩写、不润色；',
         '- 条目数量不设上限：草稿里有几条就整理几条，不要照抄任何示例数量。',
         '字符串值里不要出现英文双引号（引用一律改写为中文「」），也不要在值内换行。',
+        '输出为紧凑 JSON：整个对象写成一整行，不要换行、不要缩进——省下的输出长度留给条目内容。',
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         schema,
     ].join('\n');
 }
 
+// 长草稿分批（2026-08-29 真机反馈：101 条一把结构化，输出常被单次回复长度上限拦腰截断，
+// 本地修不回、重试照样截断）：优先按空行切段、再按行、最后按字符硬切，打包成不超过
+// CHUNK_CHARS 的批，一批一次调用。批边界可能切在条目中间——草稿本来就有逐条审改这道闸兜底。
+const STRUCT_CHUNK_CHARS = 2000;
+
+function splitDraftChunks(raw) {
+    const units = [];
+    for (const para of raw.split(/\n\s*\n+/).map(s => s.trim()).filter(Boolean)) {
+        if (para.length <= STRUCT_CHUNK_CHARS) { units.push(para); continue; }
+        for (const line of para.split('\n')) {
+            for (let i = 0; i < line.length; i += STRUCT_CHUNK_CHARS) units.push(line.slice(i, i + STRUCT_CHUNK_CHARS));
+        }
+    }
+    const chunks = [];
+    let cur = '';
+    for (const u of units) {
+        if (cur && cur.length + u.length + 2 > STRUCT_CHUNK_CHARS) { chunks.push(cur); cur = u; }
+        else cur = cur ? `${cur}\n\n${u}` : u;
+    }
+    if (cur) chunks.push(cur);
+    return chunks;
+}
+
 /**
  * 把一段原始草稿结构化成条目值数组（用户在草稿页逐条审改后才入库）。
+ * 长草稿自动分批：一批一次调用，某批失败不拖垮其余（失败批记入 failed，开头摘要有定位用）；
+ * 全部批次失败或全部空结果才向上抛。onProgress(第几批, 共几批) 供调用方报进度。
  * @param {object} options
  * @param {object} options.list      目标清单（表头来自它）
  * @param {string} options.rawText   粘贴的原始草稿
  * @param {object} [options.provider] 供应商方案 {baseUrl,apiKey,model}；不传走当前主连接
- * @returns {Promise<Array<object>>} values 数组（已按表头清洗：多余字段丢弃、缺失补空）
+ * @param {(i:number, n:number)=>void} [options.onProgress]
+ * @returns {Promise<{values:Array<object>, failed:Array<{head:string, error:string}>}>}
+ *          values 已按表头清洗（多余字段丢弃、缺失补空）
  */
-export async function structureImport({ list, rawText, provider } = {}) {
+export async function structureImport({ list, rawText, provider, onProgress } = {}) {
     const raw = String(rawText ?? '').trim();
     if (!raw) throw new Error('请先粘贴原始草稿');
     if (!list?.fields?.length) throw new Error('目标清单没有表头字段');
-    const messages = [
-        { role: 'system', content: structureSystemPrompt(list) },
-        { role: 'user', content: raw },
-    ];
-    const { result } = await parseModelJson(
-        await chatCompletion({ messages, ...(provider ? { provider } : {}) }),
-        { messages, ...(provider ? { provider } : {}) },
-    );
-    const arr = Array.isArray(result?.entries) ? result.entries : [];
-    const values = arr.map(v => normalizeValues(list, v));
-    if (!values.length) throw new Error('模型没整理出任何条目（输出里没有 entries），换个写法再试或手动添加');
-    return values;
+    const chunks = splitDraftChunks(raw);
+    const values = [];
+    const failed = [];
+    for (let i = 0; i < chunks.length; i++) {
+        if (typeof onProgress === 'function') onProgress(i + 1, chunks.length);
+        const messages = [
+            { role: 'system', content: structureSystemPrompt(list) },
+            { role: 'user', content: chunks.length > 1 ? `（草稿第 ${i + 1}/${chunks.length} 批，只整理这一批，不要虚构其他批次的内容）\n\n${chunks[i]}` : chunks[i] },
+        ];
+        const req = { messages, ...(provider ? { provider } : {}) };
+        try {
+            const { result } = await parseModelJson(await chatCompletion(req), req);
+            const arr = Array.isArray(result?.entries) ? result.entries : [];
+            values.push(...arr.map(v => normalizeValues(list, v)));
+        } catch (err) {
+            failed.push({ head: chunks[i].slice(0, 30), error: String(err.message ?? err) });
+        }
+    }
+    if (!values.length) {
+        throw new Error(failed.length
+            ? `结构化失败：${failed[0].error}${chunks.length > 1 ? `（共 ${chunks.length} 批都没成功）` : ''}`
+            : '模型没整理出任何条目（输出里没有 entries），换个写法再试或手动添加');
+    }
+    return { values, failed };
 }

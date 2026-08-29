@@ -67,8 +67,36 @@ function repairModelJson(s) {
         .replace(/,(\s*[}\]])/g, '$1');
 }
 
-// 容错提取模型输出中的 JSON：剥掉 ``` 围栏，先试直接解析，再试首 { 到尾 } 截取 + 格式伤修复；
-// 报错自带原始输出片段（找不到 JSON 给开头、修复救不回给开头和结尾），排查不用另找入口
+// 截断兜底：输出被单次回复长度上限拦腰截断时，括号配不平——截到最后一个完整值、
+// 补上还开着的括号（字符串感知：值里的括号引号不参与计数）。抢不回任何完整值就放弃。
+function closeUnbalancedJson(s) {
+    const stackAt = end => {
+        const stack = [];
+        let inStr = false, esc = false;
+        for (let i = 0; i < end; i++) {
+            const c = s[i];
+            if (inStr) {
+                if (esc) esc = false;
+                else if (c === '\\') esc = true;
+                else if (c === '"') inStr = false;
+                continue;
+            }
+            if (c === '"') inStr = true;
+            else if (c === '{' || c === '[') stack.push(c);
+            else if (c === '}' || c === ']') stack.pop();
+        }
+        return { stack, inStr };
+    };
+    const whole = stackAt(s.length);
+    if (!whole.stack.length && !whole.inStr) return null;   // 括号配平，不归截断管
+    const cut = Math.max(s.lastIndexOf('}'), s.lastIndexOf(']'));
+    if (cut <= 0) return null;   // 一个完整值都没落下来
+    const atCut = stackAt(cut + 1);
+    return s.slice(0, cut + 1) + atCut.stack.reverse().map(c => (c === '{' ? '}' : ']')).join('');
+}
+
+// 容错提取模型输出中的 JSON：剥掉 ``` 围栏，先试直接解析，再试首 { 到尾 } 截取 + 格式伤修复，
+// 都败且括号没配平（疑似截断）再补闭合抢救前段；报错自带解析器原文与输出首尾片段，排查不用另找入口
 export function extractJson(text) {
     const stripped = String(text ?? '').replace(/```(?:json)?/gi, '').trim();
     const first = stripped.indexOf('{');
@@ -80,11 +108,17 @@ export function extractJson(text) {
             : '模型输出为空：推理模型常见原因是思考耗光了「单次上限 tokens」，到「设置 → 高级设置」调大后重试');
     }
     const candidates = [stripped.slice(first, last + 1), stripped];
+    let lastErr = null;
     for (const c of candidates) {
-        try { return JSON.parse(c); } catch { }
-        try { return JSON.parse(repairModelJson(c)); } catch { }
+        try { return JSON.parse(c); } catch (e) { lastErr = e; }
+        try { return JSON.parse(repairModelJson(c)); } catch (e) { lastErr = e; }
     }
-    throw new Error(`模型输出不是合法 JSON（自动修复未能救回）。开头：「${stripped.slice(0, 120).trim()}」…结尾：「${stripped.slice(-120).trim()}」`);
+    for (const c of candidates) {
+        const closed = closeUnbalancedJson(c);
+        if (closed === null || closed === c) continue;
+        try { return JSON.parse(closed); } catch (e) { lastErr = e; }
+    }
+    throw new Error(`模型输出不是合法 JSON（自动修复未能救回）。解析器报错：${lastErr ? lastErr.message : '未知'}。开头：「${stripped.slice(0, 120).trim()}」…结尾：「${stripped.slice(-120).trim()}」`);
 }
 
 // 密封内容的「指纹」：只暴露长度与校验值，不暴露正文
