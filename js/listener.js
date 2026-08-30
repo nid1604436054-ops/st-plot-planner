@@ -126,11 +126,12 @@ function normalizeUnit(u) {
     if (idx > nodes.length) idx = nodes.length;
     return {
         id: String(u.id ?? newId('lu-')),
-        source: u.source === 'plan10' ? 'plan10' : 'manual',
+        source: ['plan10', 'longform'].includes(u.source) ? u.source : 'manual',
         title: String(u.title ?? '').slice(0, 120) || '未命名单位',
         text: String(u.text ?? ''),
         at: Number(u.at) || Date.now(),
         ...(u.fromStoryId ? { fromStoryId: String(u.fromStoryId) } : {}),
+        ...(u.lfRef ? { lfRef: { vol: Number(u.lfRef.vol) || 0, ch: Number(u.lfRef.ch) || 0 } } : {}),
         nodes,
         nodeIdx: idx,
     };

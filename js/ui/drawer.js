@@ -1,4 +1,4 @@
-// 主面板：顶部下拉抽屉 + 五个功能页签（世界书/知识库/记忆表格/剧情指导（含随机事件与游戏玩法）/监听 + 设置）
+// 主面板：顶部下拉抽屉 + 功能页签（世界书/知识库/记忆表格/剧情指导（含随机事件与游戏玩法）/监听/长线规划 + 设置）
 // 高度只在「打开抽屉 / 切换页签」时按内容适配一次，封顶在聊天输入框上沿；
 // 页签内的勾选、输入、展开收起不再改变面板高度，内容超出在面板内部滚动。
 // 右下角手柄可手动拉——条目很多时可拉下去盖住输入框一次看更多；
@@ -10,11 +10,12 @@ import { knowledgeTab } from "./tabs/tab-knowledge.js";
 import { memoryTab } from "./tabs/tab-memory.js";
 import { guidanceTab } from "./tabs/tab-guidance.js";
 import { listenerTab } from "./tabs/tab-listener.js";
+import { longformTab } from "./tabs/tab-longform.js";
 import { settingsTab } from "./tabs/tab-settings.js";
 import { flushChatData } from "../chatdata.js";
 import { settings, save } from "../settings.js";
 
-const TABS = [worldbookTab, knowledgeTab, memoryTab, guidanceTab, listenerTab, settingsTab];
+const TABS = [worldbookTab, knowledgeTab, memoryTab, guidanceTab, listenerTab, longformTab, settingsTab];
 let activeId = TABS[0].id;
 
 // 上次自动适配写入的高度；当前内联高度与它不一致 = 用户拖过，停止自动适配

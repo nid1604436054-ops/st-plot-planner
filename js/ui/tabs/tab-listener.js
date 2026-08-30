@@ -13,7 +13,7 @@ import {
 
 let traceWinOpen = false;   // 留痕悬浮窗开着（跨页签会话记忆）
 
-const SOURCE_BADGE = { manual: '手动导入', plan10: '剧情规划导入' };
+const SOURCE_BADGE = { manual: '手动导入', plan10: '剧情规划导入', longform: '长线章' };
 
 function fmtTime(at) {
     const d = new Date(Number(at) || 0);
@@ -122,7 +122,7 @@ function renderTab(container) {
         <div class="pp-item">
             <div class="pp-item-main">
                 <b>${escapeHtml(unit.title)}</b>
-                <span class="pp-ls-badge pp-ls-badge-${unit.source}" title="单位槽来源：手动导入粘贴 / 1.0 剧情规划产物直接挂载（规划产物只被读取，1.0 自己的剧情注入不受影响，撤不撤由你在剧情指导页定）">${SOURCE_BADGE[unit.source] ?? unit.source}</span>
+                <span class="pp-ls-badge pp-ls-badge-${unit.source}" title="单位槽来源：手动导入粘贴 / 1.0 剧情规划产物直接挂载（规划产物只被读取，1.0 自己的剧情注入不受影响，撤不撤由你在剧情指导页定）/ 2.0 长线的章（进度同步回长线页的账本）">${SOURCE_BADGE[unit.source] ?? unit.source}</span>
                 <span class="pp-muted">${unit.nodeIdx}/${unit.nodes.length} 节点已点亮${unit.nodeIdx >= unit.nodes.length ? ' · 已演完' : ''}</span>
             </div>
             <div class="pp-item-ops">

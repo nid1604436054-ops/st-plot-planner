@@ -138,7 +138,7 @@ export const settingsTab = {
                 <hr class="pp-hr" />
                 <div class="pp-grid2">
                     <div>
-                        <label class="pp-label" title="换算锚：一层楼的有效剧情推进按这个区间综合衡量（不逐字换算），两端是示意默认、可调">有效推进区间·低（字）</label>
+                        <label class="pp-label" title="换算锚：一层楼的有效剧情推进按这个区间综合衡量（不逐字换算），两端是示意默认、可调。监听与长线规划共用这一处（所有涉楼提示词同源，免得两个数值漂移）">有效推进区间·低（字）</label>
                         <input id="pp_set_ls_pmin" class="text_pole textarea_compact" type="number" min="50" step="50" />
                     </div>
                     <div>

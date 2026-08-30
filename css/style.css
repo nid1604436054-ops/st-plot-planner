@@ -1652,3 +1652,133 @@
     padding: 0 4px;
 }
 
+/* ==========================================================================
+   2.0 长线规划页签（tab-longform）：书-卷-章-节点总览，排版宁宽勿挤
+   ========================================================================== */
+
+/* 顶部状态条：与监听页同款（运行状态 + 计数 + 作废入口） */
+.pp-drawer .pp-lf-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+}
+
+/* 参数表单：一行横排铺满、控件小尺寸（与监听旋钮区同理念） */
+.pp-drawer .pp-lf-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    margin: 6px 0;
+}
+
+.pp-drawer .pp-lf-form label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: help;
+}
+
+.pp-drawer .pp-lf-form .pp-lf-grow {
+    flex: 1 1 100%;
+    align-items: flex-start;
+}
+
+.pp-drawer .pp-lf-form textarea {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* 卷/章卡片通用 */
+.pp-drawer .pp-lf-volsum {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+.pp-drawer .pp-lf-badge {
+    flex: 0 0 auto;
+    font-size: 0.85em;
+    opacity: 0.85;
+}
+
+/* 卷文本 / 章文本展开区：原文预览，限高滚动 */
+.pp-drawer .pp-lf-text {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-height: min(46vh, 420px);
+    overflow-y: auto;
+    padding: 8px 10px;
+    border-left: 3px solid var(--SmartThemeBorderColor, #555);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.pp-drawer .pp-lf-editarea {
+    flex: 1 1 100%;
+    width: 100%;
+}
+
+/* 执行总览的卷分组与章卡 */
+.pp-drawer .pp-lf-volgroup {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.pp-drawer .pp-lf-volhead {
+    font-weight: 600;
+    opacity: 0.9;
+    margin-top: 4px;
+}
+
+.pp-drawer .pp-lf-ch {
+    margin-left: 12px;
+}
+
+/* 当前执行中的章：金边高亮（与监听页「当前节点」同色系） */
+.pp-drawer .pp-lf-ch-cur {
+    border-left: 3px solid #d4a94e;
+    background: rgba(212, 169, 78, 0.08);
+}
+
+/* 章内节点行：圆点串横向铺满换行 */
+.pp-drawer .pp-lf-nodesline {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+}
+
+.pp-drawer .pp-lf-node {
+    font-size: 0.88em;
+    opacity: 0.9;
+    word-break: break-word;
+}
+
+.pp-drawer .pp-lf-node-lit {
+    color: #7bc47f;
+    opacity: 1;
+}
+
+/* 生成中横幅与错误留痕 */
+.pp-drawer .pp-lf-busy {
+    margin-top: 8px;
+    padding: 6px 8px;
+    border-left: 3px solid #d4a94e;
+    background: rgba(212, 169, 78, 0.08);
+}
+
+.pp-drawer .pp-lf-err {
+    color: #e2574c;
+}
+
+/* 「作废本长线」两步确认的武装态 */
+.pp-drawer .pp-danger-arm {
+    border-color: #e2574c;
+    color: #e2574c;
+}
+
+
