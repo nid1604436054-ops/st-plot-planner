@@ -3,9 +3,12 @@
 // 生成走「单次选用」模型（与知识库结构化导入同款下拉：主连接或供应商方案，不影响正在用的模型）。
 import { settings } from "../../settings.js";
 import { escapeHtml, clamp } from "../../utils.js";
+import { storageItemsInEffect } from "../../store.js";
+import { knowledgeLists } from "../../knowledge.js";
+import { resolveLorePicks } from "../../lorebook.js";
 import {
     lfState, persistLf, resetLf, runLfSkeleton, runLfDetailBatch, runLfRevise, runLfSplitBatch,
-    mountChapter, syncLfProgress, lfNextChapter, lfStats,
+    mountChapter, syncLfProgress, lfNextChapter, lfStats, lfMatOverview,
     LF_MIN_CHAPTER_FLOORS, LF_DEFAULT_FLOORS, LF_MIN_ANCHORS, LF_MIN_NODES,
 } from "../../longform.js";
 
@@ -102,11 +105,13 @@ function renderTab(container) {
 
     ${st.stage === 'none' ? paramFormHtml(st) : ''}
 
+    ${materialsHtml(st)}
+
     ${st.stage !== 'none' ? `
     <div class="pp-section">
         <b>全书骨架</b>
         <span class="pp-muted" title="骨架与切块一次生成：卷结构与楼数预算由模型出、楼数算术由插件校验（总和＝楼层总数，各卷不低于一章下限）">${escapeHtml(clamp(`楼层总数 ${st.totalFloors} 层${st.minFloors ? ` · 保底 ${st.minFloors} 层` : ''} · ${st.newChars ? '允许新角色' : '不引入新角色'}${st.idea ? ` · 想法：${clamp(st.idea, 60)}` : ''}`, 90))}</span>
-        <span class="pp-muted" title="生成骨架那一刻实际携带的材料概览（材料勾选在「剧情指导」页第 1 步改：记忆表格档位、玩法条目、世界书自选；知识库与插入单元不进长线——要吸收的内容写进想法框）">材料：${escapeHtml(st.materialNote || '—')}</span>
+        <span class="pp-muted" title="生成骨架那一刻实际携带的材料概览（材料勾选在上方「材料」区改——具体化/修订/切章每次调用都按当时的勾选拼）">材料：${escapeHtml(st.materialNote || '—')}</span>
         <div id="pp_lf_vols">${st.volumes.map((v, i) => volCardHtml(v, i, st)).join('')}</div>
         <div class="pp-btn-row">
             ${st.stage === 'skeleton' ? `<span id="pp_lf_detail" class="menu_button" title="逐卷并行生成卷级详细文本（一次一卷、内嵌推进锚——锚是将来切章与判定进度的刀口）；费用＝每卷一次调用">具体化各卷</span>` : ''}
@@ -162,8 +167,170 @@ function paramFormHtml(st) {
             </label>
             <span class="menu_button pp-lf-go" id="pp_lf_skeleton" title="一次调用产出全书卷结构与楼数预算（骨架＋切块合并做；楼数总和由插件校验）">生成骨架</span>
         </div>
-        <span class="pp-muted" title="材料勾选在「剧情指导」页第 1 步改：记忆表格档位与标签、玩法条目、世界书自选——长线与 1.0 共用同一批勾选。知识库清单与插入单元不进长线（要吸收的内容写进想法框）">材料＝「剧情指导」第 1 步的勾选（记忆表格 · 玩法 · 世界书自选＋检索 · 进行中剧情 · 历史摘要 · 最近对话）——那边改完这边直接用</span>
     </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// 材料面板（第十九轮用户拍板：复制「剧情指导」第 1 步、去掉标签列——长线自己勾自己的，
+// 不再沿用 1.0 的勾选）：记忆表格一个勾默认全量；玩法默认跟随生效中；知识库逐张清单勾
+// （勾中的整表可用条目随行）；世界书自选走悬浮面板（勾选与 1.0 分开存）。
+// 骨架/具体化/修订/切章每次调用都按这里的勾选现场拼材料——面板常驻不随 stage 收起
+// ---------------------------------------------------------------------------
+function materialsHtml(st) {
+    const m = st.mats;
+    const gpItems = (settings.storageItems ?? []).filter(i => i.enabled);
+    const gpSel = new Set(m.gpIds ?? storageItemsInEffect().map(i => i.id));
+    const gpHit = new Set(storageItemsInEffect().map(i => i.id));
+    const kbLists = knowledgeLists();
+    const loreN = resolveLorePicks(m.lorePicks).length;
+    return `
+    <div class="pp-section" id="pp_lf_mats">
+        <div class="pp-gd-layhead">
+            <label class="pp-label" title="长线生成用的材料在这里勾——与「剧情指导」第 1 步互不影响。每次生成（骨架/具体化/修订/切章）都按当时的勾选现场拼同一批材料；勾选存在本聊天里，刷新不丢、作废本长线也保留">材料</label>
+            <span class="pp-muted">长线生成用的材料在这里勾（与 1.0 互不影响）</span>
+        </div>
+        <label class="pp-label" title="勾上＝全部记忆表格的全部行随材料发送（长线不看标签、不分档位——要的就是全量）；不勾＝记忆表格整节不带">记忆表格</label>
+        <div class="pp-gd-selp">
+            <label title="默认全量：全部表格的全部行"><input type="checkbox" id="pp_lf_mat_mem" ${m.memory ? 'checked' : ''}/> 全量附带（全部表格的全部行）</label>
+        </div>
+        <label class="pp-label" title="勾选的玩法规则随每次生成发给模型，长线按其约束设计；没动过时默认勾当前生效中的条目。条目的添加与咨询在「剧情指导」页底部「游戏玩法」区">游戏玩法</label>
+        <div class="pp-gd-selp">
+            ${gpItems.map(i => `<label title="勾选后该条玩法规则作为材料发给长线模型（不影响它注入主对话）"><input type="checkbox" data-lfgp="${i.id}" ${gpSel.has(i.id) ? 'checked' : ''}/> ${escapeHtml(i.name)}${gpHit.has(i.id) ? ' <span class="pp-badge pp-badge-open">生效中</span>' : ''}</label>`).join('')
+            || '<span class="pp-muted">还没有玩法条目</span>'}
+        </div>
+        ${kbLists.length ? `
+        <label class="pp-label" title="勾上＝这张清单的整表可用条目随长线生成随行（冷却中的跳过；长线不分抽样/全量——都按整表带），模型凡涉及该清单领域的内容必须从条目里选用；长线用条目不结冷却（冷却只在「剧情指导」确认采用时记）。清单与条目在「知识库」页签管理">知识库清单</label>
+        <div class="pp-gd-selp">
+            ${kbLists.map(l => {
+                const coolN = l.entries.filter(e => Number(e.cooldown) > 0).length;
+                const usable = l.entries.length - coolN;
+                return `<label title="勾上＝整表可用 ${usable} 条随行（冷却中 ${coolN} 条跳过；抽样/全量在长线这边不分——都整表带）"><input type="checkbox" data-lfkb="${escapeHtml(l.id)}" ${m.kbListIds.includes(l.id) ? 'checked' : ''}/> ${escapeHtml(l.name)}（${l.feed === 'full' ? '全量' : '抽样'} · 可用 ${usable} 条${coolN ? ` · ${coolN} 条冷却中` : ''}）</label>`;
+            }).join('')}
+        </div>` : ''}
+        <div class="pp-btn-row">
+            <span id="pp_lf_lore" class="menu_button" title="世界书自选（悬浮面板）：按书分组勾条目，勾中的整条原文随长线生成进材料——「照着写」的材料，与知识库「选着用」分工。不看关键词/常驻/书与条目的启用状态（勾选是唯一口径，禁用的照样能勾）；与检索命中自动去重（自选优先）。这里的勾选只管长线、与「剧情指导」第 1 步的互不影响；无冷却">世界书自选（已勾 ${loreN} 条）</span>
+        </div>
+        <span class="pp-muted" id="pp_lf_matnote">${escapeHtml(lfMatOverview())}；另自动随行：角色设定、检索命中的世界书、进行中剧情、历史摘要、最近对话</span>
+    </div>`;
+}
+
+// 材料面板的勾选变动：只就地刷新概览行与世界书按钮计数（不整页重渲，勾选状态留在原地）
+function refreshLfMatUi() {
+    const note = document.getElementById('pp_lf_matnote');
+    if (note) note.textContent = `${lfMatOverview()}；另自动随行：角色设定、检索命中的世界书、进行中剧情、历史摘要、最近对话`;
+    const btn = document.getElementById('pp_lf_lore');
+    if (btn) btn.textContent = `世界书自选（已勾 ${resolveLorePicks(lfState().mats.lorePicks).length} 条）`;
+}
+
+// ---- 悬浮查看器（照剧情指导页同款：居中大窗＋Esc/点窗外关闭） ----
+let lfViewerEsc = null;
+function closeLfViewer() {
+    if (lfViewerEsc) { document.removeEventListener('keydown', lfViewerEsc); lfViewerEsc = null; }
+    document.querySelector('.pp-viewer-mask')?.remove();
+}
+function openLfViewer(title) {
+    closeLfViewer();
+    const mask = document.createElement('div');
+    mask.className = 'pp-viewer-mask';
+    mask.innerHTML = `
+    <div class="pp-viewer" role="dialog" aria-label="${escapeHtml(title)}">
+        <div class="pp-viewer-head">
+            <b>${escapeHtml(title)}</b>
+            <span class="menu_button pp-viewer-close fa-solid fa-xmark" title="关闭（Esc 或点窗外空白处也行）"></span>
+        </div>
+        <div class="pp-viewer-body"></div>
+    </div>`;
+    document.body.appendChild(mask);
+    lfViewerEsc = e => { if (e.key === 'Escape') closeLfViewer(); };
+    document.addEventListener('keydown', lfViewerEsc);
+    mask.addEventListener('mousedown', e => { if (e.target === mask) closeLfViewer(); });
+    mask.querySelector('.pp-viewer-close').addEventListener('click', closeLfViewer);
+    return mask;
+}
+
+// 世界书自选悬浮面板（长线自己的勾选存 longform 块——与 1.0 的 picks 分家；交互照第 1 步同款：
+// 按书折叠、搜索、整书全勾/全清）
+function openLfLorePanel() {
+    const body = openLfViewer('世界书自选 · 长线').querySelector('.pp-viewer-body');
+    let query = '';
+    const selSet = () => new Set(lfState().mats.lorePicks);
+    const foldState = new Map();
+    const isFolded = (book, searching) => (foldState.has(book.id) ? foldState.get(book.id) : !searching);
+
+    const render = () => {
+        const books = settings.lorebooks ?? [];
+        const sel = selSet();
+        if (!books.length) {
+            body.innerHTML = '<div class="pp-muted">还没有世界书——在「世界书」页签导入或新建后再来</div>';
+            return;
+        }
+        const q = query.trim().toLowerCase();
+        const searching = Boolean(q);
+        const groupHtml = books.map(book => {
+            const entries = (book.entries ?? []).filter(e => !q
+                || String(e.comment ?? '').toLowerCase().includes(q)
+                || String(e.content ?? '').toLowerCase().includes(q)
+                || (Array.isArray(e.keys) ? e.keys : []).some(k => String(k).toLowerCase().includes(q)));
+            if (!entries.length) return '';
+            const onN = entries.filter(e => sel.has(`${book.id}:${e.uid}`)).length;
+            const allOn = entries.length > 0 && onN === entries.length;
+            const folded = isFolded(book, searching);
+            return `
+        <div class="pp-gd-ughead">
+            <label class="pp-label" title="整本书一起勾/一起清（已勾＝全勾；再点＝全清）"><input type="checkbox" data-lbook="${escapeHtml(book.id)}" ${allOn ? 'checked' : ''} /> ${escapeHtml(book.name)}（已勾 ${onN}/${entries.length}）</label>
+            <span class="menu_button" data-lfold="${escapeHtml(book.id)}"><i class="fa-solid fa-chevron-${folded ? 'right' : 'down'}"></i> ${folded ? '展开' : '收起'}</span>
+        </div>
+        ${folded ? '' : entries.map(e => {
+            const key = `${book.id}:${e.uid}`;
+            const on = sel.has(key);
+            return `
+        <div class="pp-kb-erow${on ? '' : ' pp-kb-unsel'}">
+            <label title="勾上＝这条的原文整条随长线生成进材料（照着写，不是选着用）"><input type="checkbox" data-lore="${escapeHtml(key)}" ${on ? 'checked' : ''} /></label>
+            <span class="pp-kb-ebody" title="${escapeHtml(String(e.content ?? ''))}">${escapeHtml(String(e.comment ?? `条目 ${e.uid + 1}`))}</span>
+        </div>`; }).join('')}`;
+        }).join('');
+        body.innerHTML = `
+        <input type="text" class="text_pole textarea_compact" id="pp_lf_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动勾选；检索时命中的书自动展开…" value="${escapeHtml(query)}" style="width:100%" />
+        ${groupHtml || '<div class="pp-muted">没有命中检索词的条目，清空检索词看全部</div>'}
+        <div class="pp-muted" style="margin-top:6px">勾上＝整条原文随长线生成进材料（照着写）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与「检索命中」自动去重（这边优先，同一条不进材料两次）。这里的勾选只管长线，与「剧情指导」第 1 步的互不影响；无冷却</div>`;
+
+        const qEl = body.querySelector('#pp_lf_lore_q');
+        qEl?.addEventListener('input', () => {
+            query = qEl.value;
+            render();
+            const nq = body.querySelector('#pp_lf_lore_q');
+            nq?.focus();
+            nq?.setSelectionRange(nq.value.length, nq.value.length);
+        });
+        const apply = keys => {
+            const s = lfState();
+            s.mats.lorePicks = [...keys];
+            persistLf();
+            render();
+            refreshLfMatUi();
+        };
+        body.querySelectorAll('[data-lore]').forEach(cb => cb.addEventListener('change', () => {
+            const s = selSet();
+            if (cb.checked) s.add(cb.dataset.lore); else s.delete(cb.dataset.lore);
+            apply(s);
+        }));
+        body.querySelectorAll('[data-lbook]').forEach(cb => cb.addEventListener('change', () => {
+            const s = selSet();
+            const book = (settings.lorebooks ?? []).find(b => b.id === cb.dataset.lbook);
+            if (!book) return;
+            const keys = (book.entries ?? []).map(e => `${book.id}:${e.uid}`);
+            keys.forEach(k => { if (cb.checked) s.add(k); else s.delete(k); });
+            apply(s);
+        }));
+        body.querySelectorAll('[data-lfold]').forEach(el => el.addEventListener('click', () => {
+            const book = (settings.lorebooks ?? []).find(b => b.id === el.dataset.lfold);
+            if (!book) return;
+            const searching = Boolean(query.trim());
+            foldState.set(book.id, !isFolded(book, searching));
+            render();
+        }));
+    };
+    render();
 }
 
 function volCardHtml(v, i, st) {
@@ -278,6 +445,32 @@ function bindTab(container, st) {
         [floorsEl, minEl, ideaEl, ncEl].forEach(el => el.addEventListener('change', stash));
     }
     container.querySelector('#pp_lf_prov')?.addEventListener('change', e => { providerId = e.target.value; });
+
+    // 材料面板：勾选即留底（存 longform 块的 mats——刷新不丢、作废本长线也保留）
+    container.querySelector('#pp_lf_mat_mem')?.addEventListener('change', e => {
+        const s = lfState();
+        s.mats.memory = e.target.checked;
+        persistLf();
+        refreshLfMatUi();
+    });
+    container.querySelectorAll('[data-lfgp]').forEach(cb => cb.addEventListener('change', () => {
+        const s = lfState();
+        const cur = new Set(s.mats.gpIds ?? storageItemsInEffect().map(i => i.id));   // null＝跟随生效中，动第一下时固化
+        if (cb.checked) cur.add(cb.dataset.lfgp); else cur.delete(cb.dataset.lfgp);
+        s.mats.gpIds = [...cur];
+        persistLf();
+        refreshLfMatUi();
+    }));
+    container.querySelectorAll('[data-lfkb]').forEach(cb => cb.addEventListener('change', () => {
+        const s = lfState();
+        const cur = new Set(s.mats.kbListIds);
+        if (cb.checked) cur.add(cb.dataset.lfkb); else cur.delete(cb.dataset.lfkb);
+        s.mats.kbListIds = [...cur];
+        persistLf();
+        refreshLfMatUi();
+    }));
+    container.querySelector('#pp_lf_lore')?.addEventListener('click', () => openLfLorePanel());
+
     container.querySelector('#pp_lf_skeleton')?.addEventListener('click', async function () {
         if (lfBusy) return toastr.warning('有长线生成还在跑（先中断或等它完成）');
         const s = lfState();

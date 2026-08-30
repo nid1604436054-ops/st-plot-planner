@@ -10,6 +10,8 @@ import { chatCompletion, parseModelJson } from "./api.js";
 import { materialSections } from "./materials.js";
 import { storyState, activeStory } from "./story.js";
 import { listenerState, opMountUnit } from "./listener.js";
+import { storageItemsInEffect } from "./store.js";
+import { knowledgeLists, payloadFromIds, entryText } from "./knowledge.js";
 
 // 数值（§6.8：2026-08-28 用户终审；节点下限 3 是唯一未点名项，按提案默认执行）
 export const LF_MIN_ANCHORS = 4;          // 推进锚每卷下限（后期改「生成前可选/模型自判」，用户预告）
@@ -29,6 +31,7 @@ export function lfState() {
         minFloors: 0,             // 保底楼数（0 = 未设）
         idea: '', newChars: false,
         materialNote: '',         // 骨架那次实际携带的材料概览（事后可对账）
+        mats: null,               // 材料面板勾选（第十九轮）：null=未初始化（见 normalize 的默认）
         createdAt: 0,
         volumes: [],
         mount: null,              // { vol, ch, unitId, at } 当前挂进监听的章
@@ -42,6 +45,7 @@ export function lfState() {
     st.idea = String(st.idea ?? '');
     st.newChars = st.newChars === true;
     st.materialNote = String(st.materialNote ?? '');
+    st.mats = normLfMats(st.mats);
     st.createdAt = Number(st.createdAt) || 0;
     st.volumes = Array.isArray(st.volumes) ? st.volumes.map(normVol) : [];
     st.error = String(st.error ?? '');
@@ -99,11 +103,24 @@ function normChapter(c) {
     };
 }
 
+// 材料面板勾选的形状收敛（第十九轮）：memory 默认开（记忆表格默认全量）、gpIds null＝未动过
+// （跟随生效中的玩法条目，与向导第 1 步同默认）、lorePicks/kbListIds 空数组起步
+function normLfMats(m) {
+    const o = m && typeof m === 'object' ? m : {};
+    return {
+        memory: o.memory !== false,
+        gpIds: Array.isArray(o.gpIds) ? o.gpIds.map(String) : null,
+        lorePicks: Array.isArray(o.lorePicks) ? o.lorePicks.map(String) : [],
+        kbListIds: Array.isArray(o.kbListIds) ? o.kbListIds.map(String) : [],
+    };
+}
+
 export function resetLf() {
+    const mats = lfState().mats;   // 材料勾选是偏好不是书数据——作废本长线时保留
     saveChatData('longform', {
         version: 1, stage: 'none',
         totalFloors: LF_DEFAULT_FLOORS, minFloors: 0, idea: '', newChars: false,
-        materialNote: '', createdAt: 0, volumes: [], mount: null,
+        materialNote: '', mats, createdAt: 0, volumes: [], mount: null,
     });
     flushChatData();
 }
@@ -152,38 +169,72 @@ export function anchorsFromText(text) {
 }
 
 // ---------------------------------------------------------------------------
-// 材料口径：剧情指导页第 1 步的勾选（§6.2「1.0 材料面板自选＋世界书条目自选」）。
-// 不带：知识库（§6.9 挂账「后续 2.0 生成器接不接到时再议」）、插入单元 / 近期草稿骨架 /
-// 联网搜索（三者都是 1.0 向导专属口径；要给长线吸收的内容写进「本次长线的想法」框）
+// 材料口径（第十九轮用户拍板：长线自备材料面板，不再沿用 1.0 第 1 步的勾选——那边改不了
+// 长线想要的世界书/知识库独立选择，记忆表格长线要默认全量、不要标签）：
+// 记忆表格一个勾＝全量（memoryTags: null/false）；玩法 gpIds null＝跟随生效中（同向导默认）；
+// 世界书自选独立存（与 1.0 的 picks 分家）；知识库勾中的清单整表可用条目随行（§6.9 硬口径）。
+// 仍不带：插入单元 / 近期草稿骨架 / 联网搜索（1.0 向导专属；要吸收的内容写「本次长线的想法」框）
 // ---------------------------------------------------------------------------
 
-function lfPicks() {
-    const p = loadChatData('picks', null);
-    if (!p) return { memModes: null, memTags: [], memRecent: 0, gpIds: null, lorePicks: [] };
-    return {
-        memModes: p.memModes ?? null,
-        memTags: Array.isArray(p.memTags) ? p.memTags : [],
-        memRecent: Math.max(0, Math.round(Number(p.memRecent) || 0)),
-        gpIds: Array.isArray(p.gpIds) ? p.gpIds : null,
-        lorePicks: Array.isArray(p.lorePicks) ? p.lorePicks.map(String) : [],
-    };
+// 玩法条目解析：null＝用户没动过面板 → 跟随生效中的条目（storageItemsInEffect，与向导第 1 步同默认）
+function lfGpIds(m) {
+    return m.gpIds ?? storageItemsInEffect().map(i => i.id);
 }
 
-// 与向导分析同一拼法（materials.materialSections，稳定在前/会变的垫底——前缀缓存口径照吃）；
-// 整批并行调用只拼一次、逐卷共享同一份字符串
+// 知识库整表随行：勾中的清单全部可用条目（冷却中跳过）；不分抽样/全量、不抓取不轮换、
+// 不结冷却（冷却账只属于向导「确认采用」流——长线没有那一步，不碰那张账）
+function lfKbPayload(kbListIds) {
+    const checked = new Set(kbListIds);
+    const ids = [];
+    for (const list of knowledgeLists()) {
+        if (!checked.has(list.id)) continue;
+        for (const e of list.entries) {
+            if (Number(e.cooldown) > 0) continue;
+            ids.push(e.id);
+        }
+    }
+    return payloadFromIds(ids);
+}
+
+// 知识库材料小节（长线版）：按清单分组、整表口径（编号＝设置里的清单序号-条目号，与向导同款，
+// 用户写修订意见时可以拿编号点名）；插在「检索命中」前（第十三轮排序原则——清单内容稳定
+// 在前，开头会变的检索命中/最近对话垫底，前缀缓存照吃）
+function lfKbSection(payload) {
+    const groups = [];
+    for (let i = 0; i < payload.length;) {
+        const { list, listPos } = payload[i];
+        const items = [];
+        while (i < payload.length && payload[i].list === list) items.push(payload[i++]);
+        groups.push(
+            `### 清单 ${listPos} · ${list.name}（本清单领域的完整候选表——规划凡涉及该领域的内容，必须从下列条目里选用，不得自拟同类）`,
+            items.map(({ entry }) => `【编号 ${listPos}-${entry.code}】${entryText(list, entry) || '（空条目）'}`).join('\n'),
+        );
+    }
+    if (!groups.length) return null;
+    return [
+        '## 知识库材料（用户自建清单的候选素材，反模型偏好用：凡涉及某清单领域的内容必须从该清单条目里选用、不得自拟同类。选用时保持条目的核心特征——地点是酒吧就按酒吧写，不擅自改成餐厅；自然融入规划，不生硬罗列、不逐条复述；条目的排列顺序不代表时间先后，排程看时间信息不看罗列顺序。用户想法里点名了具体内容的以点名为准，不硬换成清单条目）',
+        groups.join('\n'),
+    ];
+}
+
+// 与向导共用同一拼法（materials.materialSections，稳定在前/会变的垫底——前缀缓存口径照吃）；
+// 整批并行调用只拼一次、逐卷共享同一份字符串。知识库小节按第十三轮排序原则插在检索命中前
 export function lfMaterialParts() {
-    const p = lfPicks();
+    const m = lfState().mats;
     const s = storyState();
     const { parts } = materialSections({
-        memoryTags: p.memTags,
-        memoryModes: p.memModes,
-        memoryRecent: p.memRecent,
-        storageItems: (settings.storageItems ?? []).filter(i => (p.gpIds ?? []).includes(i.id)),
+        memoryTags: m.memory ? null : false,   // 全量附带（null）或整节不带（false）——没有中间档
+        storageItems: (settings.storageItems ?? []).filter(i => lfGpIds(m).includes(i.id)),
         activePlan: activeStory()?.planText ?? '',
         historySummaries: (s.history ?? []).filter(h => h.id !== s.activeId).map(h => h.summary),
-        lorePicks: p.lorePicks,
+        lorePicks: m.lorePicks,
     });
-    return parts;
+    const kb = lfKbPayload(m.kbListIds);
+    if (!kb.length) return parts;
+    const sec = lfKbSection(kb);
+    const idx = parts.findIndex(p => String(p ?? '').startsWith('## 检索命中的世界书条目'));
+    if (idx < 0) return [...parts, ...(sec ?? [])];
+    return [...parts.slice(0, idx), ...(sec ?? []), ...parts.slice(idx)];
 }
 
 // 换算锚（§6.3）：与监听共用设置页「监听」区的区间两端（一处设置、两侧同源，免得两个数值漂移）
@@ -364,7 +415,7 @@ export async function runLfSkeleton({ totalFloors, minFloors = 0, idea = '', new
         minFloors: posInt(minFloors) ?? 0,
         idea: String(idea ?? ''),
         newChars: newChars === true,
-        materialNote: materialNoteOf(),
+        materialNote: lfMatOverview(),
         createdAt: Date.now(),
         volumes: vols.map(v => normVol(v)),
         mount: null,
@@ -375,16 +426,19 @@ export async function runLfSkeleton({ totalFloors, minFloors = 0, idea = '', new
     return st;
 }
 
-// 材料概览一行（骨架时点留底，页面上事后可对账「那次带了什么」）
-function materialNoteOf() {
-    const p = lfPicks();
+// 材料概览一行（骨架时点留底用；页面的材料面板也拿它当实时概览——第十九轮起按长线自己的勾选）
+export function lfMatOverview() {
+    const m = lfState().mats;
     const s = storyState();
-    const gp = (settings.storageItems ?? []).filter(i => (p.gpIds ?? []).includes(i.id)).length;
+    const gp = (settings.storageItems ?? []).filter(i => lfGpIds(m).includes(i.id)).length;
+    const kb = lfKbPayload(m.kbListIds);
+    const kbLists = new Set(kb.map(p => p.list.id)).size;
     const hist = (s.history ?? []).filter(h => h.id !== s.activeId).length;
     return [
+        m.memory ? '记忆表格全量' : '记忆表格不带',
         `玩法 ${gp} 条`,
-        p.lorePicks.length ? `世界书自选 ${p.lorePicks.length} 条` : '世界书自选未勾',
-        '记忆表格按第 1 步口径',
+        kbLists ? `知识库 ${kbLists} 清单 ${kb.length} 条` : '知识库未勾',
+        m.lorePicks.length ? `世界书自选 ${m.lorePicks.length} 条` : '世界书自选未勾',
         activeStory() ? '进行中剧情随行' : '无进行中剧情',
         hist ? `历史摘要 ${hist} 份` : '无历史摘要',
     ].join(' · ');
