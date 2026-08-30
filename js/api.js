@@ -18,14 +18,17 @@ function requireConfig(conn) {
     }
 }
 
-// 关闭思考参数（设置页「关闭思考」勾上时附带）：各家只认自己的、陌生的多半忽略——
-// deepseek/GLM 认 thinking、Qwen 认 enable_thinking、OpenAI 系认 reasoning_effort、
-// vLLM 部署的混合思考模型认 chat_template_kwargs，一并带上。
+// 关闭思考参数（第十七轮起分两路：设置页「关闭思考」总开关只管生成侧；监听侧恒关——
+// 由 chatCompletion 的 thinkingOff:true 按次覆盖、不吃总开关）：各家只认自己的、陌生的
+// 多半忽略——deepseek/GLM 认 thinking、Qwen 认 enable_thinking、OpenAI 系认
+// reasoning_effort、vLLM 部署的混合思考模型认 chat_template_kwargs，一并带上。
 // 端点对陌生参数直接报 400/422 时按报错点名的参数**定向去除**重发（见 chatCompletion），
 // 不再一刀全去——一刀全去＝把「关闭思考」一起丢掉、思考静默回来（2026-08-30 第八轮真机
-// 教训：V4-Flash 思考默认开、effort 默认 high，一刀切后一万多输出）
-function thinkingOffParams() {
-    return settings.api.thinkingOff ? {
+// 教训：V4-Flash 思考默认开、effort 默认 high，一刀切后一万多输出）。
+// 用户环境（2026-08-30 用户告知）：DeepSeek 官方 API、基本不会变——方言适配以 deepseek
+// 官方口径（thinking 字段）为第一优先，其余三家是兼容层
+function thinkingOffParams(on) {
+    return on ? {
         thinking: { type: 'disabled' },
         enable_thinking: false,
         reasoning_effort: 'none',
@@ -36,7 +39,7 @@ function thinkingOffParams() {
 // 取补全的最终文本，兼容三种正文形态：普通字符串 / 分段数组（content:[{type:'text'}]）/
 // 推理模型正文为空时把内容放进思考字段（reasoning_content / reasoning）。
 // 仍取不到时按证据报错：finish_reason 与 usage 能区分「长度耗尽 / 被过滤 / 字段不认识」
-function pickContent(message, { finishReason = '', completionTokens = null, promptTokens = null } = {}) {
+function pickContent(message, { finishReason = '', completionTokens = null, promptTokens = null, thinkingOff = false } = {}) {
     const c = message?.content;
     let text = typeof c === 'string' ? c
         : (Array.isArray(c) ? c.map(p => (typeof p === 'string' ? p : String(p?.text ?? ''))).join('') : '');
@@ -52,8 +55,8 @@ function pickContent(message, { finishReason = '', completionTokens = null, prom
         + `${promptTokens != null ? `，输入实报 ${promptTokens.toLocaleString()} tokens` : ''}`
         + `，消息原文（前 150 字）：${raw.slice(0, 150)}`;
     if (finishReason === 'length') {
-        const offNote = settings.api.thinkingOff
-            ? '。「关闭思考」已勾上仍如此：这个端点/中转多半没真正执行关闭参数（参数收下了、思考照做，或把思考扣下不回传但照样计费）'
+        const offNote = thinkingOff
+            ? '。本次请求已带关闭思考参数仍如此：这个端点/中转多半没真正执行关闭参数（参数收下了、思考照做，或把思考扣下不回传但照样计费）'
             : '';
         throw new ApiError(`模型返回了空内容（${evidence}）。输出长度上限用完且正文一字未落：推理模型的思考计入「单次上限 tokens」、计费口径的「输出 tokens」通常也包含思考——若上面消息原文里连思考字段都没有，就是端点把已生成的内容扣下不回传了；继续调大上限或换非推理模型${offNote}`);
     }
@@ -108,6 +111,9 @@ class ThinkingHeaderError extends Error {
  * @param {{baseUrl:string,apiKey:string,model:string}} [options.provider]
  *        独立连接覆盖（监听模型固定项用）：提供时地址/密钥/模型走这一套，
  *        不提供走当前主连接；温度等其余参数全局共用
+ * @param {boolean} [options.thinkingOff] 本次调用显式覆盖「关闭思考」（第十七轮分家）：
+ *        true＝带关闭思考参数、false＝不带；缺省跟设置页总开关。监听侧恒传 true——
+ *        监听每轮都跑、开了思考成本会爆炸；规划等生成侧继续跟总开关（要聪明自己开思考）
  * @returns {Promise<string>} 模型输出的文本（启用中的预设已随 system 消息附带）。
  *          输出以思考标头（「## 思考（Thinking）」类）开场时自动重试一次（见下方包装）。
  */
@@ -163,7 +169,9 @@ export async function chatCompletion(options = {}) {
     return text;
 }
 
-async function chatCompletionOnce({ messages, temperature, maxTokens, signal, onDelta, onUsage, onReasoning, skipPresets = false, provider } = {}, tolerateThinkingHeader = false) {
+async function chatCompletionOnce({ messages, temperature, maxTokens, signal, onDelta, onUsage, onReasoning, skipPresets = false, provider, thinkingOff } = {}, tolerateThinkingHeader = false) {
+    // 「关闭思考」解析（第十七轮分家）：调用方显式给（监听恒 true）优先，否则跟设置页总开关（生成侧）
+    const thinkOff = thinkingOff ?? settings.api.thinkingOff;
     const conn = provider ?? settings.api;
     requireConfig(conn);
     const url = `${conn.baseUrl.replace(/\/+$/, '')}/chat/completions`;
@@ -197,7 +205,7 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
         // 上限四发（第九轮放宽自三发）：deepseek 官方端点正是「严格点名陌生参数」型且倾向
         // 一次只点一个名——四家里的三家方言要三轮点名才去完，三发上限会在中途报错断掉
         const streamOpt = stream && typeof onUsage === 'function' ? { stream_options: { include_usage: true } } : {};
-        let attempt = { ...thinkingOffParams(), ...streamOpt };
+        let attempt = { ...thinkingOffParams(thinkOff), ...streamOpt };
         let sent = attempt;
         // 报错点名参数的判定：长名先占位再查短名——报错文案写 enable_thinking 时，
         // 其子串 thinking 不能算 thinking 参数也被点了名（点名错人会误删好的参数）
@@ -220,16 +228,16 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
             const blamed = blameKeys(Object.keys(sent));
             if (blamed.length) {
                 attempt = Object.fromEntries(Object.entries(sent).filter(([k]) => !blamed.includes(k)));
-            } else if (settings.api.thinkingOff && sent.thinking
+            } else if (thinkOff && sent.thinking
                 && Object.keys(sent).some(k => k !== 'thinking' && k !== 'stream_options')) {
                 attempt = { thinking: { type: 'disabled' }, ...(sent.stream_options ? { stream_options: sent.stream_options } : {}) };
             } else {
                 attempt = {};   // 最后手段：全部去掉重发（原行为，只在梯子走完仍被拒时才到这）
             }
         }
-        if (res.ok && settings.api.thinkingOff
+        if (res.ok && thinkOff
             && !(sent.thinking || sent.enable_thinking === false || sent.reasoning_effort || sent.chat_template_kwargs)) {
-            toastr.warning('「关闭思考」的参数被这个端点拒绝、已全部去掉后重发——本次模型可能照常思考（运行页的「思考」计数能实时看到，不对劲就点「中断」止损）');
+            toastr.warning('关闭思考的参数被这个端点拒绝、已全部去掉后重发——本次模型可能照常思考（生成任务在运行页看「思考」计数、可点「中断」止损）');
         }
     } catch (err) {
         if (err.name === 'AbortError') throw err;
@@ -247,7 +255,7 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
         const choice = data?.choices?.[0];
         if (!choice?.message) throw new ApiError('API 返回结构异常（缺少 choices[0].message）');
         if (typeof onUsage === 'function' && data?.usage) onUsage(data.usage);
-        return pickContent(choice.message, { finishReason: choice.finish_reason, completionTokens: data?.usage?.completion_tokens, promptTokens: data?.usage?.prompt_tokens });
+        return pickContent(choice.message, { finishReason: choice.finish_reason, completionTokens: data?.usage?.completion_tokens, promptTokens: data?.usage?.prompt_tokens, thinkingOff: thinkOff });
     }
 
     // SSE 流式：逐行解析 data: {...}，聚合增量并回调 onDelta；末包的 usage（若有）回传对账。

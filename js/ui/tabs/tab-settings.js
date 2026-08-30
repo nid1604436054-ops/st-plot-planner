@@ -132,6 +132,7 @@ export const settingsTab = {
                         <select id="pp_set_ls_prov" class="text_pole"></select>
                     </div>
                 </div>
+                <div class="pp-muted">监听固定关闭思考，不吃高级设置里「关闭思考」总开关——监听每轮都跑、开了思考成本会爆炸；剧情规划等其余调用仍跟总开关走</div>
                 <label class="pp-label" title="监听指导注入槽的深度（0 = 紧贴上下文末尾；数字越大越靠前）。默认 2，比 1.0 剧情注入（默认 4）更靠近末端；同轮并存时监听指导在更后面">注入深度</label>
                 <input id="pp_set_ls_depth" class="text_pole textarea_compact" type="number" min="0" max="100" />
                 <hr class="pp-hr" />
@@ -185,7 +186,7 @@ export const settingsTab = {
                     <input id="pp_set_maxtok" class="text_pole textarea_compact" type="number" min="128" step="64" />
                 </div>
                 <div>
-                    <label class="pp-label" title="推理模型把「单次上限 tokens」全花在思考上、正文一个字不出（报空内容且 finish_reason=length）时勾上：请求会带上主流服务商的关闭思考参数（GLM 系 thinking / Qwen 系 enable_thinking），端点不认这些参数时自动去掉重发一次">关闭思考</label>
+                    <label class="pp-label" title="推理模型把「单次上限 tokens」全花在思考上、正文一个字不出（报空内容且 finish_reason=length）时勾上：请求会带上主流服务商的关闭思考参数（GLM 系 thinking / Qwen 系 enable_thinking），端点不认这些参数时自动去掉重发一次。只管生成侧（剧情规划、检查、随机事件、路人反应、AI 打标建库、玩法咨询）；监听固定关思考、不吃这个开关">关闭思考</label>
                     <input id="pp_set_thinkoff" type="checkbox" />
                 </div>
             </div>

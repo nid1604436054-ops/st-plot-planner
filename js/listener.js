@@ -679,7 +679,9 @@ async function listenerAttempt(messages, provider, onUsage) {
         const ctl = new AbortController();
         const timer = setTimeout(() => ctl.abort(), CALL_TIMEOUT_MS);
         try {
-            return await chatCompletion({ messages, provider, signal: ctl.signal, onUsage });
+            // 第十七轮分家：监听恒传 thinkingOff:true——固定关思考、不吃设置页「关闭思考」总开关。
+            // 监听每轮都跑、开了思考成本会爆炸；规划等生成侧继续跟总开关，两侧互不牵连
+            return await chatCompletion({ messages, provider, signal: ctl.signal, onUsage, thinkingOff: true });
         } catch (err) {
             lastErr = err;
             if (err?.name === 'AbortError') err.message = `监听调用超时（${CALL_TIMEOUT_MS / 1000} 秒）`;

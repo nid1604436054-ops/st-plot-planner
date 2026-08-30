@@ -12,7 +12,7 @@ const DEFAULTS = {
         model: '',
         temperature: 0.7,
         maxTokens: 1500,
-        thinkingOff: false, // 推理模型关闭思考：请求体附加主流关闭参数（GLM 系 thinking / Qwen 系 enable_thinking），端点不认时自动去参重试
+        thinkingOff: false, // 推理模型关闭思考（生成侧总开关；监听恒关不吃它——第十七轮分家）：请求体附加主流关闭参数（GLM 系 thinking / Qwen 系 enable_thinking 等），端点不认时自动去参重试
         profiles: [],       // 供应商方案库：{id, name, baseUrl, apiKey, model}，设置页存当前连接、下拉一键切换（温度等其余参数全局共用）
     },
     search: {
