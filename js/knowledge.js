@@ -234,9 +234,12 @@ export function kbSendPayload({ checkedListIds = [], grabbedIds = [], selIds = [
 }
 
 // 材料小节（planner.js 插进「进行中剧情」之前；只进规划向导，其他调用方一概不带）。
-// 按投喂方式分组（第七轮）：全量清单＝硬口径（该领域内容必须从中选、不得自拟同类）、
-// 抽样清单＝软口径（优先选用、没覆盖的方向可自拟）；两种清单同场时各成一个分组、各自带口径。
-// 小节标题同时声明「排列顺序不代表时间先后」——第七轮实测病灶：清单按序拼接被模型当时间线读
+// 按投喂方式分组（第七轮）：全量与抽样各成分组。第十五轮（真机反馈「清单条目与输出完全不匹配」）
+// 口径统一改硬：抽样的软口径（优先选用、没覆盖可自拟）实测管不住模型——它按自己的偏好尖峰
+// 自拟了全部选材、自报空数组照样合规。现在无论全量还是抽样：凡涉及该清单领域的内容必须从
+// 该分组条目里选用、不得自拟同类；抽样分组逐张带清单名（多张同场时「必须从中选」要按领域
+// 对号入座，平铺混一组模型分不清哪条管哪类内容）。小节标题同时声明「排列顺序不代表时间先后」
+// ——第七轮实测病灶：清单按序拼接被模型当时间线读
 export function knowledgeSection(payload) {
     const items = payload ?? [];
     const linesOf = arr => arr.map(({ listPos, list, entry }) =>
@@ -247,19 +250,25 @@ export function knowledgeSection(payload) {
     if (full.length) {
         const names = [...new Set(full.map(p => p.list.name))].join('、');
         groups.push(
-            `### 全量清单（${names}）：下面是这张（些）清单的完整候选表——规划凡涉及这类内容，必须从下列条目里选用，不得自拟同类`,
+            `### 全量清单（${names}）：这张（些）清单领域的完整候选表——规划凡涉及该领域的内容，必须从下列条目里选用，不得自拟同类`,
             linesOf(full),
         );
     }
-    if (sample.length) {
+    const sampleLists = [];
+    for (const p of sample) {
+        let g = sampleLists.find(x => x.list === p.list);
+        if (!g) { g = { list: p.list, items: [] }; sampleLists.push(g); }
+        g.items.push(p);
+    }
+    for (const g of sampleLists) {
         groups.push(
-            '### 抽样清单：从用户清单里随机抽出的候选素材——优先从下列条目里选用，选材面没覆盖的方向可以自拟',
-            linesOf(sample),
+            `### 抽样清单 · ${g.list.name}：这张清单随机抽出的一小把候选——规划凡涉及该清单领域的内容，必须从下列条目里选用，不得自拟同类（这一把就是该领域本次的全部候选面，清单是用来替换你自己常见偏好的，不是给你参考）`,
+            linesOf(g.items),
         );
     }
     if (!groups.length) return null;
     return [
-        '## 知识库材料（用户自建清单的候选素材：按各分组的口径选用并自然融入规划——保持条目核心特征，不生硬罗列、不逐条复述；条目的排列顺序不代表时间先后，排程看时间信息不看罗列顺序）',
+        '## 知识库材料（用户自建清单的候选素材，反模型偏好用：无论全量还是抽样分组，规划凡涉及该清单领域的内容必须从该分组条目里选用、不得自拟同类。选用时保持条目的核心特征——地点是酒吧就按酒吧写，不擅自改成餐厅；自然融入规划，不生硬罗列、不逐条复述；条目的排列顺序不代表时间先后，排程看时间信息不看罗列顺序）',
         groups.join('\n'),
     ];
 }
@@ -275,6 +284,24 @@ function usedEntryIds(payload, usedCodes) {
         if (hit) ids.add(hit.entry.id);
     }
     return ids;
+}
+
+// 自报选用的展示标签（第十五轮结果页「知识库选用」对账行用）：编号 →「x-xx 首字段」。
+// 与 usedEntryIds 同一套编号匹配；对不上的编号（模型写错／条目已删）原样带出，不静默吞——
+// 对账行要让用户看见模型报了什么，报错也是一种信息
+export function knowledgeUsedLabels(payload, usedCodes) {
+    const out = [];
+    for (const raw of usedCodes ?? []) {
+        const text = String(raw ?? '').trim();
+        if (!text) continue;
+        const m = text.match(/^(\d+)\s*-\s*(\d+)$/);
+        const hit = m && (payload ?? []).find(p =>
+            String(p.listPos) === m[1] && String(p.entry.code) === m[2].padStart(2, '0'));
+        out.push(hit
+            ? `${hit.listPos}-${hit.entry.code} ${String(hit.entry?.values?.[hit.list.fields[0]] ?? '').trim() || '（无首字段）'}`
+            : text);
+    }
+    return [...new Set(out)];
 }
 
 /**

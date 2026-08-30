@@ -31,7 +31,7 @@ import { getTavernContext } from "../../context.js";
 import { loadChatData, saveChatData } from "../../chatdata.js";
 import { escapeHtml, estimateTokens, scanUserScripting } from "../../utils.js";
 import { searchToolReady, withGlobalPresets } from "../../api.js";
-import { knowledgeLists, payloadFromIds, grabFromList, entryText, settleCooldown, knowledgeCfg, kbSendPayload } from "../../knowledge.js";
+import { knowledgeLists, payloadFromIds, grabFromList, entryText, settleCooldown, knowledgeCfg, kbSendPayload, knowledgeUsedLabels } from "../../knowledge.js";
 import { resolveLorePicks } from "../../lorebook.js";
 import { unitsState, persistUnits, newEventUnit, newReactionUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, eventOriginText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
 
@@ -2230,6 +2230,15 @@ function renderResult(container, main) {
     // 第二遍对齐修改（第十二轮，用户拍板两遍调用）：改动逐条列在同一张卡（第十一轮黄牌同款形态）
     const fixes = Array.isArray(run.result?.fixes) ? run.result.fixes.filter(Boolean) : [];
     const alignState = run.result?.alignState;
+    // 知识库选用（第十五轮，用户拍板「结果层显示自报选用」）：模型自报的选用编号原样上屏，
+    // 与第 1 步实际发送的对账——此前自报只喂冷却结算，用户看到「清单与输出不匹配」无从对账。
+    // 发送集按分析时的 kbSentIds 快照还原（结算前一直在）；没发知识材料不出这行
+    const kbLabels = (run.kbSentIds ?? []).length
+        ? knowledgeUsedLabels(payloadFromIds(run.kbSentIds), run.result?.plan?.knowledgeUsed)
+        : null;
+    const kbUsedRow = kbLabels === null ? '' : checkRow('知识库选用', kbLabels.length
+        ? `<div>${escapeHtml(kbLabels.join('、'))}</div><div class="pp-muted">模型自报从清单里选用了以上条目（编号＝清单号-条目号）——对照下方规划正文核对：报了没写、写了没报都算对不上，可在修改意见里点名纠正后重新生成</div>`
+        : '<span class="pp-muted">模型自报一条没用——按「必须从清单里选」的口径，除非构思里点名了别处或本次真不涉及这些清单的领域，这算违规：可在修改意见里点名要用的条目后重新生成</span>');
 
     main.innerHTML = `
     <div class="pp-section">
@@ -2239,6 +2248,7 @@ function renderResult(container, main) {
             : anchor.includes('未指明')
                 ? '<span class="pp-muted">未指明——材料里没读到时间线索，排程前的「现在」由模型自定</span>'
                 : `<div>${escapeHtml(anchor)}</div><div class="pp-muted">模型读出的「现在」，排程全以它为锚；读错了说明材料里的时间线索没被看到，直接改下方规划文本里的相对时间即可</div>`)}
+        ${kbUsedRow}
         ${checkRow('第二遍对齐修改', alignState === 'done'
             ? (fixes.length
                 ? `<div>改动 <b>${fixes.length}</b> 处：</div><div class="pp-hit">${fixes.map(s => `<div>${escapeHtml(s)}</div>`).join('')}</div><div class="pp-muted">第二遍（同一份材料当对账清单重审）逐条修正的地方——采用的已是修正后版本</div>`
