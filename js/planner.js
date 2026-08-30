@@ -537,6 +537,10 @@ export async function runPlotGuidance(options = {}) {
 // 第十三轮尾巴化：messages 原样保留、不再换 system——第二遍请求与第一遍逐字节共享前缀，
 // 支持前缀缓存的服务商（DeepSeek/部分中转）第二遍的输入大头走缓存价；审校指令以追加尾巴
 // 挂在最后一条 user 消息末尾（联网纪要之后、第一遍草稿之前），差异只出现在请求最末尾
+// 第十四轮两处加固（真机「第二遍报错率奇高」）：①输出上限按设置值 ×1.5 发——第二遍输出＝
+// 整份 plan 重发＋fixes 清单、比第一遍只长不短，同一上限下第二遍更容易撞顶截断成坏 JSON；
+// ②解析接入 parseModelJson 修复梯子——此前裸 extractJson，坏格式直接整遍判失败，现在与
+// 反应卡/报告卡同款带修复提示回炉一次（重试前缀仍是原对话，缓存口径不变）
 async function alignPass(done, messages, { hasKnowledge = false, onDelta, onStage, signal, onReasoning } = {}) {
     const draft = done.result.plan;
     const tail = `${alignTailPrompt(hasKnowledge)}\n\n## 第一遍草稿（对齐审校的对象——只改违反要求处，其余原样保留）\n${JSON.stringify(draft, null, 2)}`;
@@ -558,8 +562,10 @@ async function alignPass(done, messages, { hasKnowledge = false, onDelta, onStag
         : (onDelta ? '第二遍流式未回传 usage，无第二遍实报数字' : '');
     try {
         onStage?.('align');
-        const text = await chatCompletion({
-            messages: alignMessages,
+        // 输出上限 ×1.5（第十四轮）：设置 0（不限/端点默认）保持 0 不动，不为它发明新语义
+        const base = Number(settings.api?.maxTokens) || 0;
+        const opts = {
+            maxTokens: base > 0 ? Math.round(base * 1.5) : base,
             signal,
             onUsage: u => {
                 alignUsage.promptTokens += u?.prompt_tokens ?? 0;
@@ -568,9 +574,11 @@ async function alignPass(done, messages, { hasKnowledge = false, onDelta, onStag
             },
             ...(onDelta ? { onDelta } : {}),
             ...(onReasoning ? { onReasoning } : {}),
-        });
-        const parsed = extractJson(text);
-        if (!parsed?.plan || !Array.isArray(parsed.plan.beats)) throw new Error('第二遍输出里没有可用的 plan');
+        };
+        const text = await chatCompletion({ messages: alignMessages, ...opts });
+        // 修复梯子（第十四轮）：坏 JSON 带修复提示回炉一次，重试的计费照常经 onUsage 累进两遍合计账
+        const { result: parsed } = await parseModelJson(text, { messages: alignMessages, call: chatCompletion, ...opts });
+        if (!parsed?.plan || !Array.isArray(parsed.plan.beats)) throw new Error('第二遍输出里没有可用的 plan（若模型只回了 fixes 清单没回完整 plan，也按失败处理——保留第一遍）');
         done.result = { ...done.result, plan: parsed.plan };
         done.result.fixes = (Array.isArray(parsed.fixes) ? parsed.fixes : []).map(f => String(f ?? '').trim()).filter(Boolean);
         done.result.alignState = 'done';

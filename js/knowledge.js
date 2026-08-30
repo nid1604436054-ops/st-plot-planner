@@ -204,6 +204,35 @@ export function payloadFromIds(ids) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// 向导发送集裁决（第十四轮：采用方式从面板级一个全局开关改成单张清单级——真机翻车点：
+// 多张抽样清单同场时全局「自选」让没勾的清单整张静默掉队，用户点名「单张清单能做指定」）。
+// 纯函数，输入向导侧选择状态、输出最终发送载荷：抽样清单按各自采用方式发（modes[listId]，
+// 旧快照回退遗留全局 legacyMode，再缺省 'all'）——「全部采用」整把发、「自选」只发勾上的；
+// 全量清单整表可用条目现场并入（冷却跳过、踢掉不发）；不在第 1 步勾选中的清单一概不带。
+// 面板 / 确认页细账 / 真实调用三处共用，看到的与发出的永远一致
+// ---------------------------------------------------------------------------
+export function kbSendPayload({ checkedListIds = [], grabbedIds = [], selIds = [], modes = null, legacyMode = 'all', kickIds = [] } = {}) {
+    const checked = new Set(checkedListIds);
+    const kicks = new Set(kickIds);
+    const modeOf = list => (modes?.[list.id] === 'pick' || modes?.[list.id] === 'all')
+        ? modes[list.id]
+        : (legacyMode === 'pick' ? 'pick' : 'all');
+    const fullIds = [];
+    for (const list of knowledgeLists()) {
+        if (list.feed !== 'full' || !checked.has(list.id)) continue;
+        for (const e of list.entries) {
+            if (Number(e.cooldown) > 0 || kicks.has(e.id)) continue;
+            fullIds.push(e.id);
+        }
+    }
+    // 抓取集按各自清单的方式过滤；后来改成全量的清单，旧抓取集让位给整表现算（不双发）
+    const sample = payloadFromIds(grabbedIds).filter(p => checked.has(p.list.id)
+        && p.list.feed !== 'full'
+        && (modeOf(p.list) !== 'pick' || selIds.includes(p.entry.id)));
+    return [...sample, ...payloadFromIds(fullIds)];
+}
+
 // 材料小节（planner.js 插进「进行中剧情」之前；只进规划向导，其他调用方一概不带）。
 // 按投喂方式分组（第七轮）：全量清单＝硬口径（该领域内容必须从中选、不得自拟同类）、
 // 抽样清单＝软口径（优先选用、没覆盖的方向可自拟）；两种清单同场时各成一个分组、各自带口径。
