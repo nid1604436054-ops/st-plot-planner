@@ -520,6 +520,7 @@ let analyzeBusy = false;
 let streamText = '';
 let streamStage = '';
 let streamReason = '';   // 思考全文（第九轮）：流式页「【思考 N 字】」段上屏用；正文与思考分开收
+let streamFirstText = '';   // 第一遍生成原文（第十六轮）：onStage('align') 到来时冻结——第二遍不再顶掉它
 let streamTimer = null;  // 流式上屏节流拍（第十四轮）：SSE 每个增量都整段重排会把页面卡死——攒一拍再画
 
 // 运行状态条（2026-08-30 第八轮真机反馈：分析途中没有中断键、看不到运行状态/用时/token/
@@ -627,22 +628,39 @@ function updateStreamView(token, force = false) {
             : `模型输出中 · 已接收 ${streamText.length} 字`;
     const nearBottom = force || outEl.scrollHeight - outEl.scrollTop - outEl.clientHeight < 48;
     // 思考原文上屏（第九轮）：思考全文带段头排在正文前面。有无思考段是两种结构，切换时整体重建
+    // 第一遍原文冻结段（第十六轮）：第二遍开跑时第一遍正文冻结成独立段、live 正文只装第二遍——
+    // 第一遍若混着思考段（模型把思考写进正文），原样要看得见，不再被第二遍顶掉
     const wantThink = Boolean(streamReason);
+    const wantFirst = Boolean(streamFirstText);
     let st = outEl.__ppPaint;
-    if (!st || st.wantThink !== wantThink) {
+    if (!st || st.wantThink !== wantThink || st.wantFirst !== wantFirst) {
         outEl.textContent = '';
         const body = document.createElement('span');
+        st = { wantThink, wantFirst, body };
         if (wantThink) {
             outEl.append('【思考 ');
             const num = document.createElement('span');
             outEl.append(num, ' 字】\n');
             const think = document.createElement('span');
-            outEl.append(think, '\n\n【正文】\n', body);
-            st = outEl.__ppPaint = { wantThink: true, num, think, body };
-        } else {
-            outEl.append(body);
-            st = outEl.__ppPaint = { wantThink: false, body };
+            outEl.append(think);
+            st.num = num;
+            st.think = think;
         }
+        if (wantFirst) {
+            if (outEl.childNodes.length) outEl.append('\n\n');
+            outEl.append('【第一遍生成原文 · 共 ');
+            const fnum = document.createElement('span');
+            outEl.append(fnum, ' 字】\n');
+            const first = document.createElement('span');
+            outEl.append(first);
+            st.fnum = fnum;
+            st.first = first;
+            outEl.append('\n\n【第二遍 · 对齐修改输出】\n');
+        } else if (wantThink) {
+            outEl.append('\n\n【正文】\n');
+        }
+        outEl.append(body);
+        outEl.__ppPaint = st;
     }
     // 已上屏的是新全文的前缀就只补尾巴（长输出每拍 O(增量)）；对不上（第二遍重开/修复重试/
     // 思考标头掐断重发）整个换掉——换掉是一次性 O(全文)，下一拍继续走增量
@@ -655,6 +673,10 @@ function updateStreamView(token, force = false) {
     if (wantThink) {
         st.num.textContent = String(streamReason.length);
         growInto(st.think, streamReason);
+    }
+    if (wantFirst) {
+        st.fnum.textContent = String(streamFirstText.length);
+        growInto(st.first, streamFirstText);
     }
     growInto(st.body, streamText || '等待模型输出……');
     if (nearBottom) outEl.scrollTop = outEl.scrollHeight;
@@ -1430,6 +1452,11 @@ function renderReady(container, main) {
         <div class="pp-gd-stat" title="第 1 步「知识库抓取」面板里决定发送的条目（按清单各报一段：抽样清单＝逐条编号点名，「自选」的清单带标记；全量清单＝整表随行只报条数；编号＝清单号-条目号；勾了清单却 0 条发送的标 ⚠ 点名），随材料发送——规划从中选用素材，确认采用时选用的进冷却（放弃草稿不冷却）">知识库：${kbText}</div>
         <div class="pp-gd-stat" title="第 1 步「世界书自选」面板里勾的条目（原文整条随材料发送——「照着写」的材料，不挑不冷却；与检索命中自动去重、这边优先），按书点名条数">自选世界书：${loreText}</div>
         <div class="pp-gd-stat" title="联网搜索总开关在「设置」页；开着时分析前先轻量判断是否需要现实信息（或直接检索），纪要附进分析材料">联网搜索：${searchToolActive() ? '开' : '关'}</div>
+        ${(run.raw ?? '').trim() ? `
+        <details class="pp-viewer-block" style="margin-top:8px">
+            <summary title="原样保留、不参与任何解析——模型把思考写进正文时（比如打着「思考」标头的小节），原文里看得到原样；要报问题或报思考标头，直接复制这里的字"><span class="pp-viewer-btitle">上次生成原文</span><span class="pp-muted">第一遍的原始输出 ${run.raw.length} 字，原样保留不删改——第二遍对齐修改只报改动清单（第 3 步），第一遍长什么样在这里看</span></summary>
+            <pre class="pp-viewer-pre pp-gd-stream">${escapeHtml(run.raw)}</pre>
+        </details>` : ''}
         <div class="pp-btn-row">
             <span id="pp_gd_ready_go" class="menu_button" title="走插件独立 API 调用一次，计费按你配置的接口">开始分析</span>
             <span id="pp_gd_ready_back" class="menu_button">返回</span>
@@ -2082,6 +2109,7 @@ async function startAnalyze(container, { revise = false } = {}) {
     streamText = '';
     streamStage = '';
     streamReason = '';
+    streamFirstText = '';   // 第十六轮：新一轮分析重置第一遍冻结段，上一轮的不带进这轮的运行页
     runCtl = new AbortController();
     startRunMeta('analysis', { revise });
     step = 'running';
@@ -2111,7 +2139,9 @@ async function startAnalyze(container, { revise = false } = {}) {
             memoryRecent: wizardMemoryRecent(),
             storageItems: wizardStorageItems(),
             onDelta: t => { streamText = t; scheduleStreamView(token); },
-            onStage: s => { streamStage = s; scheduleStreamView(token); },
+            // 第十六轮：第二遍开跑的这一刻 streamText 还是第一遍全文（alignPass 先报 stage 再发请求），
+            // 就地冻结——之后第二遍的增量只顶 live 正文段，冻结段原样留在框里
+            onStage: s => { if (s === 'align' && !streamFirstText) streamFirstText = streamText; streamStage = s; scheduleStreamView(token); },
             onReasoning: t => { streamReason = t; if (runMeta) runMeta.thinkChars = t.length; scheduleStreamView(token); },   // 思考计数由运行页的秒级 ticker 上屏，不再逐增量刷（第十四轮节流）
             signal: runCtl.signal,   // 运行页「中断」键（第八轮）：一路传到 fetch
             // 打回重写不吃预跑缓存：修改意见可能把检索方向带偏，重写一律重新判断
@@ -2410,6 +2440,7 @@ async function reviewStory(container) {
     streamText = '';
     streamStage = '';
     streamReason = '';
+    streamFirstText = '';   // 检查流程没有第二遍，这里只是清态（第十六轮）
     runCtl = new AbortController();
     startRunMeta('review');
     step = 'reviewing';
