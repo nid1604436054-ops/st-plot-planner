@@ -1698,6 +1698,14 @@
     flex: 0 1 auto;
 }
 
+/* 编辑骨架的卷名框护栏（第二十轮新增文本框，同排数字框教训：不带这层会被文件末尾
+   「表单控件占满宽度」的全局规则拉满，把同行标签挤成竖排） */
+.pp-drawer .pp-lf-form input[type="text"] {
+    flex: 1 1 8em;
+    width: auto;
+    min-width: 4em;
+}
+
 .pp-drawer .pp-lf-form .pp-lf-grow {
     flex: 1 1 100%;
     align-items: flex-start;

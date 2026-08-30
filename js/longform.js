@@ -77,6 +77,7 @@ function normVol(v) {
         floors: posInt(o.floors) ?? LF_MIN_CHAPTER_FLOORS,
         text: String(o.text ?? ''),
         anchors,
+        skAt: Number(o.skAt) || 0,      // 骨架就地编辑时间（概要/种子改过而卷文本没跟上时提示）
         textAt: Number(o.textAt) || 0,      // 卷文本最后定稿时间（修订/手改都刷新）
         detailState: ['none', 'run', 'done', 'error'].includes(o.detailState) ? o.detailState : 'none',
         detailError: String(o.detailError ?? ''),
@@ -148,8 +149,27 @@ export function validateVolumes(vols, total) {
     const sum = vols.reduce((n, v) => n + v.floors, 0);
     if (sum !== total) return { ok: false, reason: `各卷楼数之和 ${sum} ≠ 总数 ${total}，重配失败` };
     const thin = vols.filter(v => v.floors < LF_MIN_CHAPTER_FLOORS).length;
-    if (thin) return { ok: false, reason: `有 ${thin} 卷楼数不足 ${LF_MIN_CHAPTER_FLOORS}（一章的最低楼数）——把楼层总数提到至少 ${vols.length * LF_MIN_CHAPTER_FLOORS}，或重新生成骨架让它少切几卷` };
+    if (thin) {
+        const vr = lfVolumeRange(total);
+        return { ok: false, reason: `有 ${thin} 卷楼数不足 ${LF_MIN_CHAPTER_FLOORS}（一章的最低楼数）——${total} 层建议切 ${vr.lo}-${vr.hi} 卷（每卷 40-60 层）：把楼层总数提到至少 ${vols.length * LF_MIN_CHAPTER_FLOORS}，或重新生成骨架让它少切几卷` };
+    }
     return { ok: true };
+}
+
+// 数量建议（第二十轮，全部从楼数预算本地推导——「算术插件说了算」的延伸）：
+// 锚密度与章数上限此前只写下限不写密度，模型把 24 层的卷排了 24 个锚、又照锚切出 4 张薄章
+export function lfVolumeRange(total) {
+    const t = posInt(total) ?? 0;
+    return { lo: Math.max(2, Math.floor(t / 60)), hi: Math.max(2, Math.floor(t / 40)) };
+}
+
+export function lfAnchorTarget(floors) {
+    return Math.max(LF_MIN_ANCHORS, Math.round((posInt(floors) ?? 0) / 30));
+}
+
+export function lfChapterCap(floors) {
+    const f = posInt(floors) ?? 0;
+    return { max: Math.max(1, Math.floor(f / LF_MIN_CHAPTER_FLOORS)), typ: Math.max(1, Math.round(f / 50)) };
 }
 
 // 卷文本里的【锚 N】行兜底解析：模型 anchors 数组缺行时从文本行里捞（锚是切章刀口，丢了切不准）
@@ -274,7 +294,7 @@ export function skeletonSystemPrompt({ totalFloors, minFloors = 0, newChars = fa
         '任务要求：',
         `- 全书切成若干卷（至少 2 卷、不设上限）：每卷给卷名、剧情概要（这卷讲什么、从哪推进到哪、主要张力是什么、出场角色有谁）与本卷楼数。`,
         `- 各卷楼数之和必须等于 ${totalFloors}（硬预算，程序会校验；各卷大小由剧情体量决定，但总和不能多也不能少）。${minFloors > 0 ? `全书剧情体量至少要撑得起 ${minFloors} 层楼的推进（保底要求）。` : ''}`,
-        `- 每卷至少要能切出一章（一章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼），即每卷楼数不得低于 ${LF_MIN_CHAPTER_FLOORS}。`,
+        (() => { const vr = lfVolumeRange(totalFloors); return `- 卷数与预算匹配：每卷一般 40-60 层楼、至少要能切出一章（一章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼，即每卷楼数不得低于它）——全书 ${totalFloors} 层建议切 ${vr.lo}-${vr.hi} 卷，不要切得更多（切多了每卷装不下一章以上的剧情）。`; })(),
         newChars
             ? '- 允许引入新角色：在概要里显式点名新角色是谁、第几卷入场、起什么作用。'
             : '- 不引入新角色：全书只用材料里已有的角色与世界要素（临时路人可以有无名分的过场）。',
@@ -297,7 +317,7 @@ export function detailSystemPrompt() {
         lfPaceAnchor(),
         '任务要求：',
         `- 展开程度匹配本卷楼数预算：本卷共 X 层楼 ≈ 有效推进约 X×几百到一千字量级的剧情量——预算大就多排事件线、多给波折与支线，预算小就收敛；不写与预算脱节的流水账，也不把大预算写成一页纸。`,
-        `- 推进锚（本卷的剧情检查点）：至少 ${LF_MIN_ANCHORS} 个、不设上限——每个锚是一段有明确完成态的剧情点（一个具体事件实际发生、一个目标达成或落空、一个关键转折落地）；锚与锚之间在文本里标注「（本锚间自由演绎）」——执行时扮演模型可自由发挥，锚是将来切章与判定进度的刀口。`,
+        `- 推进锚（本卷的剧情检查点）：数量按本卷楼数预算把握——锚是将来切章的刀口（一章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼），一般每 25-35 层楼一个锚、不逐层设锚（24 层的卷排 24 个锚是错的）；本卷的建议锚数在任务里给了。至少 ${LF_MIN_ANCHORS} 个、不设上限——每个锚是一段有明确完成态的剧情点（一个具体事件实际发生、一个目标达成或落空、一个关键转折落地）；锚与锚之间在文本里标注「（本锚间自由演绎）」——执行时扮演模型可自由发挥，锚是将来切章与判定进度的刀口。`,
         '- 锚写成独立行，格式：【锚 N】锚标题——锚落地时发生了什么（一句话、可对照）。',
         '- 骨架 seeds 里点名的伏笔必须落到文本里的具体剧情点，写明在哪埋、怎么收；「本锚间自由演绎」段不算埋伏笔。',
         '- 卷内时间线自洽：长线可以跨多天多周，但先后顺序不能乱，排程从既定事实之后往后推。',
@@ -339,7 +359,7 @@ export function splitSystemPrompt() {
         '你是长线剧情的切章编辑。用户会给你全书骨架与某一卷的卷级文本，你的任务：把这一卷切成章、再把每章切出执行节点——一步到位。',
         lfPaceAnchor(),
         '任务要求：',
-        `- 章：每章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼、不设上限；推进锚是切章的刀口——章界尽量落在锚上（每章至少完整覆盖一个锚，锚不被腰斩）；本卷预算 X 层楼已定，各章楼数之和必须等于本卷预算。`,
+        `- 章数由预算决定：每章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼、不设上限；本卷预算 X 层楼最多切 ⌊X÷${LF_MIN_CHAPTER_FLOORS}⌋ 章（任务里给了本卷的章数上限）——预算只够一章时整卷切成一章，不要硬拆成几张薄章。推进锚是切章的刀口——章界尽量落在锚上（每章至少完整覆盖一个锚，锚不被腰斩）；本卷预算 X 层楼已定，各章楼数之和必须等于本卷预算。`,
         '- 章文本（text）：这一章怎么演的执行指导——场景、事件链、角色行动安排，按本章楼数预算给足剧情量。这章文本将来整章挂进监听逐轮判定进度，扮演模型看不到它、监听按它对账。',
         `- 节点：每章至少 ${LF_MIN_NODES} 个、不设上限；节点＝最小剧情单元，每个带「完成标准」——必须能对着楼层内容逐条核对（「她把礼物送到对方手里」可核对；「气氛变好」不可核对）；达成口径＝角色动作偏向该目标即算达成（写给逐轮判定用，不是给人读的散文）。`,
         '- 伏笔硬规则：卷文本里埋设或收束的伏笔，挂到具体节点的完成标准里（该节点必须让埋设或收束实际发生）；执行时没埋成会报错交用户处置。',
@@ -359,7 +379,8 @@ export function splitSystemPrompt() {
 
 // ---------------------------------------------------------------------------
 // 调用编排（每步走 chatCompletion＋parseModelJson 修复梯子；输出上限乘数：这些产物
-// 比一次 1.0 规划长得多——骨架 ×2、卷文本/修订/切章 ×3；设置 0 = 不限时保持 0）
+// 比一次 1.0 规划长得多——骨架 ×2、卷文本/修订/切章 ×3；设置 0 = 不限时保持 0）。
+// onDelta 透传给 chatCompletion（第二十轮）：给了就走 SSE 流式，页面实时显示已收字数
 // ---------------------------------------------------------------------------
 
 function lfMaxTokens(mult) {
@@ -367,7 +388,7 @@ function lfMaxTokens(mult) {
     return t ? Math.round(t * mult) : 0;
 }
 
-async function lfCall({ system, user, provider, signal, mult = 2, onUsage }) {
+async function lfCall({ system, user, provider, signal, mult = 2, onUsage, onDelta }) {
     const req = {
         messages: [
             { role: 'system', content: system },
@@ -377,13 +398,14 @@ async function lfCall({ system, user, provider, signal, mult = 2, onUsage }) {
         ...(provider ? { provider } : {}),
         ...(signal ? { signal } : {}),
         ...(onUsage ? { onUsage } : {}),
+        ...(onDelta ? { onDelta } : {}),
     };
     const { result } = await parseModelJson(await chatCompletion(req), req);
     return result;
 }
 
 // ①＋② 骨架与切块（一次调用出卷＋楼数；总和校验与重配在本地）
-export async function runLfSkeleton({ totalFloors, minFloors = 0, idea = '', newChars = false, provider, signal, onUsage } = {}) {
+export async function runLfSkeleton({ totalFloors, minFloors = 0, idea = '', newChars = false, provider, signal, onUsage, onDelta } = {}) {
     const total = posInt(totalFloors) ?? LF_DEFAULT_FLOORS;
     const materials = lfMaterialParts().join('\n\n');
     const system = skeletonSystemPrompt({ totalFloors: total, minFloors, newChars });
@@ -396,7 +418,7 @@ export async function runLfSkeleton({ totalFloors, minFloors = 0, idea = '', new
         `用户想法：\n${String(idea ?? '').trim() || '（未填——按材料自由设计）'}`,
     ].join('\n\n');
 
-    const result = await lfCall({ system, user, provider, signal, mult: 2, onUsage });
+    const result = await lfCall({ system, user, provider, signal, mult: 2, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
     const raw = Array.isArray(result?.volumes) ? result.volumes : [];
     const vols = rescaleFloors(raw.map((v, i) => ({
         title: String(v?.title ?? '').slice(0, 120),
@@ -445,8 +467,9 @@ export function lfMatOverview() {
 }
 
 // ③ 分块具体化：逐卷并行一次一卷（§6.4「能分多细分多细，批次不设限」——并行由调用方 API 承担）；
-// 材料与骨架块整批只拼一次、逐卷共享（同一前缀，走缓存的服务商只付一次全价）
-export async function runLfDetailBatch({ provider, signal, onUsage } = {}) {
+// 材料与骨架块整批只拼一次、逐卷共享（同一前缀，走缓存的服务商只付一次全价）。
+// onProgress 逐卷落定回调＋开工即报一次 0/N（页面实时状态的数据源）；onDelta 按卷报累计字数
+export async function runLfDetailBatch({ provider, signal, onUsage, onDelta, onProgress } = {}) {
     const st = lfState();
     const targets = st.volumes.map((v, i) => ({ v, i })).filter(x => x.v.detailState !== 'done');
     if (!targets.length) return { done: 0, failed: [] };
@@ -454,7 +477,11 @@ export async function runLfDetailBatch({ provider, signal, onUsage } = {}) {
     const outline = bookOutlineBlock(st);
     for (const { v } of targets) { v.detailState = 'run'; v.detailError = ''; }
     persistLf();
-    const rs = await Promise.allSettled(targets.map(({ i, v }) => runLfDetailOne(i, { provider, signal, materials, outline, onUsage })));
+    let settled = 0;
+    onProgress?.({ settled: 0, total: targets.length });
+    const tick = () => onProgress?.({ settled: ++settled, total: targets.length });
+    const rs = await Promise.allSettled(targets.map(({ i }) => runLfDetailOne(i, { provider, signal, materials, outline, onUsage, onDelta })
+        .then(r => { tick(); return r; }, e => { tick(); throw e; })));
     const failed = [];
     rs.forEach((r, k) => { if (r.status === 'rejected') failed.push({ vol: targets[k].i, reason: String(r.reason?.message ?? r.reason) }); });
     const st2 = lfState();
@@ -466,7 +493,7 @@ export async function runLfDetailBatch({ provider, signal, onUsage } = {}) {
     return { done: targets.length - failed.length, failed };
 }
 
-async function runLfDetailOne(vi, { provider, signal, materials, outline, onUsage }) {
+async function runLfDetailOne(vi, { provider, signal, materials, outline, onUsage, onDelta }) {
     const st = lfState();
     const vol = st.volumes[vi];
     try {
@@ -474,9 +501,9 @@ async function runLfDetailOne(vi, { provider, signal, materials, outline, onUsag
             materials,
             outline,
             '## 本卷任务',
-            `把第 ${vi + 1} 卷「${vol.title}」写成卷级详细剧情文本。本卷预算 ${vol.floors} 层楼；骨架概要与种子如上，务必落实。`,
+            `把第 ${vi + 1} 卷「${vol.title}」写成卷级详细剧情文本。本卷预算 ${vol.floors} 层楼；推进锚建议约 ${lfAnchorTarget(vol.floors)} 个（至少 ${LF_MIN_ANCHORS} 个、一般每 25-35 层楼一个锚——不逐层设锚）；骨架概要与种子如上，务必落实。`,
         ].join('\n\n');
-        const result = await lfCall({ system: detailSystemPrompt(), user, provider, signal, mult: 3, onUsage });
+        const result = await lfCall({ system: detailSystemPrompt(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(vi, t.length)) });
         let anchors = Array.isArray(result?.anchors) ? result.anchors.map(a => ({
             title: String(a?.title ?? '').slice(0, 120),
             point: String(a?.point ?? ''),
@@ -507,7 +534,7 @@ async function runLfDetailOne(vi, { provider, signal, materials, outline, onUsag
 }
 
 // ⑤ 审阅改：按意见整书修订（意见必填——长线不设「换一版」档，要重来走「重新生成骨架」）
-export async function runLfRevise({ opinion = '', provider, signal, onUsage } = {}) {
+export async function runLfRevise({ opinion = '', provider, signal, onUsage, onDelta } = {}) {
     const note = String(opinion ?? '').trim();
     if (!note) throw new Error('修改意见是空的——写一句要改什么（长线的「换一版」＝重新生成骨架）');
     const st = lfState();
@@ -528,7 +555,7 @@ export async function runLfRevise({ opinion = '', provider, signal, onUsage } = 
         '## 修改意见',
         note,
     ].join('\n\n');
-    const result = await lfCall({ system: reviseSystemPrompt(), user, provider, signal, mult: 3, onUsage });
+    const result = await lfCall({ system: reviseSystemPrompt(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
     const list = Array.isArray(result?.volumes) ? result.volumes : [];
     if (!list.length) throw new Error('修订输出里没有卷');
     if (list.length !== st.volumes.length) throw new Error(`修订输出卷数 ${list.length} 与现有 ${st.volumes.length} 不一致——已放弃写入，重试或把意见拆小`);
@@ -552,8 +579,9 @@ export async function runLfRevise({ opinion = '', provider, signal, onUsage } = 
     return st2;
 }
 
-// ⑥ 再切小：逐卷并行（卷→章→节点一步到位）；章预算重配同卷预算：算术插件说了算
-export async function runLfSplitBatch({ provider, signal, onUsage } = {}) {
+// ⑥ 再切小：逐卷并行（卷→章→节点一步到位）；章预算重配同卷预算：算术插件说了算。
+// onProgress/onDelta 口径同具体化批次
+export async function runLfSplitBatch({ provider, signal, onUsage, onDelta, onProgress } = {}) {
     const st = lfState();
     const targets = st.volumes.map((v, i) => ({ v, i }))
         .filter(x => x.v.detailState === 'done' && x.v.splitState !== 'done');
@@ -562,7 +590,11 @@ export async function runLfSplitBatch({ provider, signal, onUsage } = {}) {
     const outline = bookOutlineBlock(st);
     for (const { v } of targets) { v.splitState = 'run'; v.splitError = ''; }
     persistLf();
-    const rs = await Promise.allSettled(targets.map(({ i, v }) => runLfSplitOne(i, { provider, signal, materials, outline, onUsage })));
+    let settled = 0;
+    onProgress?.({ settled: 0, total: targets.length });
+    const tick = () => onProgress?.({ settled: ++settled, total: targets.length });
+    const rs = await Promise.allSettled(targets.map(({ i }) => runLfSplitOne(i, { provider, signal, materials, outline, onUsage, onDelta })
+        .then(r => { tick(); return r; }, e => { tick(); throw e; })));
     const failed = [];
     rs.forEach((r, k) => { if (r.status === 'rejected') failed.push({ vol: targets[k].i, reason: String(r.reason?.message ?? r.reason) }); });
     const st2 = lfState();
@@ -574,19 +606,20 @@ export async function runLfSplitBatch({ provider, signal, onUsage } = {}) {
     return { done: targets.length - failed.length, failed };
 }
 
-async function runLfSplitOne(vi, { provider, signal, materials, outline, onUsage }) {
+async function runLfSplitOne(vi, { provider, signal, materials, outline, onUsage, onDelta }) {
     const st = lfState();
     const vol = st.volumes[vi];
     try {
+        const cap = lfChapterCap(vol.floors);
         const user = [
             materials,
             outline,
             '## 本卷任务',
-            `把第 ${vi + 1} 卷「${vol.title}」切成章与节点。本卷预算 ${vol.floors} 层楼（各章之和必须等于它）。卷级文本如下：`,
+            `把第 ${vi + 1} 卷「${vol.title}」切成章与节点。本卷预算 ${vol.floors} 层楼（各章之和必须等于它）；最多切 ${cap.max} 章${cap.max === 1 ? '——预算只够一章，整卷切成一章、不要硬拆' : `（建议 ${cap.typ} 章左右）`}。卷级文本如下：`,
             vol.text,
             `锚清单：${vol.anchors.map((a, k) => `${k + 1}. ${a.title}${a.point ? `——${a.point}` : ''}`).join('；')}`,
         ].join('\n\n');
-        const result = await lfCall({ system: splitSystemPrompt(), user, provider, signal, mult: 3, onUsage });
+        const result = await lfCall({ system: splitSystemPrompt(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(vi, t.length)) });
         let chapters = Array.isArray(result?.chapters) ? result.chapters : [];
         if (!chapters.length) throw new Error('章列表为空');
         // 章预算算术：先保每章不低于一章下限，再重配到卷预算（模型给的总和不作数）
@@ -600,8 +633,10 @@ async function runLfSplitOne(vi, { provider, signal, materials, outline, onUsage
             })).filter(n => n.title),
         })).filter(c => c.text || c.nodes.length);
         if (chapters.length < 1) throw new Error('没有可用的章（全部缺文本与节点）');
+        // 章数先对预算：N 章至少要 N×下限层——超了＝预算装不下，报数＋指路（第二十轮大白话化）
+        if (chapters.length > cap.max) throw new Error(`本卷预算 ${vol.floors} 层，模型切了 ${chapters.length} 章——每章至少 ${LF_MIN_CHAPTER_FLOORS} 层、${chapters.length} 章至少需要 ${chapters.length * LF_MIN_CHAPTER_FLOORS} 层，预算不够（本卷最多切 ${cap.max} 章）。重试让模型少切几章，或用卷卡「编辑骨架」把本卷楼数改大`);
         const thin = chapters.filter(c => c.floors < LF_MIN_CHAPTER_FLOORS).length;
-        if (thin) throw new Error(`有 ${thin} 章楼数低于 ${LF_MIN_CHAPTER_FLOORS}（一章的最低楼数）——重试，或把本卷预算（现 ${vol.floors} 层）加大`);
+        if (thin) throw new Error(`有 ${thin} 章的楼数低于每章下限 ${LF_MIN_CHAPTER_FLOORS} 层（本卷预算 ${vol.floors} 层、最多切 ${cap.max} 章）。重试，或用卷卡「编辑骨架」把本卷楼数改大`);
         const sum = chapters.reduce((n, c) => n + c.floors, 0);
         if (sum !== vol.floors) chapters = rescaleFloors(chapters, vol.floors);
         const lackNodes = chapters.find(c => c.nodes.length < LF_MIN_NODES);

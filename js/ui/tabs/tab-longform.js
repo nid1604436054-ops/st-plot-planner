@@ -20,12 +20,15 @@ export const longformTab = {
 
 // 模块级瞬态：一次生成在途（kind＋中断闸）与展开集合（刷新即失，不动数据）
 let lfBusy = null;   // { kind: 'skeleton'|'detail'|'revise'|'split', ctl: AbortController }
-const expanded = new Set();   // 'v0' 卷文本展开 / 'c0-1' 章文本展开
+const expanded = new Set();   // 'v0' 卷文本展开 / 've0' 卷文本编辑 / 'sk0' 骨架编辑 / 'c0-1' 章文本展开
 let confirmReset = false;     // 「作废本长线」两步确认的 Armed 位
+const delArmVol = new Set();  // 「删除本卷」两步确认的 Armed 位（卷号）
+let lfOpinion = '';           // 修订意见草稿（会话内留底：批量生成的逐卷刷新不整页重渲也清不掉它）
+let busyLast = 0;             // busy 实时字数的节流闸（流式回调很密，150ms 一拍够用）
 
 const STAGE_LABEL = {
     none: ['① 未开始', '填参数生成骨架'],
-    skeleton: ['① 骨架已定', '卷结构与楼数预算就绪，下一步具体化各卷'],
+    skeleton: ['① 骨架已定', '卷结构与楼数预算就绪——可直接「编辑骨架」微调，或具体化各卷'],
     detailed: ['③ 卷文本齐全', '可修订/手改，然后「再切小」出章与节点'],
     split: ['⑥ 章/节点就绪', '执行期：按章挂进监听，节点逐轮点亮'],
 };
@@ -82,7 +85,8 @@ function renderTab(container) {
     const busyLine = lfBusy ? `
         <div class="pp-item pp-lf-busy">
             <b>${({ skeleton: '生成骨架中', detail: '具体化各卷中', revise: '按意见修订中', split: '再切小中' })[lfBusy.kind]}…</b>
-            <span class="pp-muted">长线产物一次要用很久，生成可以慢；中途可离开本页（切回来状态还在）</span>
+            <span id="pp_lf_busynote" class="pp-muted"></span>
+            <span class="pp-muted">生成可以慢；中途可离开本页（切回来状态还在）</span>
             <span id="pp_lf_abort" class="menu_button" title="中断这一批调用（已被服务商收下的部分照常计费）">中断</span>
         </div>` : '';
 
@@ -128,7 +132,7 @@ function renderTab(container) {
         <div class="pp-btn-row">
             <span id="pp_lf_split" class="menu_button" title="对全部「已具体化且未切章」的卷并行切章（每卷一次调用）">${st.volumes.some(v => v.splitState === 'done') ? '继续切章（未完成的卷）' : '再切小：卷→章→节点'}</span>
         </div>
-        ${st.volumes.some(v => v.splitAt && v.textAt > v.splitAt) ? `<div class="pp-muted" title="修订/手改之后章表没重切——旧章表对着旧文本，建议重跑「再切小」（重切会按位置沿用旧章的点亮进度）">⚠ 有卷的文本在切章后改过：章表已过期</div>` : ''}
+        ${st.volumes.some(v => (v.splitAt && v.textAt > v.splitAt) || (v.chapters?.length && v.chapters.reduce((n, c) => n + c.floors, 0) !== v.floors)) ? `<div class="pp-muted" title="两种过期：修订/手改之后章表没重切（旧章表对着旧文本），或卷楼数改过（章预算合计对不上卷预算）——重跑「再切小」会按位置沿用旧章的点亮进度">⚠ 有卷的章表需要重切：文本改过、或卷楼数改过（章预算对不上）</div>` : ''}
     </div>` : ''}
 
     ${stats.chapters ? execHtml(st, stats, next) : ''}
@@ -338,7 +342,10 @@ function volCardHtml(v, i, st) {
     const [sLabel] = SPLIT_BADGE[v.splitState] ?? ['', ''];
     const open = expanded.has(`v${i}`);
     const editing = expanded.has(`ve${i}`);
+    const skEditing = expanded.has(`sk${i}`);
     const chs = v.chapters ?? [];
+    const chSum = chs.reduce((n, c) => n + c.floors, 0);
+    const budgetStale = chs.length && chSum !== v.floors;
     return `
     <div class="pp-item pp-lf-vol">
         <div class="pp-item-main">
@@ -350,9 +357,12 @@ function volCardHtml(v, i, st) {
         ${v.seeds && v.seeds !== '无' ? `<div class="pp-muted" title="${escapeHtml(v.seeds)}">种子：${escapeHtml(clamp(v.seeds, 90))}</div>` : ''}
         ${v.detailError ? `<div class="pp-muted pp-lf-err">具体化失败：${escapeHtml(v.detailError)}</div>` : ''}
         ${v.splitError ? `<div class="pp-muted pp-lf-err">切章失败：${escapeHtml(v.splitError)}</div>` : ''}
+        ${budgetStale ? `<div class="pp-muted pp-lf-err">⚠ 章预算合计 ${chSum} 层 ≠ 本卷现预算 ${v.floors} 层（楼数改过）——重跑「再切小」重配章预算</div>` : ''}
+        ${v.detailState === 'done' && v.skAt && v.skAt > v.textAt ? `<div class="pp-muted">⚠ 概要/种子在卷文本定稿后改过——卷文本没跟着动，需要就修订或重跑具体化</div>` : ''}
         <div class="pp-item-ops">
+            ${!skEditing ? `<span class="menu_button" data-vsk="${i}" title="就地修改本卷的卷名/楼数/概要/种子，或删除本卷。楼数改了：楼层总数跟着各卷之和走；切过章的卷要重跑「再切小」">编辑骨架</span>` : ''}
             ${v.detailState === 'done' ? `<span class="menu_button" data-vol="${i}">${open ? '收起文本' : '卷文本'}</span>` : ''}
-            ${v.detailState === 'done' && !editing ? `<span class="menu_button" data-vedit="${i}" title="就地手改卷文本（改完记得重跑「再切小」——章表按旧文本切的会过期）">编辑</span>` : ''}
+            ${v.detailState === 'done' && !editing ? `<span class="menu_button" data-vedit="${i}" title="就地手改卷文本（改完记得重跑「再切小」——章表按旧文本切的会过期）">编辑卷文本</span>` : ''}
         </div>
         ${open ? `<div class="pp-lf-text">${escapeHtml(v.text)}</div>` : ''}
         ${editing ? `
@@ -360,7 +370,93 @@ function volCardHtml(v, i, st) {
             <textarea class="text_pole textarea_compact pp-lf-editarea" data-vetext="${i}" rows="10">${escapeHtml(v.text)}</textarea>
             <div class="pp-btn-row"><span class="menu_button" data-vesave="${i}">保存卷文本</span></div>
         </div>` : ''}
+        ${skEditing ? skEditHtml(v, i) : ''}
     </div>`;
+}
+
+// 骨架就地编辑表单（第二十轮）：卷名/楼数/概要/种子＋删除本卷——骨架不再只是只读产物
+function skEditHtml(v, i) {
+    const armed = delArmVol.has(i);
+    return `
+    <div class="pp-lf-form">
+        <label title="本卷的名字">卷名
+            <input type="text" data-vsktitle="${i}" value="${escapeHtml(v.title)}" />
+        </label>
+        <label title="本卷的楼数预算（一章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼、每卷至少要能切出一章）。改了之后：楼层总数＝各卷之和；切过章的卷要重跑「再切小」">楼数
+            <input type="number" data-vskfloors="${i}" min="${LF_MIN_CHAPTER_FLOORS}" step="5" value="${v.floors}" />
+        </label>
+    </div>
+    <div class="pp-lf-form">
+        <label class="pp-lf-grow" title="这卷讲什么、从哪推进到哪、主要张力、出场角色——具体化各卷按它展开">概要
+            <textarea data-vsksum="${i}" class="text_pole textarea_compact" rows="2">${escapeHtml(v.summary)}</textarea>
+        </label>
+    </div>
+    <div class="pp-lf-form">
+        <label class="pp-lf-grow" title="本卷埋设的伏笔与新要素（埋什么、预计哪里收）；没有写「无」">种子
+            <textarea data-vskseeds="${i}" class="text_pole textarea_compact" rows="2">${escapeHtml(v.seeds)}</textarea>
+        </label>
+    </div>
+    <div class="pp-btn-row">
+        <span class="menu_button" data-vsksave="${i}" title="写回本卷骨架并重算楼层总数（各卷之和）">保存</span>
+        <span class="menu_button" data-vskcancel="${i}">取消</span>
+        <span class="menu_button ${armed ? 'pp-danger-arm' : ''}" data-vdel="${i}" title="删掉这一卷（两步确认；正在执行的章挂在这一卷里时先去「监听」页卸下）">${armed ? '确认删除？' : '删除本卷'}</span>
+    </div>`;
+}
+
+// 保存骨架编辑：楼层总数跟着各卷之和走；切过章的卷改楼数⇒回「未切章」待重切（旧章表保留供沿用进度）
+function saveVolSkeleton(container, i) {
+    const s = lfState();
+    const v = s.volumes[i];
+    if (!v) return;
+    const title = String(container.querySelector(`[data-vsktitle="${i}"]`)?.value ?? '').trim().slice(0, 120);
+    const floors = Math.round(Number(container.querySelector(`[data-vskfloors="${i}"]`)?.value));
+    const summary = String(container.querySelector(`[data-vsksum="${i}"]`)?.value ?? '').trim();
+    const seeds = String(container.querySelector(`[data-vskseeds="${i}"]`)?.value ?? '').trim();
+    if (!title) return toastr.warning('卷名不能为空');
+    if (!Number.isFinite(floors) || floors < LF_MIN_CHAPTER_FLOORS) return toastr.warning(`每卷至少 ${LF_MIN_CHAPTER_FLOORS} 层楼（一章的最低楼数）`);
+    const floorsChanged = floors !== v.floors;
+    const structChanged = title !== v.title || summary !== v.summary || seeds !== v.seeds;
+    v.title = title;
+    v.summary = summary;
+    v.seeds = seeds;
+    v.floors = floors;
+    if (floorsChanged || structChanged) v.skAt = Date.now();
+    if (floorsChanged && v.chapters?.length) v.splitState = 'none';
+    s.totalFloors = s.volumes.reduce((n, x) => n + x.floors, 0);
+    persistLf();
+    expanded.delete(`sk${i}`);
+    renderTab(container);
+    const bits = [`已保存（楼层总数现为 ${s.totalFloors} 层＝各卷之和）`];
+    if (floorsChanged && v.chapters?.length) bits.push('本卷切过章：楼数变了，重跑「再切小」重配章预算');
+    if (structChanged && v.detailState === 'done') bits.push('概要/种子改了、卷文本没跟着动——需要就修订或重跑具体化');
+    if (s.minFloors && s.totalFloors < s.minFloors) bits.push(`保底楼数 ${s.minFloors} 层高于总数——保底只随下次「生成骨架」发给模型`);
+    toastr.success(bits.join('；'));
+}
+
+// 删除本卷（两步确认）：挂载中拒绝、只剩一卷拒绝（要重来走「重新生成骨架」）；删前卷后挂载索引顺移
+function delVolume(container, i, btn) {
+    const s = lfState();
+    if (!delArmVol.has(i)) {
+        delArmVol.add(i);
+        if (btn) { btn.textContent = '确认删除？'; btn.classList.add('pp-danger-arm'); }
+        setTimeout(() => {
+            delArmVol.delete(i);
+            const b = container.querySelector(`[data-vdel="${i}"]`);
+            if (b) { b.textContent = '删除本卷'; b.classList.remove('pp-danger-arm'); }
+        }, 4000);
+        return;
+    }
+    delArmVol.delete(i);
+    if (!s.volumes[i]) return;
+    if (s.volumes.length <= 1) return toastr.warning('只剩这一卷——要重来走「重新生成骨架」');
+    if (s.mount && s.mount.vol === i) return toastr.warning('这一卷里有正在执行的章——先到「监听」页卸下单位再删');
+    s.volumes.splice(i, 1);
+    if (s.mount && s.mount.vol > i) s.mount.vol -= 1;
+    s.totalFloors = s.volumes.reduce((n, x) => n + x.floors, 0);
+    persistLf();
+    expanded.clear();   // 卷号整体前移，展开键跟着作废
+    toastr.success(`已删除（剩 ${s.volumes.length} 卷、楼层总数 ${s.totalFloors} 层）`);
+    renderTab(container);
 }
 
 function reviseHtml(st) {
@@ -368,7 +464,7 @@ function reviseHtml(st) {
     <div class="pp-section">
         <b>审阅与修订</b>
         <span class="pp-muted" title="整体审阅、修改：在下面写意见整书修订（只改意见涉及处），或点各卷「编辑」就地手改；修订/手改后章表会标过期，需重跑再切小">逐卷点「卷文本」通读；不满意就写意见修订或就地手改</span>
-        <textarea id="pp_lf_opinion" class="text_pole textarea_compact" rows="3" placeholder="修改意见：要改什么（例：第二卷的误会戏太拖，提前收掉；结尾加一场雨中告别）"></textarea>
+        <textarea id="pp_lf_opinion" class="text_pole textarea_compact" rows="3" placeholder="修改意见：要改什么（例：第二卷的误会戏太拖，提前收掉；结尾加一场雨中告别）">${escapeHtml(lfOpinion)}</textarea>
         <div class="pp-btn-row"><span id="pp_lf_revise" class="menu_button" title="按意见修订全部卷（一次调用、全部卷的全文重出——输出比单卷长，费用也高；只改意见涉及处）">按意见修订全书</span></div>
     </div>`;
 }
@@ -446,6 +542,10 @@ function bindTab(container, st) {
     }
     container.querySelector('#pp_lf_prov')?.addEventListener('change', e => { providerId = e.target.value; });
 
+    // 修订意见草稿：输入即留会话底（批量生成中执行区局部刷新不整页重渲，也不该丢它）
+    const opEl = container.querySelector('#pp_lf_opinion');
+    opEl?.addEventListener('input', () => { lfOpinion = opEl.value; });
+
     // 材料面板：勾选即留底（存 longform 块的 mats——刷新不丢、作废本长线也保留）
     container.querySelector('#pp_lf_mat_mem')?.addEventListener('change', e => {
         const s = lfState();
@@ -476,8 +576,7 @@ function bindTab(container, st) {
         const s = lfState();
         const u = usageCollector();
         lfBusy = { kind: 'skeleton', ctl: new AbortController() };
-        this.classList.add('disabled');
-        renderBusy(container);
+        renderTab(container);
         try {
             await runLfSkeleton({
                 totalFloors: s.totalFloors,
@@ -487,6 +586,7 @@ function bindTab(container, st) {
                 provider: providerFromId(providerId),
                 signal: lfBusy.ctl.signal,
                 onUsage: u.onUsage,
+                onDelta: len => setBusyNote(`已收 ${len.toLocaleString()} 字`),
             });
             toastr.success(`骨架已定：${s.totalFloors} 层楼分 ${lfState().volumes.length} 卷；${u.line()}`);
         } catch (err) {
@@ -512,10 +612,9 @@ function bindTab(container, st) {
         if (!opinion) return toastr.warning('先写修改意见——长线的「换一版」＝重新生成骨架');
         const u = usageCollector();
         lfBusy = { kind: 'revise', ctl: new AbortController() };
-        this.classList.add('disabled');
-        renderBusy(container);
+        renderTab(container);
         try {
-            await runLfRevise({ opinion, provider: providerFromId(providerId), signal: lfBusy.ctl.signal, onUsage: u.onUsage });
+            await runLfRevise({ opinion, provider: providerFromId(providerId), signal: lfBusy.ctl.signal, onUsage: u.onUsage, onDelta: len => setBusyNote(`已收 ${len.toLocaleString()} 字`) });
             toastr.success(`全书已按意见修订（章表若已生成会标过期）；${u.line()}`);
         } catch (err) {
             if (err?.name !== 'AbortError') toastr.error(`修订失败：${err?.message ?? err}`);
@@ -556,6 +655,27 @@ function bindTab(container, st) {
         renderTab(container);
     });
 
+    bindVolCards(container);
+    container.querySelectorAll('[data-chview]').forEach(el => el.addEventListener('click', () => {
+        const k = `c${el.dataset.chview}`;
+        expanded.has(k) ? expanded.delete(k) : expanded.add(k);
+        renderTab(container);
+    }));
+    wireExec(container);
+}
+
+// 卷卡按钮统一接线（骨架编辑/卷文本查看与手改）：批量生成中每卷落定会就地重刷卷卡区，按钮要能重接
+function bindVolCards(container) {
+    container.querySelectorAll('[data-vsk]').forEach(el => el.addEventListener('click', () => {
+        expanded.add(`sk${el.dataset.vsk}`);
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-vskcancel]').forEach(el => el.addEventListener('click', () => {
+        expanded.delete(`sk${el.dataset.vskcancel}`);
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-vsksave]').forEach(el => el.addEventListener('click', () => saveVolSkeleton(container, Number(el.dataset.vsksave))));
+    container.querySelectorAll('[data-vdel]').forEach(el => el.addEventListener('click', function () { delVolume(container, Number(el.dataset.vdel), this); }));
     container.querySelectorAll('[data-vol]').forEach(el => el.addEventListener('click', () => {
         const k = `v${el.dataset.vol}`;
         expanded.has(k) ? expanded.delete(k) : expanded.add(k);
@@ -579,12 +699,26 @@ function bindTab(container, st) {
         expanded.delete(`ve${i}`);
         renderTab(container);
     }));
-    container.querySelectorAll('[data-chview]').forEach(el => el.addEventListener('click', () => {
-        const k = `c${el.dataset.chview}`;
-        expanded.has(k) ? expanded.delete(k) : expanded.add(k);
-        renderTab(container);
-    }));
-    wireExec(container);
+}
+
+// busy 横幅的实时字样（节流 150ms 一拍——流式回调很密，DOM 不必跟着逐块跳）
+function setBusyNote(t) {
+    const now = Date.now();
+    if (now - busyLast < 150) return;
+    busyLast = now;
+    const el = document.getElementById('pp_lf_busynote');
+    if (el) el.textContent = t;
+}
+
+// 批量步逐卷落定后就地重刷卷卡区（徽章跟着变「已具体化/失败」）；用户开着编辑表单时跳过——
+// 重刷会拿状态里的旧值重建表单，正打一半的字不能丢
+function rerenderVols(container) {
+    if ([...expanded].some(k => k.startsWith('sk') || k.startsWith('ve'))) return;
+    const el = container.querySelector('#pp_lf_vols');
+    if (!el) return;
+    const st = lfState();
+    el.innerHTML = st.volumes.map((v, i) => volCardHtml(v, i, st)).join('');
+    bindVolCards(container);
 }
 
 // 执行区的按钮单独接线：监听每轮判定后执行区会被局部重建（不打断用户打字），按钮要跟着重接
@@ -598,16 +732,26 @@ function wireExec(container) {
     }));
 }
 
-// 批量步（具体化 / 再切小）共用：并发跑、单卷失败不拖垮其余、逐卷留下失败原因
+// 批量步（具体化 / 再切小）共用：并发跑、单卷失败不拖垮其余、逐卷留下失败原因；
+// 流式字数逐卷累计＋每卷落定重刷卷卡徽章（第二十轮：生成中不再是黑盒）
 async function runBatch(container, kind) {
     if (lfBusy) return toastr.warning('有长线生成还在跑（先中断或等它完成）');
     const u = usageCollector();
     lfBusy = { kind, ctl: new AbortController() };
-    renderBusy(container);
+    renderTab(container);
+    const lens = new Map();          // 卷号 → 已收字数（流式回调给的是累计值，取各卷最大）
+    let settledN = null, totalN = null;
+    const chars = () => { let n = 0; for (const x of lens.values()) n += x; return n; };
+    const note = () => `${totalN != null ? `已完成 ${settledN}/${totalN} 卷 · ` : ''}已收 ${chars().toLocaleString()} 字`;
+    const opts = {
+        provider: providerFromId(providerId),
+        signal: lfBusy.ctl.signal,
+        onUsage: u.onUsage,
+        onDelta: (vi, len) => { lens.set(vi, Math.max(lens.get(vi) ?? 0, len)); setBusyNote(note()); },
+        onProgress: p => { settledN = p.settled; totalN = p.total; rerenderVols(container); setBusyNote(note()); },
+    };
     try {
-        const r = kind === 'detail'
-            ? await runLfDetailBatch({ provider: providerFromId(providerId), signal: lfBusy.ctl.signal, onUsage: u.onUsage })
-            : await runLfSplitBatch({ provider: providerFromId(providerId), signal: lfBusy.ctl.signal, onUsage: u.onUsage });
+        const r = kind === 'detail' ? await runLfDetailBatch(opts) : await runLfSplitBatch(opts);
         const name = kind === 'detail' ? '具体化' : '切章';
         if (!r.failed.length) toastr.success(`${name}完成 ${r.done} 卷；${u.line()}`);
         else {
@@ -630,21 +774,6 @@ function markErr(err) {
     const s = lfState();
     s.error = String(err?.message ?? err);
     persistLf();
-}
-
-function renderBusy(container) {
-    const root = container.querySelector('#pp_lf_root');
-    if (root && !root.querySelector('.pp-lf-busy')) {
-        root.insertAdjacentHTML('beforeend', `
-        <div class="pp-item pp-lf-busy">
-            <b>生成中…</b>
-            <span id="pp_lf_abort" class="menu_button">中断</span>
-        </div>`);
-        root.querySelector('#pp_lf_abort')?.addEventListener('click', () => {
-            lfBusy?.ctl.abort();
-            toastr.info('已中断——收尾后状态回置（已被服务商收下的调用照常计费）');
-        });
-    }
 }
 
 // 重新生成骨架＝回参数表单（参数与想法已留底，改完直接再点「生成骨架」）
