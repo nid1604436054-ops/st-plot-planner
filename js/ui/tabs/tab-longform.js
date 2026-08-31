@@ -1,8 +1,9 @@
-// 2.0 长线规划页签（第二十四轮重构）：顶部操作条（四步生成按钮常驻、按流程置灰）＋
-// 参数/材料两个折叠区（生成前展开、过程中收起）＋ 卷列表（每卷折叠，展开后三页签切换：
-// 骨架 / 卷文本 / 章与节点——同一附属区里切着看，不往下摞长页）＋ 执行区（当前章＋接续）。
-// 「按意见修订」下沉到每一步：骨架整书 / 单卷骨架 / 单卷卷文本 / 单卷带意见重切，与手动编辑并存。
-// 状态与编排全在 js/longform.js，本文件只管界面；逐轮执行去看「监听」页。
+// 2.0 长线规划页签（第二十四轮重构；第二十五轮操作条挪位）：状态行＋ 参数/材料两个折叠区
+// （生成前展开、过程中收起）＋ 操作条（四步生成按钮常驻、按流程置灰——放两个折叠区下面、
+// 卷列表上面：用户在卷卡上下编辑时往上够按钮，不用每次跨过两行折叠头）＋ 卷列表（每卷折叠，
+// 展开后三页签切换：骨架 / 卷文本 / 章与节点——同一附属区里切着看，不往下摞长页）＋ 执行区
+// （当前章＋接续）。「按意见修订」下沉到每一步：骨架整书 / 单卷骨架 / 单卷卷文本 / 单卷带意见
+// 重切，与手动编辑并存。状态与编排全在 js/longform.js，本文件只管界面；逐轮执行去看「监听」页。
 // 生成走「单次选用」模型（主连接或供应商方案，不影响正在用的模型）。
 import { settings } from "../../settings.js";
 import { escapeHtml, clamp } from "../../utils.js";
@@ -169,10 +170,10 @@ function renderTab(container) {
         ${st.error ? `<div class="pp-muted pp-lf-err">最近一次操作失败：${escapeHtml(st.error)}</div>` : ''}
     </div>
 
-    ${toolbarHtml(st, anyDetail)}
-
     ${paramFoldHtml(st)}
     ${materialsHtml(st)}
+
+    ${toolbarHtml(st, anyDetail)}
 
     ${st.stage !== 'none' ? `
     <div class="pp-section">
@@ -187,7 +188,8 @@ function renderTab(container) {
 }
 
 // ---------------------------------------------------------------------------
-// 顶部操作条：四步生成按钮常驻（没到的步骤灰置、悬浮说明指路）＋生成模型下拉＋
+// 操作条（第二十五轮起放在参数/材料折叠区下面、卷列表上面——编辑卷时往上够按钮不用跨过
+// 折叠区）：四步生成按钮常驻（没到的步骤灰置、悬浮说明指路）＋生成模型下拉＋
 // 「按意见修订」点开才带出整书意见框（骨架阶段修订骨架、有卷文本后修订卷文本）
 // ---------------------------------------------------------------------------
 function toolbarHtml(st, anyDetail) {
@@ -483,7 +485,7 @@ function skTabHtml(v, i) {
 function textTabHtml(v, i, textStale) {
     const ui = volUiOf(i);
     if (v.detailState !== 'done') {
-        return `<div class="pp-muted">${v.detailState === 'error' ? `具体化失败：${escapeHtml(v.detailError)}` : v.detailState === 'run' ? '具体化中…' : '这一卷还没有卷文本——顶部点「具体化各卷」'}</div>`;
+        return `<div class="pp-muted">${v.detailState === 'error' ? `具体化失败：${escapeHtml(v.detailError)}` : v.detailState === 'run' ? '具体化中…' : '这一卷还没有卷文本——点上面的「具体化各卷」'}</div>`;
     }
     if (ui.veEdit) {
         return `
@@ -540,7 +542,7 @@ function chTabHtml(v, i, st, budgetStale, splitStale) {
     if (!chs.length) {
         return `
         ${warns}
-        <div class="pp-muted">这一卷还没切章——顶部「再切小」，或下面的单卷重切</div>
+        <div class="pp-muted">这一卷还没切章——点上面的「再切小」，或下面的单卷重切</div>
         ${revBox}`;
     }
     return `
@@ -874,7 +876,7 @@ function bindTab(container, st) {
     });
 
     container.querySelector('#pp_lf_detail')?.addEventListener('click', function () {
-        if (lfState().stage === 'none') return toastr.info('先生成骨架——顶部第一颗按钮');
+        if (lfState().stage === 'none') return toastr.info('先生成骨架——操作条第一颗按钮（参数/材料下面那排）');
         runBatch(container, 'detail');
     });
     container.querySelector('#pp_lf_split')?.addEventListener('click', function () {

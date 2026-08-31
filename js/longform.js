@@ -220,6 +220,23 @@ export function anchorsFromText(text) {
     return out;
 }
 
+// 章文本里的【节点 N】行兜底解析（第二十五轮，与锚同款套路）：模型 nodes 数组缺行时从文本行里捞
+// （节点是监听的判定表，丢了挂载就没得判）；「——」前＝节点名、后＝完成标准
+export function nodesFromText(text) {
+    const out = [];
+    const re = /^\s*【节点\s*\d+】\s*(.+)$/gm;
+    let m;
+    while ((m = re.exec(String(text ?? '')))) {
+        const body = m[1].trim();
+        const cut = body.indexOf('——');
+        out.push({
+            title: (cut > 0 ? body.slice(0, cut) : body).slice(0, 120) || `节点 ${out.length + 1}`,
+            criterion: cut > 0 ? body.slice(cut + 2).trim() : '',
+        });
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // 材料口径（第十九轮用户拍板：长线自备材料面板，不再沿用 1.0 第 1 步的勾选——那边改不了
 // 长线想要的世界书/知识库独立选择，记忆表格长线要默认全量、不要标签）：
@@ -345,9 +362,10 @@ export function skeletonSystemPrompt({ totalFloors, minFloors = 0, newChars = fa
 
 export function detailSystemPrompt() {
     return [
-        '你是文字角色扮演的长线剧情编剧。用户已定好全书骨架（见用户消息「全书骨架」小节），你的任务：把指定的一卷写成卷级详细剧情文本——具体到场景、事件链与角色行动安排，但不写台词级细节。',
+        '你是文字角色扮演的长线剧情编剧。用户已定好全书骨架（见用户消息「全书骨架」小节），你的任务：把指定的一卷写成卷级详细剧情文本——它是将来切章的母本与审阅的全景，信息层级站在「事件与关系」层面：比卷概要细（事件链展开、行动安排落实），比章文本粗至少一级（场景怎么开、台词怎么说是将来的章层的事）。',
         lfPaceAnchor(),
         '任务要求：',
+        '- 台词硬禁令：卷文本不得出现任何角色的台词原话——禁止引号对白、禁止「某某说：『……』」式的整句台词。对话一律概括成「谁与谁谈了什么、谈出什么结果、谁的立场动摇了」（概括可以：「审问中被审者反将一军、医修失态」；原话不行：「他说：『你来了』」）。动作同理只写到「做了什么事、造成什么影响」，不逐拍描写动作过程——台词与动作细节属于章层。',
         `- 展开程度匹配本卷楼数预算：本卷共 X 层楼 ≈ 有效推进约 X×几百到一千字量级的剧情量——预算大就多排事件线、多给波折与支线，预算小就收敛；不写与预算脱节的流水账，也不把大预算写成一页纸。`,
         `- 推进锚＝阶段级里程碑（本卷剧情推进到哪个阶段的标记，也是将来切章的刀口）：一句话只说「推进到哪个阶段」，概括程度向卷概要看齐、比章和节点粗至少一级——禁止写到具体动作、对话、场景安排或可逐条核对的细节精度（那是章与节点的事）。数量一般每章 1-2 个锚（每章至少完整覆盖一个锚即可，不逐层设锚）；本卷的建议锚数在任务里给了，至少 ${LF_MIN_ANCHORS} 个、不设上限。锚与锚之间在文本里标注「（本锚间自由演绎）」——执行时扮演模型可自由发挥。`,
         '- 锚写成独立行，格式：【锚 N】锚标题——阶段落点（一句话、只到阶段层面）。',
@@ -374,6 +392,7 @@ export function reviseSystemPrompt() {
         '- 只改意见涉及的地方与违反硬约束的地方，其余原样保留——修订不是重写：没被意见点名的卷的走向、事件与锚原则上不动。',
         '- 输出必须是全部卷的修订后全文：哪怕某卷一字未动也要原样输出，不能只给被改的卷。',
         '- 锚随文本同步：剧情改了的卷锚跟着改；没动的卷锚原样带出。锚仍是阶段级里程碑（一句话、只到阶段层面），数量维持每章 1-2 个的密度、至少各卷下限。',
+        '- 修订后的卷文本同样不得出现台词原话与整句对白——对话概括成「谁与谁谈了什么、谈出什么结果」（台词与动作细节属于将来的章层；意见点名的台词写成事件概括，别写原话）。',
         '- 各卷楼数分配维持原样（修订不改预算；要改预算回骨架步重新生成）。',
         ...GUARD_RULES,
         '字符串值里不要出现英文双引号（引用一律写中文「」）；text 值内的换行写 \\n。',
@@ -392,8 +411,10 @@ export function splitSystemPrompt() {
         lfPaceAnchor(),
         '任务要求：',
         `- 章数由预算决定：每章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼、不设上限；本卷预算 X 层楼最多切 ⌊X÷${LF_MIN_CHAPTER_FLOORS}⌋ 章（任务里给了本卷的章数上限）——预算只够一章时整卷切成一章，不要硬拆成几张薄章。推进锚是切章的刀口（阶段级里程碑）——章界尽量落在锚上（每章至少完整覆盖一个锚，锚不被腰斩）；本卷预算 X 层楼已定，各章楼数之和必须等于本卷预算。`,
-        '- 章文本（text）：这一章怎么演的执行指导——场景、事件链、角色行动安排，按本章楼数预算给足剧情量。这章文本将来整章挂进监听逐轮判定进度，扮演模型看不到它、监听按它对账。',
+        '- 章文本（text）：这一章怎么演的执行指导——按本章楼数预算给足剧情量。这章文本将来整章挂进监听逐轮判定进度，扮演模型看不到它、监听按它对账。',
+        '- 章文本必须重写、禁止照抄或缩抄卷文本：卷文本站在「事件与关系」层（卷层禁止台词原话与逐拍动作），章文本比它细一级——场景怎么开、节拍顺序、关键行动怎么做、关键台词的要点，都在这里写出来（台词与动作细节在章层允许）。',
         `- 节点：每章至少 ${LF_MIN_NODES} 个、不设上限；节点＝最小剧情单元，每个带「完成标准」——必须能对着楼层内容逐条核对（「她把礼物送到对方手里」可核对；「气氛变好」不可核对）；达成口径＝角色动作偏向该目标即算达成（写给逐轮判定用，不是给人读的散文）。`,
+        '- 节点挂钩（章文本与节点一一对应、看得见）：章文本按节点分段——每个节点对应章文本里的一段剧情，该段段首放独立行【节点 N】节点名——完成标准；节点行之间的正文就是这一节点的演绎区间，执行时按顺序点亮、点亮即进入下一段。nodes 数组与章文本里的【节点 N】行一一对应，两边都要给全。',
         '- 伏笔硬规则：卷文本里埋设或收束的伏笔，挂到具体节点的完成标准里（该节点必须让埋设或收束实际发生）；执行时没埋成会报错交用户处置。',
         '- 楼层预算不传导：某章实写超了楼数不向后传导（执行期原则）；但各章楼数分配现在定死，之和等于本卷预算。',
         'user 不可编排（长线版）：不替 user 做动作、不说台词、不预设心理（对话或骨架里 user 已明的意愿可当前提）；涉及 user 只能写「若 user X，则 Y」的条件式接口，且每章的核心推进不依赖 user 的任何具体回应。',
@@ -403,7 +424,7 @@ export function splitSystemPrompt() {
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         '{',
         '  "chapters": [',
-        `    { "title": "章名", "floors": ${LF_MIN_CHAPTER_FLOORS}, "text": "本章执行指导文本（含场景、事件链、角色行动安排）", "nodes": [ { "title": "节点名", "criterion": "完成标准（可对照楼层内容核对；角色动作偏向该目标即算达成）" } ] }`,
+        `    { "title": "章名", "floors": ${LF_MIN_CHAPTER_FLOORS}, "text": "本章执行指导文本（按【节点 N】行分段，每段＝一个节点的演绎区间；含场景、事件链、角色行动安排）", "nodes": [ { "title": "节点名", "criterion": "完成标准（可对照楼层内容核对；角色动作偏向该目标即算达成）" } ] }`,
         '  ]',
         '}',
     ].join('\n');
@@ -456,6 +477,7 @@ export function volTextReviseSystemPrompt() {
         '- 只改意见涉及的地方与违反硬约束的地方，其余原样保留——修订不是重写：没被意见点名的走向、事件与锚原则上不动。',
         '- 输出必须是这一卷的修订后全文，不能只给被改的段落。',
         '- 锚随文本同步：剧情改了锚跟着改；锚仍是阶段级里程碑（【锚 N】标题——阶段落点，一句话、只到阶段层面），数量维持每章 1-2 个的密度、至少下限。',
+        '- 修订后的卷文本同样不得出现台词原话与整句对白——对话概括成「谁与谁谈了什么、谈出什么结果」（台词与动作细节属于将来的章层；意见点名的台词写成事件概括，别写原话）。',
         '- 本卷楼数预算维持原样（要改预算去改骨架）。',
         ...GUARD_RULES,
         '字符串值里不要出现英文双引号（引用一律写中文「」）；text 值内的换行写 \\n。',
@@ -854,16 +876,25 @@ async function runLfSplitOne(vi, { provider, signal, materials, outline, onUsage
         const result = await lfCall({ system: splitSystemPrompt(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(vi, t.length)) });
         let chapters = Array.isArray(result?.chapters) ? result.chapters : [];
         if (!chapters.length) throw new Error('章列表为空');
-        // 章预算算术：先保每章不低于一章下限，再重配到卷预算（模型给的总和不作数）
-        chapters = chapters.map(c => ({
-            title: String(c?.title ?? '').slice(0, 120),
-            floors: posInt(c?.floors) ?? 0,
-            text: String(c?.text ?? '').trim(),
-            nodes: (Array.isArray(c?.nodes) ? c.nodes : []).map(n => ({
+        // 章预算算术：先保每章不低于一章下限，再重配到卷预算（模型给的总和不作数）；
+        // 节点数组缺行时从章文本的【节点 N】行兜底（第二十五轮：节点是监听判定表，丢了没得判）
+        chapters = chapters.map(c => {
+            let nodes = (Array.isArray(c?.nodes) ? c.nodes : []).map(n => ({
                 title: String(n?.title ?? '').slice(0, 120),
                 criterion: String(n?.criterion ?? ''),
-            })).filter(n => n.title),
-        })).filter(c => c.text || c.nodes.length);
+            })).filter(n => n.title);
+            const text = String(c?.text ?? '').trim();
+            if (nodes.length < LF_MIN_NODES) {
+                const fromText = nodesFromText(text);
+                if (fromText.length > nodes.length) nodes = fromText;
+            }
+            return {
+                title: String(c?.title ?? '').slice(0, 120),
+                floors: posInt(c?.floors) ?? 0,
+                text,
+                nodes,
+            };
+        }).filter(c => c.text || c.nodes.length);
         if (chapters.length < 1) throw new Error('没有可用的章（全部缺文本与节点）');
         // 章数先对预算：N 章至少要 N×下限层——超了＝预算装不下，报数＋指路（第二十轮大白话化）
         if (chapters.length > cap.max) throw new Error(`本卷预算 ${vol.floors} 层，模型切了 ${chapters.length} 章——每章至少 ${LF_MIN_CHAPTER_FLOORS} 层、${chapters.length} 章至少需要 ${chapters.length * LF_MIN_CHAPTER_FLOORS} 层，预算不够（本卷最多切 ${cap.max} 章）。重试让模型少切几章，或用卷卡「编辑骨架」把本卷楼数改大`);
