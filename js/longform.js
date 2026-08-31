@@ -406,20 +406,22 @@ export function detailSystemPrompt() {
     ].join('\n');
 }
 
-export function reviseSystemPrompt() {
+// 整书卷文本档「按意见修订」的分卷执行规格（第二十八轮）：全部卷的当前文本与整书意见都
+// 在上下文里、每次调用只重出点名的那一卷——治「一次调用重出全部卷全文」必撞输出上限的
+// 病根（maxTokens 默认 1500×3＝4500，五卷的书整书全文要 8000+ 字：截断→修复梯子补第二发
+// 照样装不下→捞回的卷原样/缺正文、一处写不进，钱烧两遍页面不动——用户两轮实测同一症状）
+export function bookReviseVolSystemPrompt() {
     return [
-        '你是长线剧情大纲的修订编辑。用户会给你全部卷的当前文本与一条修改意见，你按意见修订全书。',
+        '你是长线剧情大纲的修订编辑。用户在做一次整书意见修订，分卷执行：全部卷的当前文本与整书修改意见都给你，你只负责重出点名给你的那一卷的卷级文本。',
         '任务要求：',
-        '- 只改意见涉及的地方与违反硬约束的地方，其余原样保留——修订不是重写：没被意见点名的卷的走向、事件与锚原则上不动。',
-        '- 输出必须是全部卷的修订后全文：哪怕某卷一字未动也要原样输出，不能只给被改的卷。',
-        '- 锚随文本同步：剧情改了的卷锚跟着改；没动的卷锚原样带出。锚仍是阶段级里程碑（一句话、只到阶段层面），数量维持每章 1-2 个的密度、至少各卷下限。',
+        '- 只改意见涉及本卷的地方与违反硬约束的地方，其余原样保留——修订不是重写：意见没落到本卷的走向、事件与锚原则上不动（本卷在意见范围之外就原样带出）。',
+        '- 输出必须是这一卷的修订后全文，不能只给被改的段落，也不要把别的卷一起输出。',
+        '- 锚随文本同步：剧情改了锚跟着改；锚仍是阶段级里程碑（【锚 N】标题——阶段落点，一句话、只到阶段层面），数量维持每章 1-2 个的密度、至少下限。',
         '- 修订后的卷文本同样不得出现台词原话与整句对白——对话概括成「谁与谁谈了什么、谈出什么结果」（台词与动作细节属于将来的章层；意见点名的台词写成事件概括，别写原话）。重出全文时未被意见点名的事件一件不少照写，不许顺手浓缩成一笔带过的总括。',
-        '- 各卷楼数分配维持原样（修订不改预算；要改预算回骨架步重新生成）。',
+        '- 本卷楼数预算维持原样（修订不改预算；要改预算回骨架步重新生成）。',
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         '{',
-        '  "volumes": [',
-        '    { "title": "卷名", "text": "修订后的卷级剧情文本", "anchors": [ { "title": "锚标题", "point": "锚落地内容" } ] }',
-        '  ]',
+        '  "title": "卷名", "text": "修订后的卷级剧情文本（含【锚 N】行与「（本锚间自由演绎）」标注）", "anchors": [ { "title": "锚标题", "point": "阶段落点（一句话、只到阶段层面）" } ]',
         '}',
     ].join('\n');
 }
@@ -684,7 +686,12 @@ async function runLfDetailOne(vi, { provider, signal, materials, outline, live =
 }
 
 // ⑤ 审阅改：按意见整书修订（意见必填——长线不设「换一版」档，要重来走「重新生成骨架」）
-export async function runLfRevise({ opinion = '', provider, signal, onUsage, onDelta } = {}) {
+// ⑤ 整书「按意见修订」卷文本（第二十八轮改逐卷执行）：老做法一次调用要求模型把全部卷
+// 全文重出，五卷的书要 8000+ 字、必撞输出上限（maxTokens 默认 1500×倍率3＝4500 token）——
+// 截断后修复梯子补第二发照样装不下，捞回的卷原样/缺正文、一处写不进：token 烧两遍、页面
+// 不动。现在逐卷执行：每次调用看得到全部卷当前文本＋整书意见（跨卷意见——把乙卷的事挪到
+// 甲卷——两头都落得了），只重出本卷；先焐热再并行吃前缀缓存；逐卷落袋互不连坐
+export async function runLfRevise({ opinion = '', provider, signal, onUsage, onDelta, onProgress } = {}) {
     const note = String(opinion ?? '').trim();
     if (!note) throw new Error('修改意见是空的——写一句要改什么（长线的「换一版」＝重新生成骨架）');
     const st = lfState();
@@ -697,28 +704,25 @@ export async function runLfRevise({ opinion = '', provider, signal, onUsage, onD
         v.text,
         `锚：${v.anchors.map(a => a.title).join('、')}`,
     ].join('\n')).join('\n\n');
-    const user = [
+    // 共享段在逐卷调用间逐字节一致（垫前缀缓存），分歧只在尾巴的「本卷任务」
+    const shared = [
         stable.join('\n\n'),
         bookOutlineBlock(st),
-        reviseSystemPrompt(),
+        bookReviseVolSystemPrompt(),
         ...live,
         '## 全部卷的当前文本',
         volsBlock,
         '## 修改意见',
         note,
     ].join('\n\n');
-    const result = await lfCall({ system: lfCommonSystem(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
-    const list = Array.isArray(result?.volumes) ? result.volumes : [];
-    if (!list.length) throw new Error('修订输出里没有卷');
-    if (list.length !== st.volumes.length) throw new Error(`修订输出卷数 ${list.length} 与现有 ${st.volumes.length} 不一致——已放弃写入，重试或把意见拆小`);
-    const st2 = lfState();
-    let updated = 0, unchanged = 0, keptNoText = 0;
-    st2.volumes.forEach((v, i) => {
-        const r = list[i] ?? {};
+    const tally = { updated: 0, unchanged: 0, keptNoText: 0 };
+    const writeOne = (vi, result) => {
+        const v = lfState().volumes[vi];
+        const r = result ?? {};
         const text = String(r?.text ?? '').trim();
         const title = String(r?.title ?? v.title).slice(0, 120) || v.title;
-        if (!text) { keptNoText++; return; }   // 该卷空文本＝模型没给，保留原文（宁缺勿毁）
-        if (text === v.text && title === v.title) { unchanged++; return; }   // 原样带回：不写也不刷 textAt（章表不白标过期）
+        if (!text) { tally.keptNoText++; return; }   // 该卷空文本＝模型没给，保留原文（宁缺勿毁）
+        if (text === v.text && title === v.title) { tally.unchanged++; return; }   // 原样带回：不写也不刷 textAt（章表不白标过期）
         if (title !== v.title) v.title = title;
         if (text !== v.text) {
             v.text = text;
@@ -730,15 +734,26 @@ export async function runLfRevise({ opinion = '', provider, signal, onUsage, onD
             if (anchors.length >= LF_MIN_ANCHORS) v.anchors = anchors.map(a => ({ title: a.title || '未命名锚', point: a.point }));
             v.textAt = Date.now();   // 修订后章表（若有）标过期
         }
-        updated++;
-    });
-    persistLf();
+        persistLf();
+        tally.updated++;
+    };
+    let settled = 0;
+    onProgress?.({ settled: 0, total: st.volumes.length });
+    const tick = () => onProgress?.({ settled: ++settled, total: st.volumes.length });
+    const rs = await warmFirstAllSettled(st.volumes.map((v, i) => () => (async () => {
+        const user = [shared,
+            '## 本卷任务',
+            `只重出第 ${i + 1} 卷「${v.title}」的修订后全文——其余卷的当前文本只是上下文，不要输出它们。`,
+        ].join('\n\n');
+        writeOne(i, await lfCall({ system: lfCommonSystem(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(i, t.length)) }));
+    })().then(r => { tick(); return r; }, e => { tick(); throw e; })));
+    const failed = [];
+    rs.forEach((r, k) => { if (r.status === 'rejected') failed.push({ vol: k, reason: String(r.reason?.message ?? r.reason) }); });
     flushChatData();
-    // 一卷正文都没拿到＝修订白跑。第二十三轮加的硬校验：此前全空会静默弹「成功」——
-    // 「生成正常但文本没变」的直接来源；现在明确报错，用户才知道要重试而不是误以为改完了
-    if (!updated && !unchanged && keptNoText === st2.volumes.length)
-        throw new Error('修订输出里一卷正文都没有——模型没按格式给全文（可能被输出上限截断），已保留原文不动。重试一次，或把意见拆小分次修订');
-    return { updated, unchanged, keptNoText };
+    // 一卷正文都没拿到＝修订白跑。第二十三轮加的硬校验照搬：全空不许静默装成功
+    if (!tally.updated && !tally.unchanged && !failed.length && tally.keptNoText === st.volumes.length)
+        throw new Error('修订输出里一卷正文都没有——模型没按格式给全文，已保留原文不动。重试一次，或把意见拆小分次修订');
+    return { ...tally, failed };
 }
 
 // ⑤' 骨架整书修订（第二十四轮）：只改骨架四字段与楼数分配，不动卷文本——骨架阶段的「按意见修订」

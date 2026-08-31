@@ -204,7 +204,7 @@ function toolbarHtml(st, anyDetail) {
             <span class="menu_button ${canDetail ? '' : 'pp-lf-dim'}" id="pp_lf_detail" title="逐卷并行生成卷级详细文本（一次一卷、只补没完成的卷——中途报错已成的卷不丢）；费用＝每卷一次调用">${st.volumes.some(v => v.detailState === 'done') ? '继续具体化（未完成的卷）' : '具体化各卷'}</span>
             <span class="menu_button ${canRevise ? '' : 'pp-lf-dim'}" id="pp_lf_revise" title="${st.stage === 'skeleton'
         ? '按意见修订全书骨架（卷名/楼数分配/概要/种子，只改意见涉及处）——单卷修订去各卷「骨架」页签'
-        : '按意见修订全部卷的卷文本（一次调用、全部卷全文重出——长书易撞输出上限，撞了改用各卷「卷文本」页签的单卷修订）'}">按意见修订（${revTarget}）</span>
+        : '按意见修订全部卷的卷文本（逐卷下发意见、一次只重出一卷全文——没被意见点名的卷会原样带出；改动去各卷「卷文本」页签看）'}">按意见修订（${revTarget}）</span>
             <span class="menu_button ${canSplit ? '' : 'pp-lf-dim'}" id="pp_lf_split" title="逐卷并行：卷切成章（推进锚是刀口）、章内切节点，一步到位；只切「已具体化且未切章」的卷——单卷带意见重切去各卷「章与节点」页签">${st.volumes.some(v => v.splitState === 'done') ? '继续切章（未完成的卷）' : '再切小'}</span>
             ${st.stage !== 'none' ? `<span class="menu_button" id="pp_lf_reskel" title="回到参数表单从头再来（参数与想法留着；旧书自动备份——新骨架生成失败会自动恢复）">重新生成骨架</span>` : ''}
             <label class="pp-lf-prov" title="生成调用走哪个连接：主连接或供应商方案（单次选用，不影响正在使用的模型）——四步共用这一个选择">生成模型
@@ -925,15 +925,25 @@ function bindTab(container, st) {
         startBusy('revise');
         common.signal = lfBusy.ctl.signal;
         renderTab(container);
+        // 逐卷执行的实时进度（第二十八轮）：已完成 N/M 卷＋流式字数逐卷累计，每卷落定重刷卷卡
+        const lens = new Map();
+        let settledN = 0, totalN = 0;
+        const chars = () => { let n = 0; for (const x of lens.values()) n += x; return n; };
+        const note = () => `已完成 ${settledN}/${totalN} 卷 · 已收 ${chars().toLocaleString()} 字`;
+        common.onDelta = (vi, len) => { lens.set(vi, Math.max(lens.get(vi) ?? 0, len)); setBusyNote(note()); };
+        common.onProgress = p => { settledN = p.settled; totalN = p.total; rerenderVols(container); setBusyNote(note()); };
         try {
             const r = await runLfRevise({ opinion, ...common });
             if (!r.updated) {
-                const why = r.keptNoText ? `有 ${r.keptNoText} 卷没给正文（可能被输出上限截断）、其余原样带回` : '全部卷都被原样带回';
+                const why = r.failed?.length
+                    ? `${r.failed.length} 卷调用失败（${r.failed.map(f => `第 ${f.vol + 1} 卷`).join('、')}）、其余原样带回`
+                    : r.keptNoText ? `有 ${r.keptNoText} 卷没给正文、其余原样带回` : '全部卷都被原样带回';
                 toastr.warning(`一处都没改成：${why}——重试一次，或去各卷「卷文本」页签按卷修订；${u.line()}`);
             } else {
                 const bits = [`已按意见改了 ${r.updated} 卷（章表若已生成会标过期）`];
                 if (r.unchanged) bits.push(`${r.unchanged} 卷原样带出——没被意见点名的卷属正常`);
                 if (r.keptNoText) bits.push(`${r.keptNoText} 卷没给正文、保留原文`);
+                if (r.failed?.length) bits.push(`${r.failed.length} 卷失败（${r.failed.map(f => `第 ${f.vol + 1} 卷`).join('、')}，重试或用各卷「卷文本」页签的修订）`);
                 toastr.success(`${bits.join('；')}；${u.line()}`);
             }
         } catch (err) {
