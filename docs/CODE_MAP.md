@@ -41,7 +41,7 @@
 | planner.js | ~680 | 规划分析（两遍调用编排）/检查报告/联网研究/规划系统提示词 | runPlotGuidance、runStoryReview、buildGuidanceMessages、guidanceSystemPrompt、alignTailPrompt |
 | listener.js | ~950 | 2.0 监听引擎：单位/轻量双模式、两套提示词、判定落账、排队闸、宿主接线 | runListenerRound、initListener、listenerProvider、buildUnitPrompt、buildLightPrompt、createSendGate |
 | knowledge.js | ~430 | 知识库数据层：清单/条目/轮换抓取/发送集裁决/冷却/长草稿分批导入 | kbSendPayload、grabFromList、knowledgeSection、structureImport、settleCooldown |
-| longform.js | ~750 | 2.0 长线规划：chatdata longform 块（书-卷-章-节点＋进度账＋材料勾选 mats）、四份管线提示词、六步编排（骨架/具体化/修订/再切小）、材料拼装（mats→materialSections＋知识库整表小节 lfKbSection）、数量建议三纯函数（卷数/锚密度/章上限随预算，第二十轮）、章→监听单位挂载 | lfState、runLfSkeleton、runLfDetailBatch、runLfRevise、runLfSplitBatch、mountChapter、syncLfProgress、rescaleFloors、lfMaterialParts、lfMatOverview、lfVolumeRange、lfAnchorTarget、lfChapterCap |
+| longform.js | ~900 | 2.0 长线规划：chatdata longform 块（书-卷-章-节点＋进度账＋材料勾选 mats＋重新生成备份 regenBackup）、七份管线提示词（骨架/具体化/审阅改/再切小＋第二十四轮新增：骨架整书修订/单卷骨架修订/单卷卷文本修订）、六步编排＋单卷档（runLfVolSkeletonRevise/runLfVolTextRevise/runLfVolSplit）、材料拼装、数量建议三纯函数（卷数/锚密度＝每章 1-2 个/章上限随预算） | lfState、runLfSkeleton、runLfDetailBatch、runLfRevise、runLfSplitBatch、runLfSkeletonRevise、runLfVolSkeletonRevise、runLfVolTextRevise、runLfVolSplit、stashLfRegenBackup、mountChapter、syncLfProgress、rescaleFloors、lfMaterialParts、lfVolumeRange、lfAnchorTarget、lfChapterCap |
 | randomEvents.js | ~310 | M3 随机事件三层（维度/条目/掷骰管线）＋三路生成 | 各生成入口 |
 | reactions.js | ~165 | 路人反应校准卡生成 | 生成入口 |
 | memoryTable.js | ~585 | 记忆表格对接（只读 st-memory-enhancement 原始数据）＋镜像维护＋AI 打标 | buildMemoryContext、syncMemory、mergeMirrorFromSource |
@@ -60,7 +60,7 @@
 | ui/tabs/tab-worldbook.js | ~460 | 世界书页（导入/启停/条目编辑/检索测试/回收站） |
 | ui/tabs/tab-knowledge.js | ~450 | 知识库页（清单管理/结构化导入/冷却徽章） |
 | ui/tabs/tab-listener.js | ~390 | 监听页（状态条/当前单位/本轮指导/旋钮/留痕悬浮窗） |
-| ui/tabs/tab-longform.js | ~810 | 长线规划页（参数表单/材料面板（第十九轮：记忆全量勾/玩法/知识库清单/世界书自选悬浮面板）/卷卡＋骨架就地编辑（第二十轮：卷名/楼数/概要/种子＋删卷）/修订/再切小/执行总览/生成中实时状态（流式字数＋逐卷进度）——挂载与接续入口在这） |
+| ui/tabs/tab-longform.js | ~1080 | 长线规划页（第二十四轮重构：顶部操作条四按钮置灰指路＋参数/材料折叠＋卷列表三页签〔骨架/卷文本/章与节点〕＋执行区瘦身；修订下沉每步——整书/单卷×骨架/卷文本、单卷带意见重切、章文本手改；busy 横幅带模型·用时·思考字数；重新生成带备份恢复；世界书自选悬浮面板也在这） |
 | ui/tabs/tab-storage.js | ~330 | 游戏玩法工具区（条目库＋就地编辑） |
 
 **tab-guidance.js 内部分区**（定位先搜这些横幅标题）：向导进度快照 → 步骤跳转条 → 悬浮查看器 → 第 1 步勾选按对话记忆 → 第 1 步渲染（材料页）→ 顶部：进行中剧情状态条＋历史归档 → 剧情注入自动绑定 → 主区：按向导步骤渲染（①材料/②确认/运行页/③结果，最大的区）→ 两个现场工具的悬浮面板（随机事件/路人反应，产物＝单元）→ 知识库抓取悬浮面板 → 世界书自选悬浮面板 → 分析调用/第 3 步人工二检＋封装 → 近期草稿骨架 → 检查报告。
@@ -74,7 +74,7 @@
 3. **知识库**：导入＝tab-knowledge → knowledge.structureImport（长草稿分批，每批一次调用）→ 入库；抓取＝tab-guidance 面板 → knowledge.grabFromList（轮换队列在 list.queue）→ 面板勾选/踢/整把重抓 → knowledge.kbSendPayload 裁决发送集（面板/确认页/真实调用三处共用）→ knowledgeSection 进材料 → 结果页 knowledgeUsedLabels 解析自报 → settleCooldown 只在确认采用/转注入时结算（草稿放弃不碰）。
 4. **隐身注入**：story 确认采用自动绑定 → injection.addInjection/applyInjection → index.js 事件里 tickInjectionExpiries（按楼层净增计层）＋replayScopedInjections（切聊天重放）→ 生效中的注入在 tab-guidance 底部折叠区查看/撤下。
 5. **检查报告**：tab-guidance 检查入口 → planner.runStoryReview（与向导共用运行页、流式上屏与并发闸）→ 报告页。
-6. **长线管线（第十八轮新增，材料面板第十九轮改自备，骨架编辑/实时状态/数量注入第二十轮）**：tab-longform 参数表单（想法/楼数随 longform 块留底）＋材料面板（勾选存 longform 块的 mats——记忆全量/玩法（null＝跟随生效中 store.storageItemsInEffect）/知识库清单/世界书自选，与 1.0 的 picks 互不影响）→ longform.lfMaterialParts（materialSections＋lfKbSection 知识库整表小节，插「检索命中」前吃前缀缓存）→ runLfSkeleton（骨架＋切块一次调用；rescaleFloors/validateVolumes 楼数算术在本地）→ runLfDetailBatch 逐卷并行（材料与骨架块整批拼一次、逐卷共享同一前缀）→ runLfRevise 按意见整书修订 → runLfSplitBatch 逐卷并行切章（章预算同款本地重配）→ mountChapter 把章挂进监听单位槽（source:'longform'、unitId 记在章上）→ 监听每轮判定后 syncLfProgress 把 nodeIdx 写回章的 lit（进度账的持久方是 longform 块，监听槽只是执行位）。第二十轮：数量建议三纯函数（lfVolumeRange/lfAnchorTarget/lfChapterCap）把卷数/锚数/章数上限随预算注入提示词与任务文本；四步生成走流式（lfCall 透传 onDelta→chatCompletion SSE），tab-longform 的 setBusyNote/rerenderVols 消费 onDelta/onProgress 出实时状态；骨架编辑（saveVolSkeleton/delVolume）改卷字段后楼层总数＝各卷之和、切过章的卷回「未切章」待重切。
+6. **长线管线（第十八轮新增，材料面板第十九轮改自备，骨架编辑/实时状态/数量注入第二十轮，页面重构与修订下沉第二十四轮）**：tab-longform 顶部操作条＋参数/材料折叠（勾选存 longform 块的 mats——记忆全量/玩法（null＝跟随生效中 store.storageItemsInEffect）/知识库清单/世界书自选，与 1.0 的 picks 互不影响）→ longform.lfMaterialParts（materialSections＋lfKbSection 知识库整表小节，插「检索命中」前吃前缀缓存）→ runLfSkeleton（骨架＋切块一次调用；rescaleFloors/validateVolumes 楼数算术在本地）→ runLfDetailBatch 逐卷并行（材料与骨架块整批拼一次、逐卷共享同一前缀）→ 修订两层四档（骨架：runLfSkeletonRevise 整书/runLfVolSkeletonRevise 单卷；卷文本：runLfRevise 整书/runLfVolTextRevise 单卷）→ runLfSplitBatch 逐卷并行切章＋runLfVolSplit 单卷带意见重切（章预算同款本地重配）→ mountChapter 把章挂进监听单位槽（source:'longform'、unitId 记在章上）→ 监听每轮判定后 syncLfProgress 把 nodeIdx 写回章的 lit（进度账的持久方是 longform 块，监听槽只是执行位）。数量建议三纯函数（lfVolumeRange/lfAnchorTarget/lfChapterCap）把卷数/锚数/章数上限随预算注入提示词与任务文本；生成走流式（lfCall 透传 onDelta/onReasoning→chatCompletion SSE），tab-longform 的 setBusyNote/rerenderVols/updateBusyMeta 消费出实时状态（模型·用时·思考·字数·完成数）；骨架编辑（saveVolSkeleton/delVolume）改卷字段后楼层总数＝各卷之和、切过章的卷回「未切章」待重切；「重新生成骨架」走 stashLfRegenBackup 备份旧书、生成失败 runLfSkeleton 内部 restoreLfBackup 自动恢复；卷内 UI 瞬态（展开/页签/编辑态/意见草稿）在模块级 volUi Map 与 volOpinions Map，刷新即失。
 
 ## 3. 「改 X 先读 Y」路由
 
@@ -95,7 +95,7 @@
 ## 4. 状态放在哪（改前先分清「这份数据属于谁」）
 
 - `settings.*`＝全局（跨聊天）：连接/方案库/检索参数/知识库清单/监听全局项/事件库/玩法条目。
-- `chatdata`（按聊天身份）：记忆镜像/剧情档案/向导勾选 picks/单元池/监听留痕与状态/向导快照（wizard 块）/近期草稿骨架/长线整本（longform 块：书-卷-章-节点＋进度账＋挂载记录＋材料勾选 mats——作废本长线时 mats 保留）。
+- `chatdata`（按聊天身份）：记忆镜像/剧情档案/向导勾选 picks/单元池/监听留痕与状态/向导快照（wizard 块）/近期草稿骨架/长线整本（longform 块：书-卷-章-节点＋进度账＋挂载记录＋材料勾选 mats＋重新生成备份 regenBackup——作废本长线时 mats 保留）。
 - 模块变量（刷新即失）：tab-guidance 的流式上屏态（streamText/streamReason/streamFirstText，结构见 updateStreamView）、listener 的 running/gate。
 - 经验教训（第五轮）：状态清理按「数据属于谁」分家——生成结果该清、用户攒的材料不陪清；有副作用的账只挂「正式生效」的动作。
 

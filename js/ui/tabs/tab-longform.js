@@ -1,6 +1,9 @@
-// 2.0 长线规划页签：六步管线的操作台＋书-卷-章-节点总览。
-// 状态与编排全在 js/longform.js，本文件只管界面、按钮与状态徽；逐轮执行去看「监听」页。
-// 生成走「单次选用」模型（与知识库结构化导入同款下拉：主连接或供应商方案，不影响正在用的模型）。
+// 2.0 长线规划页签（第二十四轮重构）：顶部操作条（四步生成按钮常驻、按流程置灰）＋
+// 参数/材料两个折叠区（生成前展开、过程中收起）＋ 卷列表（每卷折叠，展开后三页签切换：
+// 骨架 / 卷文本 / 章与节点——同一附属区里切着看，不往下摞长页）＋ 执行区（当前章＋接续）。
+// 「按意见修订」下沉到每一步：骨架整书 / 单卷骨架 / 单卷卷文本 / 单卷带意见重切，与手动编辑并存。
+// 状态与编排全在 js/longform.js，本文件只管界面；逐轮执行去看「监听」页。
+// 生成走「单次选用」模型（主连接或供应商方案，不影响正在用的模型）。
 import { settings } from "../../settings.js";
 import { escapeHtml, clamp } from "../../utils.js";
 import { storageItemsInEffect } from "../../store.js";
@@ -8,8 +11,9 @@ import { knowledgeLists } from "../../knowledge.js";
 import { resolveLorePicks } from "../../lorebook.js";
 import {
     lfState, persistLf, resetLf, runLfSkeleton, runLfDetailBatch, runLfRevise, runLfSplitBatch,
+    runLfSkeletonRevise, runLfVolSkeletonRevise, runLfVolTextRevise, runLfVolSplit, stashLfRegenBackup,
     mountChapter, syncLfProgress, lfNextChapter, lfStats, lfMatOverview,
-    LF_MIN_CHAPTER_FLOORS, LF_DEFAULT_FLOORS, LF_MIN_ANCHORS, LF_MIN_NODES,
+    LF_MIN_CHAPTER_FLOORS, LF_DEFAULT_FLOORS,
 } from "../../longform.js";
 
 export const longformTab = {
@@ -18,20 +22,42 @@ export const longformTab = {
     render(container) { renderTab(container); },
 };
 
-// 模块级瞬态：一次生成在途（kind＋中断闸）与展开集合（刷新即失，不动数据）
-let lfBusy = null;   // { kind: 'skeleton'|'detail'|'revise'|'split', ctl: AbortController }
-const expanded = new Set();   // 'v0' 卷文本展开 / 've0' 卷文本编辑 / 'sk0' 骨架编辑 / 'c0-1' 章文本展开
-let confirmReset = false;     // 「作废本长线」两步确认的 Armed 位
-const delArmVol = new Set();  // 「删除本卷」两步确认的 Armed 位（卷号）
-const veArmVol = new Set();   // 「取消」编辑卷文本两步确认的 Armed 位（卷号，只在改过内容时启用）
-let lfOpinion = '';           // 修订意见草稿（会话内留底：批量生成的逐卷刷新不整页重渲也清不掉它）
-let busyLast = 0;             // busy 实时字数的节流闸（流式回调很密，150ms 一拍够用）
+// 模块级瞬态（刷新即失、不动数据）
+let lfBusy = null;   // { kind: 'skeleton'|'detail'|'revise'|'revsk'|'volsk'|'voltext'|'split'|'volsplit', ctl }
+const BUSY_LABEL = {
+    skeleton: '生成骨架中', detail: '具体化各卷中', revise: '按意见修订中', revsk: '按意见修订骨架中',
+    volsk: '修订本卷骨架中', voltext: '修订本卷文本中', split: '再切小中', volsplit: '重切本卷中',
+};
+let providerId = '';        // 单次选用的模型（会话内记住上次选择；空 = 主连接）
+let confirmReset = false;   // 「作废本长线」两步确认
+const delArmVol = new Set();   // 「删除本卷」两步确认（卷号）
+const veArmVol = new Set();    // 「取消」卷文本编辑两步确认（卷号，只在改过内容时启用）
+const skArmVol = new Set();    // 「取消」骨架编辑两步确认（卷号，同上）
+const chArm = new Set();       // 「取消」章文本编辑两步确认（`${vi}:${ci}`）
+let lfOpinion = '';            // 整书修订意见草稿（会话内留底）
+const volOpinions = new Map(); // 单卷意见草稿（键 `${vi}:sk|text|split`，会话内留底——攒的意见不算瞬态）
+let revOpen = false;           // 操作条「按意见修订」的意见框展开位
+let paramOpen = null, matOpen = null;   // 参数/材料折叠位（null＝首次按阶段自动定：生成前展开、之后收起）
+let busyLast = 0;              // busy 实时字数的节流闸（流式回调很密，150ms 一拍够用）
+let busyT0 = 0, busyTimer = null, busyThink = 0;   // busy 计时与思考计数（第二十四轮：横幅补模型·用时·思考）
+
+// 卷内 UI 状态：open 展开、tab 页签（sk 骨架/text 卷文本/ch 章与节点）、skEdit/veEdit 编辑态、
+// skRev/veRev/spRev 意见框、chView/chEdit 章文本查看与编辑
+const volUi = new Map();
+function volUiOf(i) {
+    if (!volUi.has(i)) volUi.set(i, { open: false, tab: 'sk', skEdit: false, skRev: false, veEdit: false, veRev: false, spRev: false, chView: new Set(), chEdit: new Set() });
+    return volUi.get(i);
+}
+function closeInlineBoxes(ui) {
+    ui.skEdit = ui.skRev = ui.veEdit = ui.veRev = ui.spRev = false;
+    ui.chEdit.clear();
+}
 
 const STAGE_LABEL = {
-    none: ['① 未开始', '填参数生成骨架'],
-    skeleton: ['① 骨架已定', '卷结构与楼数预算就绪——可直接「编辑骨架」微调，或具体化各卷'],
-    detailed: ['③ 卷文本齐全', '可修订/手改，然后「再切小」出章与节点'],
-    split: ['⑥ 章/节点就绪', '执行期：按章挂进监听，节点逐轮点亮'],
+    none: ['① 未开始', '填参数，点「生成骨架」'],
+    skeleton: ['② 骨架已定', '可修订/编辑骨架，然后具体化各卷'],
+    detailed: ['③ 卷文本齐全', '可修订/手改，然后再切小'],
+    split: ['④ 章/节点就绪', '执行期：按章挂进监听，节点逐轮点亮'],
 };
 
 function providerOptions(selectedId) {
@@ -40,11 +66,17 @@ function providerOptions(selectedId) {
         + profs.map(p => `<option value="${escapeHtml(p.id)}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(clamp(p.name || p.model, 30))}</option>`).join('');
 }
 
-let providerId = '';   // 单次选用的模型（会话内记住上次选择；空 = 主连接）
 function providerFromId(pid) {
     if (!pid) return undefined;
     const p = (settings.api.profiles ?? []).find(x => x.id === pid);
     return p ? { baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model } : undefined;
+}
+
+// busy 横幅右侧的模型名（与下拉同源：方案名或主连接模型名）
+function lfModelLabel() {
+    if (!providerId) return clamp(settings.api.model || '主连接', 24);
+    const p = (settings.api.profiles ?? []).find(x => x.id === providerId);
+    return clamp(p?.name || p?.model || '供应商方案', 24);
 }
 
 function usageCollector() {
@@ -77,17 +109,46 @@ const SPLIT_BADGE = {
     error: ['失败', '重试'],
 };
 
+function startBusy(kind) {
+    lfBusy = { kind, ctl: new AbortController() };
+    busyT0 = Date.now();
+    busyThink = 0;
+}
+function endBusy() {
+    lfBusy = null;
+    stopBusyTimer();
+}
+function startBusyTimer() {
+    stopBusyTimer();
+    busyTimer = setInterval(updateBusyMeta, 1000);
+    updateBusyMeta();
+}
+function stopBusyTimer() {
+    if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
+}
+function updateBusyMeta() {
+    const el = document.getElementById('pp_lf_busymeta');
+    if (!el || !lfBusy) return;
+    const sec = Math.max(0, Math.round((Date.now() - busyT0) / 1000));
+    const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+    const ss = String(sec % 60).padStart(2, '0');
+    el.textContent = `${lfModelLabel()} · ${mm}:${ss}${busyThink ? ` · 思考 ${busyThink.toLocaleString()} 字` : ''}`;
+}
+
 function renderTab(container) {
+    stopBusyTimer();
     syncLfProgress();
     const st = lfState();
+    if (paramOpen === null) { paramOpen = st.stage === 'none'; matOpen = st.stage === 'none'; }
     const [stageLabel, stageHint] = STAGE_LABEL[st.stage];
     const stats = lfStats(st);
     const next = lfNextChapter(st);
+    const anyDetail = st.volumes.some(v => v.detailState === 'done');
     const busyLine = lfBusy ? `
         <div class="pp-item pp-lf-busy">
-            <b>${({ skeleton: '生成骨架中', detail: '具体化各卷中', revise: '按意见修订中', split: '再切小中' })[lfBusy.kind]}…</b>
-            <span id="pp_lf_busynote" class="pp-muted"></span>
-            <span class="pp-muted">生成可以慢；中途可离开本页（切回来状态还在）</span>
+            <b>${BUSY_LABEL[lfBusy.kind] ?? '生成中'}…</b>
+            <span class="pp-muted" id="pp_lf_busymeta">${escapeHtml(lfModelLabel())} · 00:00</span>
+            <span class="pp-muted" id="pp_lf_busynote"></span>
             <span id="pp_lf_abort" class="menu_button" title="中断这一批调用（已被服务商收下的部分照常计费）">中断</span>
         </div>` : '';
 
@@ -108,50 +169,69 @@ function renderTab(container) {
         ${st.error ? `<div class="pp-muted pp-lf-err">最近一次操作失败：${escapeHtml(st.error)}</div>` : ''}
     </div>
 
-    ${st.stage === 'none' ? paramFormHtml(st) : ''}
+    ${toolbarHtml(st, anyDetail)}
 
+    ${paramFoldHtml(st)}
     ${materialsHtml(st)}
 
     ${st.stage !== 'none' ? `
     <div class="pp-section">
-        <b>全书骨架</b>
-        <span class="pp-muted" title="骨架与切块一次生成：卷结构与楼数预算由模型出、楼数算术由插件校验（总和＝楼层总数，各卷不低于一章下限）">${escapeHtml(clamp(`楼层总数 ${st.totalFloors} 层${st.minFloors ? ` · 保底 ${st.minFloors} 层` : ''} · ${st.newChars ? '允许新角色' : '不引入新角色'}${st.idea ? ` · 想法：${clamp(st.idea, 60)}` : ''}`, 90))}</span>
-        <span class="pp-muted" title="生成骨架那一刻实际携带的材料概览（材料勾选在上方「材料」区改——具体化/修订/切章每次调用都按当时的勾选拼）">材料：${escapeHtml(st.materialNote || '—')}</span>
+        <div class="pp-gd-layhead"><b>卷</b><span class="pp-muted">${st.volumes.length} 卷 · ${st.volumes.reduce((n, v) => n + v.floors, 0)} 层楼${st.minFloors ? ` · 保底 ${st.minFloors}` : ''}${st.idea ? ` · 想法：${escapeHtml(clamp(st.idea, 40))}` : ''}</span></div>
         <div id="pp_lf_vols">${st.volumes.map((v, i) => volCardHtml(v, i, st)).join('')}</div>
-        <div class="pp-btn-row">
-            ${st.stage === 'skeleton' ? `<span id="pp_lf_detail" class="menu_button" title="逐卷并行生成卷级详细文本（一次一卷、内嵌推进锚——锚是将来切章与判定进度的刀口）；费用＝每卷一次调用">具体化各卷</span>` : ''}
-            ${st.stage === 'skeleton' ? `<span id="pp_lf_reskel" class="menu_button" title="作废当前骨架从头再来（参数与想法框在下面改）">重新生成骨架</span>` : ''}
-        </div>
     </div>` : ''}
 
-    ${st.stage !== 'none' && st.volumes.some(v => v.detailState === 'done') ? reviseHtml(st) : ''}
-
-    ${st.volumes.some(v => v.detailState === 'done') ? `
-    <div class="pp-section">
-        <b>再切小</b>
-        <span class="pp-muted" title="逐卷并行：卷切成章（每章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼、推进锚是切章刀口）、章内切节点（每章至少 ${LF_MIN_NODES} 个、带可对照的完成标准）；章预算算术插件校验（各章之和＝本卷预算）">卷 → 章 → 节点，一步到位</span>
-        <div class="pp-btn-row">
-            <span id="pp_lf_split" class="menu_button" title="对全部「已具体化且未切章」的卷并行切章（每卷一次调用）">${st.volumes.some(v => v.splitState === 'done') ? '继续切章（未完成的卷）' : '再切小：卷→章→节点'}</span>
-        </div>
-        ${st.volumes.some(v => (v.splitAt && v.textAt > v.splitAt) || (v.chapters?.length && v.chapters.reduce((n, c) => n + c.floors, 0) !== v.floors)) ? `<div class="pp-muted" title="两种过期：修订/手改之后章表没重切（旧章表对着旧文本），或卷楼数改过（章预算合计对不上卷预算）——重跑「再切小」会按位置沿用旧章的点亮进度">⚠ 有卷的章表需要重切：文本改过、或卷楼数改过（章预算对不上）</div>` : ''}
-    </div>` : ''}
-
-    ${stats.chapters ? execHtml(st, stats, next) : ''}
-
-    ${st.stage === 'none' ? `
-    <div class="pp-section">
-        <span class="pp-muted" title="长线产出的「章」挂进监听当最小剧情单位：扮演模型看不到章文本，监听按节点完成标准逐轮判定、逐轮放行微量指导（§6.1 反剧透）；节点衔接只做手动——一章演完去下面点「接续下一章」">流程：生成骨架 → 具体化各卷 → 修订 → 再切小 → 按章挂进「监听」执行。每步生成单次选用模型（质量优先用贵模型）；换聊天各自独立一本。</span>
-    </div>` : ''}`;
+    ${stats.chapters ? execHtml(st, stats, next) : ''}`;
 
     bindTab(container, st);
+    if (lfBusy) startBusyTimer();
 }
 
-function paramFormHtml(st) {
+// ---------------------------------------------------------------------------
+// 顶部操作条：四步生成按钮常驻（没到的步骤灰置、悬浮说明指路）＋生成模型下拉＋
+// 「按意见修订」点开才带出整书意见框（骨架阶段修订骨架、有卷文本后修订卷文本）
+// ---------------------------------------------------------------------------
+function toolbarHtml(st, anyDetail) {
+    const canDetail = st.stage !== 'none';
+    const canRevise = st.stage !== 'none';
+    const canSplit = anyDetail;
+    const revTarget = st.stage === 'skeleton' ? '骨架' : '卷文本';
     return `
     <div class="pp-section">
-        <b>开一本长线</b>
+        <div class="pp-lf-toolbar">
+            <span class="menu_button pp-lf-go ${st.stage === 'none' ? '' : 'pp-lf-dim'}" id="pp_lf_skeleton" title="一次调用产出全书卷结构与楼数预算（骨架＋切块合并做；楼数总和由插件校验；楼数按剧情体量分配、不平均）">生成骨架</span>
+            <span class="menu_button ${canDetail ? '' : 'pp-lf-dim'}" id="pp_lf_detail" title="逐卷并行生成卷级详细文本（一次一卷、只补没完成的卷——中途报错已成的卷不丢）；费用＝每卷一次调用">${st.volumes.some(v => v.detailState === 'done') ? '继续具体化（未完成的卷）' : '具体化各卷'}</span>
+            <span class="menu_button ${canRevise ? '' : 'pp-lf-dim'}" id="pp_lf_revise" title="${st.stage === 'skeleton'
+        ? '按意见修订全书骨架（卷名/楼数分配/概要/种子，只改意见涉及处）——单卷修订去各卷「骨架」页签'
+        : '按意见修订全部卷的卷文本（一次调用、全部卷全文重出——长书易撞输出上限，撞了改用各卷「卷文本」页签的单卷修订）'}">按意见修订（${revTarget}）</span>
+            <span class="menu_button ${canSplit ? '' : 'pp-lf-dim'}" id="pp_lf_split" title="逐卷并行：卷切成章（推进锚是刀口）、章内切节点，一步到位；只切「已具体化且未切章」的卷——单卷带意见重切去各卷「章与节点」页签">${st.volumes.some(v => v.splitState === 'done') ? '继续切章（未完成的卷）' : '再切小'}</span>
+            ${st.stage !== 'none' ? `<span class="menu_button" id="pp_lf_reskel" title="回到参数表单从头再来（参数与想法留着；旧书自动备份——新骨架生成失败会自动恢复）">重新生成骨架</span>` : ''}
+            <label class="pp-lf-prov" title="生成调用走哪个连接：主连接或供应商方案（单次选用，不影响正在使用的模型）——四步共用这一个选择">生成模型
+                <select id="pp_lf_prov" class="text_pole">${providerOptions(providerId)}</select>
+            </label>
+        </div>
+        ${revOpen && canRevise ? `
+        <div class="pp-lf-form" style="margin-top:8px">
+            <label class="pp-lf-grow" title="写给大模型的修订意见——只改意见涉及处；意见为空的「换一版」走「重新生成骨架」">修订意见（全书${revTarget}）
+                <textarea id="pp_lf_opinion" class="text_pole textarea_compact" rows="3" placeholder="要改什么（例：第二卷的误会戏太拖，提前收掉；结尾加一场雨中告别）">${escapeHtml(lfOpinion)}</textarea>
+            </label>
+        </div>
+        <div class="pp-btn-row"><span id="pp_lf_revise_go" class="menu_button">按意见修订全书</span></div>` : ''}
+    </div>`;
+}
+
+// 参数折叠区（第二十四轮：生成前展开、之后收起——参数只在「生成骨架」时生效）
+function paramFoldHtml(st) {
+    const summary = `楼层总数 ${st.totalFloors}${st.minFloors ? ` · 保底 ${st.minFloors}` : ''} · ${st.newChars ? '允许新角色' : '不引入新角色'}${st.idea ? ` · 想法：${clamp(st.idea, 30)}` : ''}`;
+    return `
+    <div class="pp-section">
+        <div class="pp-lf-foldhead" id="pp_lf_pfold" title="楼层总数/保底/新角色/想法——这些参数只在「生成骨架」时生效；生成之后各卷楼数在各卷「骨架」页签里改">
+            <i class="fa-solid fa-chevron-${paramOpen ? 'down' : 'right'}"></i>
+            <b>参数与想法</b>
+            <span class="pp-muted">${escapeHtml(summary)}</span>
+        </div>
+        ${paramOpen ? `
         <div class="pp-lf-form">
-            <label title="全书要走的楼数——最先输入的硬预算：切块分卷、切章都按它分（各卷之和必须等于它；用户不填默认 ${LF_DEFAULT_FLOORS})">楼层总数
+            <label title="全书要走的楼数——最先输入的硬预算：切块分卷、切章都按它分（各卷之和必须等于它；不填默认 ${LF_DEFAULT_FLOORS}）">楼层总数
                 <input id="pp_lf_floors" class="text_pole" type="number" min="${LF_MIN_CHAPTER_FLOORS}" step="10" value="${st.totalFloors}" />
             </label>
             <label title="全书剧情体量的下限（保底要求，随材料发给模型）；0/留空＝不设">保底楼数
@@ -165,21 +245,14 @@ function paramFormHtml(st) {
             <label class="pp-lf-grow" title="这本长线想要什么——走向、要素、点名要求（数量/价位/时间/由谁发起/地点等都按硬要求落实）；这是最高优先级输入">本次长线的想法
                 <textarea id="pp_lf_idea" class="text_pole textarea_compact" rows="4" placeholder="例：大学运动会前后两三天：遇到新对手、赛前摩擦、意外受伤、最后赢下接力赛；（留空＝按材料自由设计）">${escapeHtml(st.idea)}</textarea>
             </label>
-        </div>
-        <div class="pp-lf-form">
-            <label title="骨架调用走哪个连接：主连接或供应商方案（单次选用，不影响正在使用的模型）——长线一次要用很久，质量优先选贵模型">生成模型
-                <select id="pp_lf_prov" class="text_pole">${providerOptions(providerId)}</select>
-            </label>
-            <span class="menu_button pp-lf-go" id="pp_lf_skeleton" title="一次调用产出全书卷结构与楼数预算（骨架＋切块合并做；楼数总和由插件校验）">生成骨架</span>
-        </div>
+        </div>` : ''}
     </div>`;
 }
 
 // ---------------------------------------------------------------------------
-// 材料面板（第十九轮用户拍板：复制「剧情指导」第 1 步、去掉标签列——长线自己勾自己的，
-// 不再沿用 1.0 的勾选）：记忆表格一个勾默认全量；玩法默认跟随生效中；知识库逐张清单勾
+// 材料面板（第十九轮：长线自备勾选；第二十四轮收进折叠区——材料只在每次生成时用，
+// 途中收起不占页面）。记忆表格一个勾默认全量；玩法默认跟随生效中；知识库逐张清单勾
 // （勾中的整表可用条目随行）；世界书自选走悬浮面板（勾选与 1.0 分开存）。
-// 骨架/具体化/修订/切章每次调用都按这里的勾选现场拼材料——面板常驻不随 stage 收起
 // ---------------------------------------------------------------------------
 function materialsHtml(st) {
     const m = st.mats;
@@ -188,12 +261,7 @@ function materialsHtml(st) {
     const gpHit = new Set(storageItemsInEffect().map(i => i.id));
     const kbLists = knowledgeLists();
     const loreN = resolveLorePicks(m.lorePicks).length;
-    return `
-    <div class="pp-section" id="pp_lf_mats">
-        <div class="pp-gd-layhead">
-            <label class="pp-label" title="长线生成用的材料在这里勾——与「剧情指导」第 1 步互不影响。每次生成（骨架/具体化/修订/切章）都按当时的勾选现场拼同一批材料；勾选存在本聊天里，刷新不丢、作废本长线也保留">材料</label>
-            <span class="pp-muted">长线生成用的材料在这里勾（与 1.0 互不影响）</span>
-        </div>
+    const inner = `
         <label class="pp-label" title="勾上＝全部记忆表格的全部行随材料发送（长线不看标签、不分档位——要的就是全量）；不勾＝记忆表格整节不带">记忆表格</label>
         <div class="pp-gd-selp">
             <label title="默认全量：全部表格的全部行"><input type="checkbox" id="pp_lf_mat_mem" ${m.memory ? 'checked' : ''}/> 全量附带（全部表格的全部行）</label>
@@ -204,25 +272,35 @@ function materialsHtml(st) {
             || '<span class="pp-muted">还没有玩法条目</span>'}
         </div>
         ${kbLists.length ? `
-        <label class="pp-label" title="勾上＝这张清单的整表可用条目随长线生成随行（冷却中的跳过；长线不分抽样/全量——都按整表带），模型凡涉及该清单领域的内容必须从条目里选用；长线用条目不结冷却（冷却只在「剧情指导」确认采用时记）。清单与条目在「知识库」页签管理">知识库清单</label>
+        <label class="pp-label" title="勾上＝这张清单的整表可用条目随长线生成随行（冷却中的跳过；长线不分抽样/全量——都按整表带），模型凡涉及该清单领域的内容必须从条目里选用；长线用条目不结冷却。清单与条目在「知识库」页签管理">知识库清单</label>
         <div class="pp-gd-selp">
             ${kbLists.map(l => {
-                const coolN = l.entries.filter(e => Number(e.cooldown) > 0).length;
-                const usable = l.entries.length - coolN;
-                return `<label title="勾上＝整表可用 ${usable} 条随行（冷却中 ${coolN} 条跳过；抽样/全量在长线这边不分——都整表带）"><input type="checkbox" data-lfkb="${escapeHtml(l.id)}" ${m.kbListIds.includes(l.id) ? 'checked' : ''}/> ${escapeHtml(l.name)}（${l.feed === 'full' ? '全量' : '抽样'} · 可用 ${usable} 条${coolN ? ` · ${coolN} 条冷却中` : ''}）</label>`;
-            }).join('')}
+            const coolN = l.entries.filter(e => Number(e.cooldown) > 0).length;
+            const usable = l.entries.length - coolN;
+            return `<label title="勾上＝整表可用 ${usable} 条随行（冷却中 ${coolN} 条跳过）"><input type="checkbox" data-lfkb="${escapeHtml(l.id)}" ${m.kbListIds.includes(l.id) ? 'checked' : ''}/> ${escapeHtml(l.name)}（${l.feed === 'full' ? '全量' : '抽样'} · 可用 ${usable} 条${coolN ? ` · ${coolN} 条冷却中` : ''}）</label>`;
+        }).join('')}
         </div>` : ''}
         <div class="pp-btn-row">
-            <span id="pp_lf_lore" class="menu_button" title="世界书自选（悬浮面板）：按书分组勾条目，勾中的整条原文随长线生成进材料——「照着写」的材料，与知识库「选着用」分工。不看关键词/常驻/书与条目的启用状态（勾选是唯一口径，禁用的照样能勾）；与检索命中自动去重（自选优先）。这里的勾选只管长线、与「剧情指导」第 1 步的互不影响；无冷却">世界书自选（已勾 ${loreN} 条）</span>
+            <span id="pp_lf_lore" class="menu_button" title="世界书自选（悬浮面板）：按书分组勾条目，勾中的整条原文随长线生成进材料——「照着写」的材料，与知识库「选着用」分工。不看关键词/常驻/书与条目的启用状态（勾选是唯一口径，禁用的照样能勾）；与检索命中自动去重（自选优先）。这里的勾选只管长线、与「剧情指导」第 1 步互不影响；无冷却">世界书自选（已勾 ${loreN} 条）</span>
+        </div>`;
+    return `
+    <div class="pp-section" id="pp_lf_mats">
+        <div class="pp-lf-foldhead" id="pp_lf_mfold" title="长线生成用的材料在这里勾——与「剧情指导」第 1 步互不影响；每次生成（骨架/具体化/修订/切章）都按当时的勾选现场拼。另自动随行：角色设定、检索命中的世界书、进行中剧情、历史摘要、最近对话。勾选存在本聊天里，刷新不丢、作废本长线也保留">
+            <i class="fa-solid fa-chevron-${matOpen ? 'down' : 'right'}"></i>
+            <b>材料</b>
+            <span class="pp-muted">${escapeHtml(lfMatOverview())}</span>
         </div>
-        <span class="pp-muted" id="pp_lf_matnote">${escapeHtml(lfMatOverview())}；另自动随行：角色设定、检索命中的世界书、进行中剧情、历史摘要、最近对话</span>
+        ${matOpen ? inner : ''}
     </div>`;
 }
 
-// 材料面板的勾选变动：只就地刷新概览行与世界书按钮计数（不整页重渲，勾选状态留在原地）
+// 材料面板的勾选变动：只就地刷新折叠头概览与世界书按钮计数（不整页重渲，勾选状态留在原地）
 function refreshLfMatUi() {
-    const note = document.getElementById('pp_lf_matnote');
-    if (note) note.textContent = `${lfMatOverview()}；另自动随行：角色设定、检索命中的世界书、进行中剧情、历史摘要、最近对话`;
+    const head = document.getElementById('pp_lf_mfold');
+    if (head) {
+        const span = head.querySelector('.pp-muted');
+        if (span) span.textContent = lfMatOverview();
+    }
     const btn = document.getElementById('pp_lf_lore');
     if (btn) btn.textContent = `世界书自选（已勾 ${resolveLorePicks(lfState().mats.lorePicks).length} 条）`;
 }
@@ -297,7 +375,7 @@ function openLfLorePanel() {
         body.innerHTML = `
         <input type="text" class="text_pole textarea_compact" id="pp_lf_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动勾选；检索时命中的书自动展开…" value="${escapeHtml(query)}" style="width:100%" />
         ${groupHtml || '<div class="pp-muted">没有命中检索词的条目，清空检索词看全部</div>'}
-        <div class="pp-muted" style="margin-top:6px">勾上＝整条原文随长线生成进材料（照着写）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与「检索命中」自动去重（这边优先，同一条不进材料两次）。这里的勾选只管长线，与「剧情指导」第 1 步的互不影响；无冷却</div>`;
+        <div class="pp-muted" style="margin-top:6px">勾上＝整条原文随长线生成进材料（照着写）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与「检索命中」自动去重（这边优先）。这里的勾选只管长线，与「剧情指导」第 1 步互不影响；无冷却</div>`;
 
         const qEl = body.querySelector('#pp_lf_lore_q');
         qEl?.addEventListener('input', () => {
@@ -338,43 +416,164 @@ function openLfLorePanel() {
     render();
 }
 
+// ---------------------------------------------------------------------------
+// 卷卡：折叠行（第 X 卷 · 名字 · 楼数 · 徽章）＋ 展开后三页签（骨架/卷文本/章与节点），
+// 同一附属区里切换、不往下摞；编辑与意见框互斥（一次一块），脏改动切换前先拦
+// ---------------------------------------------------------------------------
 function volCardHtml(v, i, st) {
-    const [dLabel] = DETAIL_BADGE[v.detailState] ?? ['', ''];
-    const [sLabel] = SPLIT_BADGE[v.splitState] ?? ['', ''];
-    const open = expanded.has(`v${i}`);
-    const editing = expanded.has(`ve${i}`);
-    const skEditing = expanded.has(`sk${i}`);
+    const ui = volUiOf(i);
     const chs = v.chapters ?? [];
     const chSum = chs.reduce((n, c) => n + c.floors, 0);
     const budgetStale = chs.length && chSum !== v.floors;
+    const textStale = v.detailState === 'done' && v.skAt && v.skAt > v.textAt;
+    const splitStale = chs.length && (!v.splitAt || v.textAt > v.splitAt);
+    const badge = [
+        v.detailState === 'done' ? `${v.anchors.length} 锚` : (DETAIL_BADGE[v.detailState] ?? ['', ''])[0],
+        chs.length ? `${chs.length} 章` : '',
+        v.splitState === 'error' ? `切章${SPLIT_BADGE.error[0]}` : '',
+    ].filter(Boolean).join(' · ');
     return `
     <div class="pp-item pp-lf-vol">
-        <div class="pp-item-main">
+        <div class="pp-item-main pp-lf-volhead" data-vfold="${i}" title="点开/收起本卷——里面分「骨架 / 卷文本 / 章与节点」三页切换">
+            <i class="fa-solid fa-chevron-${ui.open ? 'down' : 'right'}"></i>
             <b>第 ${i + 1} 卷 · ${escapeHtml(v.title)}</b>
             <span class="pp-muted">${v.floors} 层楼</span>
-            <span class="pp-muted pp-lf-badge">${v.detailState === 'done' ? `${v.anchors.length} 锚${v.splitState === 'done' ? ` · ${chs.length} 章` : ''}` : dLabel}${v.splitState === 'error' ? ` · 切章${sLabel}` : ''}</span>
+            ${badge ? `<span class="pp-muted pp-lf-badge">${escapeHtml(badge)}</span>` : ''}
         </div>
-        <div class="pp-muted pp-lf-volsum">${escapeHtml(clamp(v.summary, 110))}</div>
-        ${v.seeds && v.seeds !== '无' ? `<div class="pp-muted" title="${escapeHtml(v.seeds)}">种子：${escapeHtml(clamp(v.seeds, 90))}</div>` : ''}
-        ${v.detailError ? `<div class="pp-muted pp-lf-err">具体化失败：${escapeHtml(v.detailError)}</div>` : ''}
-        ${v.splitError ? `<div class="pp-muted pp-lf-err">切章失败：${escapeHtml(v.splitError)}</div>` : ''}
-        ${budgetStale ? `<div class="pp-muted pp-lf-err">⚠ 章预算合计 ${chSum} 层 ≠ 本卷现预算 ${v.floors} 层（楼数改过）——重跑「再切小」重配章预算</div>` : ''}
-        ${v.detailState === 'done' && v.skAt && v.skAt > v.textAt ? `<div class="pp-muted">⚠ 概要/种子在卷文本定稿后改过——卷文本没跟着动，需要就修订或重跑具体化</div>` : ''}
-        <div class="pp-item-ops">
-            <span class="menu_button" data-vsk="${i}" title="就地修改本卷的卷名/楼数/概要/种子，或删除本卷。楼数改了：楼层总数跟着各卷之和走；切过章的卷要重跑「再切小」；再点一下收起">编辑骨架</span>
-            ${v.detailState === 'done' ? `<span class="menu_button" data-vol="${i}" title="看本卷的卷级文本；再点一下收起">${open ? '收起文本' : '卷文本'}</span>` : ''}
-            ${v.detailState === 'done' ? `<span class="menu_button" data-vedit="${i}" title="就地手改卷文本（改完记得重跑「再切小」——章表按旧文本切的会过期）；再点一下收起">编辑卷文本</span>` : ''}
-        </div>
-        ${open ? `<div class="pp-lf-text">${escapeHtml(v.text)}</div>` : ''}
-        ${editing ? `
-        <div>
-            <textarea class="text_pole textarea_compact pp-lf-editarea" data-vetext="${i}" rows="10">${escapeHtml(v.text)}</textarea>
-            <div class="pp-btn-row">
-                <span class="menu_button" data-vesave="${i}" title="保存改动并收起编辑框（若已切章，章表会标过期）">保存卷文本</span>
-                <span class="menu_button ${veArmVol.has(i) ? 'pp-danger-arm' : ''}" data-vecancel="${i}" title="不保存、收起编辑框${veArmVol.has(i) ? '——再点一下确认放弃改动' : '；改过内容的话会先问一句'}">${veArmVol.has(i) ? '确认放弃？' : '取消'}</span>
+        ${ui.open ? `
+        <div class="pp-lf-volbody">
+            <div class="pp-seg pp-lf-tabs">
+                <span class="pp-seg-opt${ui.tab === 'sk' ? ' on' : ''}" data-vtab="sk" data-vi="${i}">骨架</span>
+                <span class="pp-seg-opt${ui.tab === 'text' ? ' on' : ''}" data-vtab="text" data-vi="${i}">卷文本</span>
+                <span class="pp-seg-opt${ui.tab === 'ch' ? ' on' : ''}" data-vtab="ch" data-vi="${i}">章与节点</span>
             </div>
+            ${ui.tab === 'sk' ? skTabHtml(v, i) : ''}
+            ${ui.tab === 'text' ? textTabHtml(v, i, textStale) : ''}
+            ${ui.tab === 'ch' ? chTabHtml(v, i, st, budgetStale, splitStale) : ''}
         </div>` : ''}
-        ${skEditing ? skEditHtml(v, i) : ''}
+    </div>`;
+}
+
+// 骨架页签：默认只读展示（概要/种子/楼数），点「编辑骨架」才出表单（第二十四轮用户拍板）
+function skTabHtml(v, i) {
+    const ui = volUiOf(i);
+    if (ui.skEdit) return skEditHtml(v, i);
+    if (ui.skRev) {
+        return `
+        <div class="pp-lf-form">
+            <label class="pp-lf-grow" title="写给大模型的修订意见——只改意见涉及处（模型能看到本卷当前的卷名/楼数/概要/种子与全书骨架；楼数也能按意见改）">修订意见
+                <textarea data-opin="${i}:sk" class="text_pole textarea_compact" rows="2" placeholder="例：这卷压成过渡卷，楼数减到 30，概要砍掉支线">${escapeHtml(volOpinions.get(`${i}:sk`) ?? '')}</textarea>
+            </label>
+        </div>
+        <div class="pp-btn-row">
+            <span class="menu_button" data-vskrev="${i}" title="按意见修订本卷骨架（一次调用；楼数改了楼层总数跟着各卷之和走）">修订本卷骨架</span>
+            <span class="menu_button" data-vskrevx="${i}">收起</span>
+        </div>`;
+    }
+    return `
+    <div class="pp-lf-text">${escapeHtml(v.summary || '（无概要）')}</div>
+    ${v.seeds && v.seeds !== '无' ? `<div class="pp-lf-text pp-muted">种子：${escapeHtml(v.seeds)}</div>` : ''}
+    <div class="pp-btn-row">
+        <span class="menu_button" data-vskedit="${i}" title="就地修改本卷的卷名/楼数/概要/种子，或删除本卷。楼数改了：楼层总数跟着各卷之和走；切过章的卷要重跑切章">编辑骨架</span>
+        <span class="menu_button" data-vskrevgo="${i}" title="写意见让大模型改这一卷的骨架（能看到当前骨架数据与全书骨架）">按意见修订本卷</span>
+    </div>`;
+}
+
+// 卷文本页签：只读全文＋锚清单一行；编辑/意见框互斥；脏改动收起走两步确认
+function textTabHtml(v, i, textStale) {
+    const ui = volUiOf(i);
+    if (v.detailState !== 'done') {
+        return `<div class="pp-muted">${v.detailState === 'error' ? `具体化失败：${escapeHtml(v.detailError)}` : v.detailState === 'run' ? '具体化中…' : '这一卷还没有卷文本——顶部点「具体化各卷」'}</div>`;
+    }
+    if (ui.veEdit) {
+        return `
+        ${textStale ? `<div class="pp-muted pp-lf-err">⚠ 概要/种子改过、卷文本没跟着动</div>` : ''}
+        <textarea class="text_pole textarea_compact pp-lf-editarea" data-vetext="${i}" rows="10">${escapeHtml(v.text)}</textarea>
+        <div class="pp-btn-row">
+            <span class="menu_button" data-vesave="${i}" title="保存改动并收起（若已切章，章表会标过期）">保存卷文本</span>
+            <span class="menu_button ${veArmVol.has(i) ? 'pp-danger-arm' : ''}" data-vecancel="${i}" title="不保存、收起编辑框${veArmVol.has(i) ? '——再点一下确认放弃改动' : '；改过内容的话会先问一句'}">${veArmVol.has(i) ? '确认放弃？' : '取消'}</span>
+        </div>`;
+    }
+    const footer = ui.veRev ? `
+        <div class="pp-lf-form">
+            <label class="pp-lf-grow" title="写给大模型的修订意见——只改意见涉及处；一次只出这一卷的全文（不撞整书修订的输出上限）">修订意见
+                <textarea data-opin="${i}:text" class="text_pole textarea_compact" rows="2" placeholder="例：误会提前一章收掉，加一场雨中戏">${escapeHtml(volOpinions.get(`${i}:text`) ?? '')}</textarea>
+            </label>
+        </div>
+        <div class="pp-btn-row">
+            <span class="menu_button" data-verev="${i}" title="按意见修订本卷卷文本（一次调用、只出这一卷全文）">修订本卷文本</span>
+            <span class="menu_button" data-verevx="${i}">收起</span>
+        </div>` : `
+        <div class="pp-btn-row">
+            <span class="menu_button" data-veedit="${i}" title="就地手改卷文本（改完记得重跑切章——章表按旧文本切的会过期）">编辑卷文本</span>
+            <span class="menu_button" data-verevgo="${i}" title="写意见让大模型改这一卷的卷文本（一次只出这一卷）">按意见修订本卷</span>
+        </div>`;
+    return `
+    ${textStale ? `<div class="pp-muted pp-lf-err">⚠ 概要/种子改过、卷文本没跟着动——需要就修订或重跑具体化</div>` : ''}
+    <div class="pp-lf-text">${escapeHtml(v.text)}</div>
+    <div class="pp-muted" title="锚是卷文本里的阶段级里程碑（切章刀口）——切章时按它下刀，平时只在这看一眼">锚（${v.anchors.length}）：${escapeHtml(v.anchors.map(a => a.title).join(' · ') || '—')}</div>
+    ${footer}`;
+}
+
+// 章与节点页签：章卡（节点行＋挂载＋章文本/编辑）＋ 本卷带意见重切
+function chTabHtml(v, i, st, budgetStale, splitStale) {
+    const ui = volUiOf(i);
+    const chs = v.chapters ?? [];
+    const warns = [
+        v.splitState === 'error' ? `切章失败：${escapeHtml(v.splitError)}` : '',
+        budgetStale ? `⚠ 章预算合计对不上卷楼数——重切重配` : '',
+        splitStale ? `⚠ 卷文本改过、章表需要重切` : '',
+    ].filter(Boolean).map(t => `<div class="pp-muted pp-lf-err">${t}</div>`).join('');
+    const revBox = ui.spRev ? `
+        <div class="pp-lf-form">
+            <label class="pp-lf-grow" title="写给大模型的重切意见——只作用于这次切章（章怎么切、节点怎么排），卷文本不动">重切意见（可选）
+                <textarea data-opin="${i}:split" class="text_pole textarea_compact" rows="2" placeholder="例：别超过 2 章；节点按时间顺序排">${escapeHtml(volOpinions.get(`${i}:split`) ?? '')}</textarea>
+            </label>
+        </div>
+        <div class="pp-btn-row">
+            <span class="menu_button" data-sprev="${i}" title="带上面的意见重切本卷（旧章点亮进度按位置沿用）">按意见重切本卷</span>
+            <span class="menu_button" data-sprevx="${i}">收起</span>
+        </div>` : `
+        <div class="pp-btn-row">
+            <span class="menu_button" data-sprevgo="${i}" title="只重切这一卷，可带意见——切得不合适就在地修，不用整批重来">按意见重切本卷</span>
+        </div>`;
+    if (!chs.length) {
+        return `
+        ${warns}
+        <div class="pp-muted">这一卷还没切章——顶部「再切小」，或下面的单卷重切</div>
+        ${revBox}`;
+    }
+    return `
+    ${warns}
+    ${chs.map((c, ci) => chapterCardHtml(c, i, ci, st)).join('')}
+    ${revBox}`;
+}
+
+function chapterCardHtml(c, vi, ci, st) {
+    const ui = volUiOf(vi);
+    const open = ui.chView.has(ci);
+    const editing = ui.chEdit.has(ci);
+    const isMounted = st.mount && st.mount.vol === vi && st.mount.ch === ci;
+    const done = c.done || (c.nodes.length > 0 && c.lit >= c.nodes.length);
+    const armKey = `${vi}:${ci}`;
+    return `
+    <div class="pp-item pp-lf-ch ${isMounted ? 'pp-lf-ch-cur' : ''}">
+        <div class="pp-item-main">
+            <b>${done ? '✓ ' : ''}${escapeHtml(c.title)}</b>
+            <span class="pp-muted">${c.floors} 层 · ${c.lit}/${c.nodes.length} 节点${isMounted ? ' · 执行中' : ''}</span>
+        </div>
+        <div class="pp-lf-nodesline">${c.nodes.map((n, ni) => `<span class="pp-lf-node ${ni < c.lit ? 'pp-lf-node-lit' : ''}" title="${escapeHtml(n.criterion)}">${ni < c.lit ? '●' : '○'}${escapeHtml(clamp(n.title, 16))}</span>`).join('')}</div>
+        <div class="pp-item-ops">
+            ${!isMounted ? `<span class="menu_button" data-chmount="${vi}:${ci}" title="把这一章挂进监听单位槽开始执行（若槽里有单位会被顶进退位槽；退位槽被占会拒绝，先去监听页处理）">挂载</span>` : ''}
+            ${editing ? '' : `<span class="menu_button" data-chview="${vi}-${ci}">${open ? '收起章文本' : '章文本'}</span>
+            <span class="menu_button" data-chedit="${vi}:${ci}" title="就地手改章文本（章挂载中改了不会跟着变——卸下再「挂载」才用新文本，点亮进度保留）">编辑章文本</span>`}
+        </div>
+        ${editing ? `
+        <textarea class="text_pole textarea_compact pp-lf-editarea" data-chtext="${vi}:${ci}" rows="8">${escapeHtml(c.text)}</textarea>
+        <div class="pp-btn-row">
+            <span class="menu_button" data-chsave="${vi}:${ci}" title="保存并收起编辑框">保存章文本</span>
+            <span class="menu_button ${chArm.has(armKey) ? 'pp-danger-arm' : ''}" data-chcancel="${vi}:${ci}" title="不保存、收起编辑框${chArm.has(armKey) ? '——再点一下确认放弃改动' : '；改过内容的话会先问一句'}">${chArm.has(armKey) ? '确认放弃？' : '取消'}</span>
+        </div>` : (open ? `<div class="pp-lf-text">${escapeHtml(c.text)}</div>` : '')}
     </div>`;
 }
 
@@ -396,6 +595,28 @@ function skDirty(container, i) {
     return t.value !== v.title || floors !== v.floors || summary !== v.summary || seeds !== v.seeds;
 }
 
+// 章文本编辑脏检查（同上）
+function chDirtyAt(container, vi, ci) {
+    const c = lfState().volumes[vi]?.chapters?.[ci];
+    const ta = container.querySelector(`[data-chtext="${vi}:${ci}"]`);
+    return !!(c && ta && ta.value !== c.text);
+}
+
+// 本卷任意编辑块有没有没保存的改动（切页签/收起卷前统一拦一道）
+function editDirtyAnywhere(container, i) {
+    const ui = volUiOf(i);
+    if (ui.veEdit && veDirty(container, i)) return true;
+    if (ui.skEdit && skDirty(container, i)) return true;
+    for (const ci of ui.chEdit) if (chDirtyAt(container, i, ci)) return true;
+    return false;
+}
+
+// 任何卷的编辑框开着（批量生成中就地重刷的守门——重刷会拿状态旧值重建表单，正打一半的字不能丢）
+function anyEditOpen() {
+    for (const [, ui] of volUi) if (ui.skEdit || ui.veEdit || ui.chEdit.size) return true;
+    return false;
+}
+
 // 取消编辑卷文本：内容没动一键收起；改过内容两步确认（4 秒回退）防手滑丢字。
 // Armed 的视觉变化固定落在「取消」按钮上——不管这次是从哪颗按钮触发的收起
 function cancelVeEdit(container, i) {
@@ -411,46 +632,62 @@ function cancelVeEdit(container, i) {
         return;
     }
     veArmVol.delete(i);
-    expanded.delete(`ve${i}`);
+    volUiOf(i).veEdit = false;
     renderTab(container);
 }
 
-// 卷卡三个展开块（v 只读预览 / ve 卷文本编辑 / sk 骨架编辑）互斥切换（第二十三轮：
-// 用户点名「这几个文本不能叠在一起」）——同一时间最多开一个，开新的先收旧的；
-// 已开着的键再点一下＝收起（ve 的收起走 cancelVeEdit 的脏检查两步）；
-// 切去别块时正开着的编辑块有没保存的改动先拦一道，干净状态才切，防丢字
-function toggleVolSection(container, i, key) {
-    if (expanded.has(key)) {
-        if (key === `ve${i}`) return cancelVeEdit(container, i);
-        expanded.delete(key);
-        return renderTab(container);
+// 取消骨架编辑：同款两步确认
+function cancelSkEdit(container, i) {
+    if (skDirty(container, i) && !skArmVol.has(i)) {
+        skArmVol.add(i);
+        const b = container.querySelector(`[data-vskcancel="${i}"]`);
+        if (b) { b.textContent = '确认放弃？'; b.classList.add('pp-danger-arm'); }
+        setTimeout(() => {
+            skArmVol.delete(i);
+            const b2 = container.querySelector(`[data-vskcancel="${i}"]`);
+            if (b2) { b2.textContent = '取消'; b2.classList.remove('pp-danger-arm'); }
+        }, 4000);
+        return;
     }
-    if (expanded.has(`ve${i}`) && veDirty(container, i))
-        return toastr.warning('卷文本编辑里有没保存的改动——先点「保存卷文本」或「取消」');
-    if (expanded.has(`sk${i}`) && skDirty(container, i))
-        return toastr.warning('骨架编辑里有没保存的改动——先点「保存」或「取消」');
-    expanded.delete(`v${i}`);
-    expanded.delete(`ve${i}`);
-    expanded.delete(`sk${i}`);
-    expanded.add(key);
+    skArmVol.delete(i);
+    volUiOf(i).skEdit = false;
     renderTab(container);
 }
 
-// 骨架就地编辑表单（第二十轮）：卷名/楼数/概要/种子＋删除本卷——骨架不再只是只读产物
+// 取消章文本编辑：同款两步确认
+function cancelChEdit(container, vi, ci) {
+    const armKey = `${vi}:${ci}`;
+    if (chDirtyAt(container, vi, ci) && !chArm.has(armKey)) {
+        chArm.add(armKey);
+        const b = container.querySelector(`[data-chcancel="${armKey}"]`);
+        if (b) { b.textContent = '确认放弃？'; b.classList.add('pp-danger-arm'); }
+        setTimeout(() => {
+            chArm.delete(armKey);
+            const b2 = container.querySelector(`[data-chcancel="${armKey}"]`);
+            if (b2) { b2.textContent = '取消'; b2.classList.remove('pp-danger-arm'); }
+        }, 4000);
+        return;
+    }
+    chArm.delete(armKey);
+    volUiOf(vi).chEdit.delete(ci);
+    renderTab(container);
+}
+
+// 骨架就地编辑表单（第二十轮起；第二十四轮起默认只读、点「编辑骨架」才出现，输入框带主题样式）
 function skEditHtml(v, i) {
     const armed = delArmVol.has(i);
     return `
     <div class="pp-lf-form">
         <label title="本卷的名字">卷名
-            <input type="text" data-vsktitle="${i}" value="${escapeHtml(v.title)}" />
+            <input type="text" class="text_pole" data-vsktitle="${i}" value="${escapeHtml(v.title)}" />
         </label>
-        <label title="本卷的楼数预算（一章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼、每卷至少要能切出一章）。改了之后：楼层总数＝各卷之和；切过章的卷要重跑「再切小」">楼数
-            <input type="number" data-vskfloors="${i}" min="${LF_MIN_CHAPTER_FLOORS}" step="5" value="${v.floors}" />
+        <label title="本卷的楼数预算（一章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼、每卷至少要能切出一章）。改了之后：楼层总数＝各卷之和；切过章的卷要重跑切章">楼数
+            <input type="number" class="text_pole" data-vskfloors="${i}" min="${LF_MIN_CHAPTER_FLOORS}" step="5" value="${v.floors}" />
         </label>
     </div>
     <div class="pp-lf-form">
-        <label class="pp-lf-grow" title="这卷讲什么、从哪推进到哪、主要张力、出场角色——具体化各卷按它展开">概要
-            <textarea data-vsksum="${i}" class="text_pole textarea_compact" rows="2">${escapeHtml(v.summary)}</textarea>
+        <label class="pp-lf-grow" title="这卷讲什么、从哪推进到哪、主要张力、出场角色——具体化各卷按它展开；末尾一句体量理由（重在哪/轻在哪）">概要
+            <textarea data-vsksum="${i}" class="text_pole textarea_compact" rows="4">${escapeHtml(v.summary)}</textarea>
         </label>
     </div>
     <div class="pp-lf-form">
@@ -460,7 +697,7 @@ function skEditHtml(v, i) {
     </div>
     <div class="pp-btn-row">
         <span class="menu_button" data-vsksave="${i}" title="写回本卷骨架并重算楼层总数（各卷之和）">保存</span>
-        <span class="menu_button" data-vskcancel="${i}">取消</span>
+        <span class="menu_button" data-vskcancel="${i}" title="不保存、收起编辑框（改过内容会先问一句）">取消</span>
         <span class="menu_button ${armed ? 'pp-danger-arm' : ''}" data-vdel="${i}" title="删掉这一卷（两步确认；正在执行的章挂在这一卷里时先去「监听」页卸下）">${armed ? '确认删除？' : '删除本卷'}</span>
     </div>`;
 }
@@ -486,10 +723,10 @@ function saveVolSkeleton(container, i) {
     if (floorsChanged && v.chapters?.length) v.splitState = 'none';
     s.totalFloors = s.volumes.reduce((n, x) => n + x.floors, 0);
     persistLf();
-    expanded.delete(`sk${i}`);
+    volUiOf(i).skEdit = false;
     renderTab(container);
     const bits = [`已保存（楼层总数现为 ${s.totalFloors} 层＝各卷之和）`];
-    if (floorsChanged && v.chapters?.length) bits.push('本卷切过章：楼数变了，重跑「再切小」重配章预算');
+    if (floorsChanged && v.chapters?.length) bits.push('本卷切过章：楼数变了，去「章与节点」页签重切重配章预算');
     if (structChanged && v.detailState === 'done') bits.push('概要/种子改了、卷文本没跟着动——需要就修订或重跑具体化');
     if (s.minFloors && s.totalFloors < s.minFloors) bits.push(`保底楼数 ${s.minFloors} 层高于总数——保底只随下次「生成骨架」发给模型`);
     toastr.success(bits.join('；'));
@@ -516,29 +753,19 @@ function delVolume(container, i, btn) {
     if (s.mount && s.mount.vol > i) s.mount.vol -= 1;
     s.totalFloors = s.volumes.reduce((n, x) => n + x.floors, 0);
     persistLf();
-    expanded.clear();   // 卷号整体前移，展开键跟着作废
+    volUi.clear();   // 卷号整体前移，卷内 UI 状态跟着作废
     toastr.success(`已删除（剩 ${s.volumes.length} 卷、楼层总数 ${s.totalFloors} 层）`);
     renderTab(container);
 }
 
-function reviseHtml(st) {
-    return `
-    <div class="pp-section">
-        <b>审阅与修订</b>
-        <span class="pp-muted" title="整体审阅、修改：在下面写意见整书修订（只改意见涉及处），或点各卷「编辑」就地手改；修订/手改后章表会标过期，需重跑再切小">逐卷点「卷文本」通读；不满意就写意见修订或就地手改</span>
-        <textarea id="pp_lf_opinion" class="text_pole textarea_compact" rows="3" placeholder="修改意见：要改什么（例：第二卷的误会戏太拖，提前收掉；结尾加一场雨中告别）">${escapeHtml(lfOpinion)}</textarea>
-        <div class="pp-btn-row"><span id="pp_lf_revise" class="menu_button" title="按意见修订全部卷（一次调用、全部卷的全文重出——输出比单卷长，费用也高；只改意见涉及处）">按意见修订全书</span></div>
-    </div>`;
-}
-
+// 执行区（第二十四轮瘦身）：只留当前挂载章＋接续按钮＋一行总进度；章卡在各卷「章与节点」页签
 function execHtml(st, stats, next) {
     const mount = st.mount;
     const curCh = mount ? st.volumes[mount.vol]?.chapters?.[mount.ch] : null;
     const curDone = curCh ? curCh.done || curCh.lit >= curCh.nodes.length : false;
     return `
     <div class="pp-section" id="pp_lf_exec">
-        <b>执行总览</b>
-        <span class="pp-muted">章 ${stats.done}/${stats.chapters} 已演完 · 节点 ${stats.lit}/${stats.nodes} 已点亮</span>
+        <div class="pp-gd-layhead"><b>执行</b><span class="pp-muted">章 ${stats.done}/${stats.chapters} · 节点 ${stats.lit}/${stats.nodes}</span></div>
         ${settings.listener?.enabled ? '' : `<div class="pp-muted pp-lf-err">监听总开关没开——挂上章也不会逐轮判定（「监听」页或设置页打开）</div>`}
         ${mount && curCh ? `
         <div class="pp-item">
@@ -549,31 +776,7 @@ function execHtml(st, stats, next) {
             <div class="pp-item-ops">
                 ${next ? `<span id="pp_lf_next" class="menu_button" title="${curDone ? `接全书顺序的下一章：第 ${next.vol + 1} 卷「${st.volumes[next.vol].chapters[next.ch].title}」` : '当前章还有没点亮的节点——先演完，或到「监听」页「标记达成」手动点亮'}">${curDone ? '接续下一章' : '当前章未演完'}</span>` : `<span class="pp-muted">全书章已演完——作废重来或开新一本</span>`}
             </div>
-        </div>` : `<div class="pp-muted">还没挂载章——点下面任意章的「挂载」开始执行（挂进监听单位槽；扮演模型看不到章文本）。</div>`}
-        <div id="pp_lf_chapters">${st.volumes.map((v, vi) => (v.chapters ?? []).length ? `
-        <div class="pp-lf-volgroup">
-            <div class="pp-lf-volhead">第 ${vi + 1} 卷 · ${escapeHtml(v.title)} <span class="pp-muted">${v.floors} 层</span></div>
-            ${v.chapters.map((c, ci) => chapterCardHtml(c, vi, ci, st)).join('')}
-        </div>` : '').join('')}</div>
-    </div>`;
-}
-
-function chapterCardHtml(c, vi, ci, st) {
-    const open = expanded.has(`c${vi}-${ci}`);
-    const isMounted = st.mount && st.mount.vol === vi && st.mount.ch === ci;
-    const done = c.done || (c.nodes.length > 0 && c.lit >= c.nodes.length);
-    return `
-    <div class="pp-item pp-lf-ch ${isMounted ? 'pp-lf-ch-cur' : ''}">
-        <div class="pp-item-main">
-            <b>${done ? '✓ ' : ''}${escapeHtml(c.title)}</b>
-            <span class="pp-muted">${c.floors} 层 · ${c.lit}/${c.nodes.length} 节点${isMounted ? ' · 执行中' : ''}</span>
-        </div>
-        <div class="pp-lf-nodesline">${c.nodes.map((n, ni) => `<span class="pp-lf-node ${ni < c.lit ? 'pp-lf-node-lit' : ''}" title="${escapeHtml(n.criterion)}">${ni < c.lit ? '●' : '○'}${escapeHtml(clamp(n.title, 16))}</span>`).join('')}</div>
-        <div class="pp-item-ops">
-            ${!isMounted ? `<span class="menu_button" data-chmount="${vi}:${ci}" title="把这一章挂进监听单位槽开始执行（若槽里有单位会被顶进退位槽；退位槽被占会拒绝，先去监听页处理）">挂载</span>` : ''}
-            <span class="menu_button" data-chview="${vi}-${ci}">${open ? '收起章文本' : '章文本'}</span>
-        </div>
-        ${open ? `<div class="pp-lf-text">${escapeHtml(c.text)}</div>` : ''}
+        </div>` : `<div class="pp-muted">还没挂载章——去各卷「章与节点」页签点某一章的「挂载」开始执行（挂进监听单位槽；扮演模型看不到章文本）。</div>`}
     </div>`;
 }
 
@@ -602,9 +805,13 @@ function bindTab(container, st) {
         };
         [floorsEl, minEl, ideaEl, ncEl].forEach(el => el.addEventListener('change', stash));
     }
-    container.querySelector('#pp_lf_prov')?.addEventListener('change', e => { providerId = e.target.value; });
+    container.querySelector('#pp_lf_prov')?.addEventListener('change', e => { providerId = e.target.value; updateBusyMeta(); });
 
-    // 修订意见草稿：输入即留会话底（批量生成中执行区局部刷新不整页重渲，也不该丢它）
+    // 折叠头：参数/材料
+    container.querySelector('#pp_lf_pfold')?.addEventListener('click', () => { paramOpen = !paramOpen; renderTab(container); });
+    container.querySelector('#pp_lf_mfold')?.addEventListener('click', () => { matOpen = !matOpen; renderTab(container); });
+
+    // 整书修订意见草稿：输入即留会话底
     const opEl = container.querySelector('#pp_lf_opinion');
     opEl?.addEventListener('input', () => { lfOpinion = opEl.value; });
 
@@ -636,8 +843,9 @@ function bindTab(container, st) {
     container.querySelector('#pp_lf_skeleton')?.addEventListener('click', async function () {
         if (lfBusy) return toastr.warning('有长线生成还在跑（先中断或等它完成）');
         const s = lfState();
+        if (s.stage !== 'none') return toastr.info('要从头重来先点「重新生成骨架」回参数');
         const u = usageCollector();
-        lfBusy = { kind: 'skeleton', ctl: new AbortController() };
+        startBusy('skeleton');
         renderTab(container);
         try {
             await runLfSkeleton({
@@ -649,37 +857,77 @@ function bindTab(container, st) {
                 signal: lfBusy.ctl.signal,
                 onUsage: u.onUsage,
                 onDelta: len => setBusyNote(`已收 ${len.toLocaleString()} 字`),
+                onReasoning: t => { busyThink = t.length; },
             });
-            toastr.success(`骨架已定：${s.totalFloors} 层楼分 ${lfState().volumes.length} 卷；${u.line()}`);
+            paramOpen = false;
+            matOpen = false;
+            volUi.clear();
+            toastr.success(`骨架已定：${lfState().totalFloors} 层楼分 ${lfState().volumes.length} 卷；${u.line()}`);
         } catch (err) {
             if (err?.name !== 'AbortError') toastr.error(`生成骨架失败：${err?.message ?? err}`);
             markErr(err);
+            if (lfState().stage !== 'none' && lfState().volumes.length) toastr.info('这次生成没成——原来的长线已恢复原样');
         } finally {
-            lfBusy = null;
+            endBusy();
             renderTab(container);
         }
     });
 
-    container.querySelector('#pp_lf_detail')?.addEventListener('click', () => runBatch(container, 'detail'));
-    container.querySelector('#pp_lf_split')?.addEventListener('click', () => runBatch(container, 'split'));
-
-    container.querySelector('#pp_lf_reskel')?.addEventListener('click', () => {
-        const s = lfState();
-        saveAndReform(container, s);
+    container.querySelector('#pp_lf_detail')?.addEventListener('click', function () {
+        if (lfState().stage === 'none') return toastr.info('先生成骨架——顶部第一颗按钮');
+        runBatch(container, 'detail');
+    });
+    container.querySelector('#pp_lf_split')?.addEventListener('click', function () {
+        if (!lfState().volumes.some(v => v.detailState === 'done')) return toastr.info('先「具体化各卷」出卷文本，才能切章');
+        runBatch(container, 'split');
     });
 
-    container.querySelector('#pp_lf_revise')?.addEventListener('click', async function () {
+    container.querySelector('#pp_lf_reskel')?.addEventListener('click', () => backToParams(container));
+
+    container.querySelector('#pp_lf_revise')?.addEventListener('click', function () {
+        if (lfState().stage === 'none') return toastr.info('先生成骨架——骨架和卷文本都能按意见修订');
+        revOpen = !revOpen;
+        renderTab(container);
+    });
+
+    container.querySelector('#pp_lf_revise_go')?.addEventListener('click', async function () {
         if (lfBusy) return toastr.warning('有长线生成还在跑（先中断或等它完成）');
+        const s = lfState();
         const opinion = String(container.querySelector('#pp_lf_opinion')?.value ?? '').trim();
-        if (!opinion) return toastr.warning('先写修改意见——长线的「换一版」＝重新生成骨架');
+        if (!opinion) return toastr.warning('先写修改意见——要换方向走「重新生成骨架」');
         const u = usageCollector();
-        lfBusy = { kind: 'revise', ctl: new AbortController() };
+        const common = {
+            provider: providerFromId(providerId),
+            signal: null,
+            onUsage: u.onUsage,
+            onDelta: len => setBusyNote(`已收 ${len.toLocaleString()} 字`),
+            onReasoning: t => { busyThink = t.length; },
+        };
+        if (s.stage === 'skeleton') {
+            startBusy('revsk');
+            common.signal = lfBusy.ctl.signal;
+            renderTab(container);
+            try {
+                const r = await runLfSkeletonRevise({ opinion, ...common });
+                if (!r.updated) toastr.warning(`一处都没改成——全部卷原样带回；重试或把意见写具体些；${u.line()}`);
+                else toastr.success(`已按意见改了 ${r.updated} 卷骨架${r.unchanged ? `、${r.unchanged} 卷未动` : ''}（楼数改过的卷记得去「章与节点」页签重切）；${u.line()}`);
+            } catch (err) {
+                if (err?.name !== 'AbortError') toastr.error(`修订失败：${err?.message ?? err}`);
+                markErr(err);
+            } finally {
+                endBusy();
+                renderTab(container);
+            }
+            return;
+        }
+        startBusy('revise');
+        common.signal = lfBusy.ctl.signal;
         renderTab(container);
         try {
-            const r = await runLfRevise({ opinion, provider: providerFromId(providerId), signal: lfBusy.ctl.signal, onUsage: u.onUsage, onDelta: len => setBusyNote(`已收 ${len.toLocaleString()} 字`) });
+            const r = await runLfRevise({ opinion, ...common });
             if (!r.updated) {
                 const why = r.keptNoText ? `有 ${r.keptNoText} 卷没给正文（可能被输出上限截断）、其余原样带回` : '全部卷都被原样带回';
-                toastr.warning(`一处都没改成：${why}——重试一次，或把意见写具体些；${u.line()}`);
+                toastr.warning(`一处都没改成：${why}——重试一次，或去各卷「卷文本」页签按卷修订；${u.line()}`);
             } else {
                 const bits = [`已按意见改了 ${r.updated} 卷（章表若已生成会标过期）`];
                 if (r.unchanged) bits.push(`${r.unchanged} 卷原样带出——没被意见点名的卷属正常`);
@@ -690,7 +938,7 @@ function bindTab(container, st) {
             if (err?.name !== 'AbortError') toastr.error(`修订失败：${err?.message ?? err}`);
             markErr(err);
         } finally {
-            lfBusy = null;
+            endBusy();
             renderTab(container);
         }
     });
@@ -720,39 +968,75 @@ function bindTab(container, st) {
         }
         resetLf();
         confirmReset = false;
-        expanded.clear();
+        volUi.clear();
+        revOpen = false;
+        paramOpen = true;
+        matOpen = true;
         toastr.success('本长线已作废（监听侧挂载与 1.0 数据不动）');
         renderTab(container);
     });
 
     bindVolCards(container);
-    container.querySelectorAll('[data-chview]').forEach(el => el.addEventListener('click', () => {
-        const k = `c${el.dataset.chview}`;
-        expanded.has(k) ? expanded.delete(k) : expanded.add(k);
-        renderTab(container);
-    }));
     wireExec(container);
 }
 
-// 卷卡按钮统一接线（骨架编辑/卷文本查看与手改）：批量生成中每卷落定会就地重刷卷卡区，按钮要能重接。
-// 三颗区块按钮全走 toggleVolSection——互斥切换＋再点收起，不许两块文本叠着显示
+// 卷内按钮统一接线（折叠/页签/骨架编辑与修订/卷文本编辑与修订/章文本与重切/意见草稿）。
+// 批量生成中每卷落定会就地重刷卷卡区，按钮要能重接；编辑与意见框互斥、脏改动切换前先拦
 function bindVolCards(container) {
-    container.querySelectorAll('[data-vsk]').forEach(el => el.addEventListener('click', () => {
-        toggleVolSection(container, Number(el.dataset.vsk), `sk${el.dataset.vsk}`);
-    }));
-    container.querySelectorAll('[data-vskcancel]').forEach(el => el.addEventListener('click', () => {
-        expanded.delete(`sk${el.dataset.vskcancel}`);
+    container.querySelectorAll('[data-vfold]').forEach(el => el.addEventListener('click', () => {
+        const i = Number(el.dataset.vfold);
+        const ui = volUiOf(i);
+        if (!ui.open) { ui.open = true; return renderTab(container); }
+        if (editDirtyAnywhere(container, i)) return toastr.warning('有没保存的改动——先保存或取消');
+        ui.open = false;
         renderTab(container);
     }));
+    container.querySelectorAll('[data-vtab]').forEach(el => el.addEventListener('click', () => {
+        const i = Number(el.dataset.vi);
+        const ui = volUiOf(i);
+        if (ui.tab === el.dataset.vtab) return;
+        if (editDirtyAnywhere(container, i)) return toastr.warning('有没保存的改动——先保存或取消');
+        closeInlineBoxes(ui);
+        ui.tab = el.dataset.vtab;
+        renderTab(container);
+    }));
+
+    // 骨架页签
+    container.querySelectorAll('[data-vskedit]').forEach(el => el.addEventListener('click', () => {
+        const i = Number(el.dataset.vskedit);
+        const ui = volUiOf(i);
+        ui.skRev = false;
+        ui.skEdit = true;
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-vskcancel]').forEach(el => el.addEventListener('click', () => cancelSkEdit(container, Number(el.dataset.vskcancel))));
     container.querySelectorAll('[data-vsksave]').forEach(el => el.addEventListener('click', () => saveVolSkeleton(container, Number(el.dataset.vsksave))));
     container.querySelectorAll('[data-vdel]').forEach(el => el.addEventListener('click', function () { delVolume(container, Number(el.dataset.vdel), this); }));
-    container.querySelectorAll('[data-vol]').forEach(el => el.addEventListener('click', () => {
-        toggleVolSection(container, Number(el.dataset.vol), `v${el.dataset.vol}`);
+    container.querySelectorAll('[data-vskrevgo]').forEach(el => el.addEventListener('click', () => {
+        const i = Number(el.dataset.vskrevgo);
+        const ui = volUiOf(i);
+        if (ui.skEdit && skDirty(container, i)) return toastr.warning('骨架编辑里有没保存的改动——先点「保存」或「取消」');
+        ui.skEdit = false;
+        ui.skRev = true;
+        renderTab(container);
     }));
-    container.querySelectorAll('[data-vedit]').forEach(el => el.addEventListener('click', () => {
-        toggleVolSection(container, Number(el.dataset.vedit), `ve${el.dataset.vedit}`);
+    container.querySelectorAll('[data-vskrevx]').forEach(el => el.addEventListener('click', () => {
+        volUiOf(Number(el.dataset.vskrevx)).skRev = false;
+        renderTab(container);
     }));
-    container.querySelectorAll('[data-vecancel]').forEach(el => el.addEventListener('click', () => cancelVeEdit(container, Number(el.dataset.vecancel))));
+    container.querySelectorAll('[data-vskrev]').forEach(el => el.addEventListener('click', () => {
+        const i = Number(el.dataset.vskrev);
+        runVolOp(container, 'volsk', i, volOpinions.get(`${i}:sk`) ?? '');
+    }));
+
+    // 卷文本页签
+    container.querySelectorAll('[data-veedit]').forEach(el => el.addEventListener('click', () => {
+        const i = Number(el.dataset.veedit);
+        const ui = volUiOf(i);
+        ui.veRev = false;
+        ui.veEdit = true;
+        renderTab(container);
+    }));
     container.querySelectorAll('[data-vesave]').forEach(el => el.addEventListener('click', () => {
         const i = Number(el.dataset.vesave);
         const ta = container.querySelector(`[data-vetext="${i}"]`);
@@ -765,7 +1049,82 @@ function bindVolCards(container) {
             toastr.success(`第 ${i + 1} 卷文本已保存（若已切章，章表标过期）`);
         }
         veArmVol.delete(i);
-        expanded.delete(`ve${i}`);
+        volUiOf(i).veEdit = false;
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-vecancel]').forEach(el => el.addEventListener('click', () => cancelVeEdit(container, Number(el.dataset.vecancel))));
+    container.querySelectorAll('[data-verevgo]').forEach(el => el.addEventListener('click', () => {
+        const i = Number(el.dataset.verevgo);
+        const ui = volUiOf(i);
+        if (ui.veEdit && veDirty(container, i)) return toastr.warning('卷文本编辑里有没保存的改动——先点「保存卷文本」或「取消」');
+        ui.veEdit = false;
+        ui.veRev = true;
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-verevx]').forEach(el => el.addEventListener('click', () => {
+        volUiOf(Number(el.dataset.verevx)).veRev = false;
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-verev]').forEach(el => el.addEventListener('click', () => {
+        const i = Number(el.dataset.verev);
+        runVolOp(container, 'voltext', i, volOpinions.get(`${i}:text`) ?? '');
+    }));
+
+    // 章与节点页签
+    container.querySelectorAll('[data-chview]').forEach(el => el.addEventListener('click', () => {
+        const [vi, ci] = el.dataset.chview.split('-').map(Number);
+        const ui = volUiOf(vi);
+        ui.chView.has(ci) ? ui.chView.delete(ci) : ui.chView.add(ci);
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-chedit]').forEach(el => el.addEventListener('click', () => {
+        const [vi, ci] = el.dataset.chedit.split(':').map(Number);
+        volUiOf(vi).chEdit.add(ci);
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-chsave]').forEach(el => el.addEventListener('click', () => {
+        const [vi, ci] = el.dataset.chsave.split(':').map(Number);
+        const ta = container.querySelector(`[data-chtext="${vi}:${ci}"]`);
+        const s = lfState();
+        const c = s.volumes[vi]?.chapters?.[ci];
+        if (c && ta) {
+            c.text = ta.value.trim();
+            persistLf();
+            const mounted = s.mount && s.mount.vol === vi && s.mount.ch === ci;
+            toastr.success(`章文本已保存${mounted ? '——监听里挂着的还是旧文本，卸下再「挂载」才用新的（点亮进度保留）' : ''}`);
+        }
+        chArm.delete(`${vi}:${ci}`);
+        volUiOf(vi).chEdit.delete(ci);
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-chcancel]').forEach(el => el.addEventListener('click', () => {
+        const [vi, ci] = el.dataset.chcancel.split(':').map(Number);
+        cancelChEdit(container, vi, ci);
+    }));
+    container.querySelectorAll('[data-sprevgo]').forEach(el => el.addEventListener('click', () => {
+        volUiOf(Number(el.dataset.sprevgo)).spRev = true;
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-sprevx]').forEach(el => el.addEventListener('click', () => {
+        volUiOf(Number(el.dataset.sprevx)).spRev = false;
+        renderTab(container);
+    }));
+    container.querySelectorAll('[data-sprev]').forEach(el => el.addEventListener('click', () => {
+        const i = Number(el.dataset.sprev);
+        runVolOp(container, 'volsplit', i, volOpinions.get(`${i}:split`) ?? '');
+    }));
+
+    // 单卷意见草稿：输入即留会话底（批量刷新/整页重渲不丢）
+    container.querySelectorAll('[data-opin]').forEach(ta => ta.addEventListener('input', () => { volOpinions.set(ta.dataset.opin, ta.value); }));
+}
+
+// 执行区按钮单独接线：监听每轮判定后执行区与卷卡会被局部重建（不打断用户打字），按钮要跟着重接
+function wireExec(container) {
+    container.querySelectorAll('[data-chmount]').forEach(el => el.addEventListener('click', () => {
+        const [vi, ci] = el.dataset.chmount.split(':').map(Number);
+        const r = mountChapter(vi, ci);
+        if (r.ok) toastr.success(`已挂载：第 ${vi + 1} 卷「${lfState().volumes[vi].chapters[ci].title}」——监听将按节点逐轮判定`);
+        else toastr.warning(r.reason);
         renderTab(container);
     }));
 }
@@ -782,23 +1141,13 @@ function setBusyNote(t) {
 // 批量步逐卷落定后就地重刷卷卡区（徽章跟着变「已具体化/失败」）；用户开着编辑表单时跳过——
 // 重刷会拿状态里的旧值重建表单，正打一半的字不能丢
 function rerenderVols(container) {
-    if ([...expanded].some(k => k.startsWith('sk') || k.startsWith('ve'))) return;
+    if (anyEditOpen()) return;
     const el = container.querySelector('#pp_lf_vols');
     if (!el) return;
     const st = lfState();
     el.innerHTML = st.volumes.map((v, i) => volCardHtml(v, i, st)).join('');
     bindVolCards(container);
-}
-
-// 执行区的按钮单独接线：监听每轮判定后执行区会被局部重建（不打断用户打字），按钮要跟着重接
-function wireExec(container) {
-    container.querySelectorAll('[data-chmount]').forEach(el => el.addEventListener('click', () => {
-        const [vi, ci] = el.dataset.chmount.split(':').map(Number);
-        const r = mountChapter(vi, ci);
-        if (r.ok) toastr.success(`已挂载：第 ${vi + 1} 卷「${lfState().volumes[vi].chapters[ci].title}」——监听将按节点逐轮判定`);
-        else toastr.warning(r.reason);
-        renderTab(container);
-    }));
+    wireExec(container);
 }
 
 // 批量步（具体化 / 再切小）共用：并发跑、单卷失败不拖垮其余、逐卷留下失败原因；
@@ -806,7 +1155,7 @@ function wireExec(container) {
 async function runBatch(container, kind) {
     if (lfBusy) return toastr.warning('有长线生成还在跑（先中断或等它完成）');
     const u = usageCollector();
-    lfBusy = { kind, ctl: new AbortController() };
+    startBusy(kind);
     renderTab(container);
     const lens = new Map();          // 卷号 → 已收字数（流式回调给的是累计值，取各卷最大）
     let settledN = null, totalN = null;
@@ -816,6 +1165,7 @@ async function runBatch(container, kind) {
         provider: providerFromId(providerId),
         signal: lfBusy.ctl.signal,
         onUsage: u.onUsage,
+        onReasoning: t => { busyThink = t.length; },
         onDelta: (vi, len) => { lens.set(vi, Math.max(lens.get(vi) ?? 0, len)); setBusyNote(note()); },
         onProgress: p => { settledN = p.settled; totalN = p.total; rerenderVols(container); setBusyNote(note()); },
     };
@@ -824,7 +1174,7 @@ async function runBatch(container, kind) {
         const name = kind === 'detail' ? '具体化' : '切章';
         if (!r.failed.length) toastr.success(`${name}完成 ${r.done} 卷；${u.line()}`);
         else {
-            toastr.warning(`${name}完成 ${r.done} 卷、失败 ${r.failed.length} 卷（失败原因在各卷卡片上，可重试）；${u.line()}`);
+            toastr.warning(`${name}完成 ${r.done} 卷、失败 ${r.failed.length} 卷（失败原因在对应卷的页签里，可重试——已成的卷都已保存，再跑只补失败卷）；${u.line()}`);
             const s = lfState();
             s.error = r.failed.map(f => `第 ${f.vol + 1} 卷：${clamp(f.reason, 80)}`).join('；');
             persistLf();
@@ -833,7 +1183,55 @@ async function runBatch(container, kind) {
         if (err?.name !== 'AbortError') toastr.error(`失败：${err?.message ?? err}`);
         markErr(err);
     } finally {
-        lfBusy = null;
+        endBusy();
+        renderTab(container);
+    }
+}
+
+// 单卷操作（修订本卷骨架 / 修订本卷文本 / 按意见重切本卷）共用骨架：busy＋流式计数＋就地收起意见框
+async function runVolOp(container, kind, i, opinion) {
+    if (!String(opinion).trim() && kind !== 'volsplit') return toastr.warning('先写修订意见');
+    if (lfBusy) return toastr.warning('有长线生成还在跑（先中断或等它完成）');
+    const u = usageCollector();
+    startBusy(kind);
+    renderTab(container);
+    try {
+        const common = {
+            provider: providerFromId(providerId),
+            signal: lfBusy.ctl.signal,
+            onUsage: u.onUsage,
+            onDelta: kind === 'volsplit'
+                ? (_vi, len) => setBusyNote(`已收 ${len.toLocaleString()} 字`)   // 单卷切章的 onDelta 带 (vi,len)
+                : len => setBusyNote(`已收 ${len.toLocaleString()} 字`),
+            onReasoning: t => { busyThink = t.length; },
+        };
+        if (kind === 'volsk') {
+            const r = await runLfVolSkeletonRevise(i, { opinion, ...common });
+            const bits = [];
+            if (r.structChanged) bits.push('骨架字段已改');
+            if (r.floorsChanged) bits.push('楼数已改（楼层总数跟着各卷之和走；切过章的卷要重切）');
+            if (!bits.length) bits.push('模型原样带回、没改');
+            toastr.success(`第 ${i + 1} 卷：${bits.join('；')}；${u.line()}`);
+            volUiOf(i).skRev = false;
+        } else if (kind === 'voltext') {
+            await runLfVolTextRevise(i, { opinion, ...common });
+            toastr.success(`第 ${i + 1} 卷文本已按意见修订（若已切章，章表标过期）；${u.line()}`);
+            volUiOf(i).veRev = false;
+        } else {
+            await runLfVolSplit(i, {
+                opinion,
+                ...common,
+                onProgress: p => setBusyNote(`已完成 ${p.settled}/${p.total} 卷`),
+            });
+            toastr.success(`第 ${i + 1} 卷已重切（旧章点亮进度按位置沿用）；${u.line()}`);
+            volUiOf(i).spRev = false;
+            volUiOf(i).tab = 'ch';
+        }
+    } catch (err) {
+        if (err?.name !== 'AbortError') toastr.error(`失败：${err?.message ?? err}`);
+        markErr(err);
+    } finally {
+        endBusy();
         renderTab(container);
     }
 }
@@ -845,21 +1243,27 @@ function markErr(err) {
     persistLf();
 }
 
-// 重新生成骨架＝回参数表单（参数与想法已留底，改完直接再点「生成骨架」）
-function saveAndReform(container, s) {
-    const back = lfState();
-    back.stage = 'none';
-    back.volumes = [];
-    back.mount = null;
-    back.materialNote = '';
-    back.createdAt = 0;
-    back.error = '';
+// 重新生成骨架＝回参数表单（参数与想法已留底，改完直接再点「生成骨架」）；
+// 旧书整份备份（第二十四轮）——新骨架生成失败/被中断自动恢复，不再一按就丢
+function backToParams(container) {
+    stashLfRegenBackup();
+    const s = lfState();
+    s.stage = 'none';
+    s.volumes = [];
+    s.mount = null;
+    s.materialNote = '';
+    s.createdAt = 0;
+    s.error = '';
     persistLf();
-    toastr.info('已回到参数表单（楼层/保底/新角色/想法都留着）——改完点「生成骨架」');
+    volUi.clear();
+    revOpen = false;
+    paramOpen = true;
+    toastr.info('已回到参数（楼层/保底/新角色/想法都留着；旧书已备份——生成失败会自动恢复）');
     renderTab(container);
 }
 
-// 监听每轮判定后：长线页开着就同步点亮数并局部刷新执行区（不打断用户在输入框里打字）
+// 监听每轮判定后：长线页开着就同步点亮数并局部刷新执行区与卷卡（不打断用户在输入框里打字）；
+// 有编辑框开着时跳过卷卡重刷（防丢输入），执行区没有输入框、照常刷
 document.addEventListener('pp-listener-updated', () => {
     const root = document.getElementById('pp_lf_root');
     if (!root) return;
@@ -872,6 +1276,14 @@ document.addEventListener('pp-listener-updated', () => {
         const scope = exec.parentElement ?? document.body;
         exec.outerHTML = execHtml(st, stats, next);
         wireExec(scope);
+    }
+    if (!anyEditOpen()) {
+        const vols = document.getElementById('pp_lf_vols');
+        if (vols) {
+            vols.innerHTML = st.volumes.map((v, i) => volCardHtml(v, i, st)).join('');
+            bindVolCards(vols.parentElement ?? document);
+            wireExec(vols.parentElement ?? document);
+        }
     }
     const ops = root.querySelector('.pp-item-ops .pp-muted');
     if (ops && stats.chapters) ops.textContent = `章 ${stats.done}/${stats.chapters} · 节点 ${stats.lit}/${stats.nodes}`;

@@ -1654,7 +1654,51 @@
 
 /* ==========================================================================
    2.0 长线规划页签（tab-longform）：书-卷-章-节点总览，排版宁宽勿挤
+   第二十四轮重构：顶部操作条＋参数/材料折叠＋卷折叠三页签（骨架/卷文本/章与节点）
    ========================================================================== */
+
+/* 顶部操作条：四步生成按钮一行排开、放不下换行；生成模型下拉靠右 */
+.pp-drawer .pp-lf-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+}
+
+.pp-drawer .pp-lf-toolbar .pp-lf-prov {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    white-space: nowrap;
+    cursor: help;
+}
+
+/* 没到阶段的按钮：置灰但仍可见（悬浮说明指路） */
+.pp-drawer .pp-lf-toolbar .pp-lf-dim {
+    opacity: 0.45;
+}
+
+/* 参数/材料折叠区头：一行横排（箭头＋标题＋概览），点击整行开合 */
+.pp-drawer .pp-lf-foldhead {
+    display: flex;
+    align-items: baseline;
+    gap: 4px 10px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.pp-drawer .pp-lf-foldhead b {
+    flex: 0 0 auto;
+}
+
+.pp-drawer .pp-lf-foldhead .pp-muted {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 /* 顶部状态条：与监听页同款（运行状态 + 计数 + 作废入口） */
 .pp-drawer .pp-lf-status {
@@ -1764,18 +1808,25 @@
     width: 100%;
 }
 
-/* 执行总览的卷分组与章卡 */
-.pp-drawer .pp-lf-volgroup {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 8px;
+/* 卷折叠头（第二十四轮）：一行横排可点击开合（箭头＋第 X 卷·名字｜楼数｜徽章） */
+.pp-drawer .pp-lf-vol .pp-lf-volhead {
+    cursor: pointer;
+    user-select: none;
+    font-weight: 600;
+    opacity: 0.95;
 }
 
-.pp-drawer .pp-lf-volhead {
-    font-weight: 600;
-    opacity: 0.9;
-    margin-top: 4px;
+/* 卷展开体：页签条＋当前页签内容，纵向堆叠占满整行 */
+.pp-drawer .pp-lf-volbody {
+    flex: 1 1 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.pp-drawer .pp-lf-tabs {
+    flex: 0 0 auto;
 }
 
 .pp-drawer .pp-lf-ch {
