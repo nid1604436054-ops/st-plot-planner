@@ -23,6 +23,7 @@ let lfBusy = null;   // { kind: 'skeleton'|'detail'|'revise'|'split', ctl: Abort
 const expanded = new Set();   // 'v0' 卷文本展开 / 've0' 卷文本编辑 / 'sk0' 骨架编辑 / 'c0-1' 章文本展开
 let confirmReset = false;     // 「作废本长线」两步确认的 Armed 位
 const delArmVol = new Set();  // 「删除本卷」两步确认的 Armed 位（卷号）
+const veArmVol = new Set();   // 「取消」编辑卷文本两步确认的 Armed 位（卷号，只在改过内容时启用）
 let lfOpinion = '';           // 修订意见草稿（会话内留底：批量生成的逐卷刷新不整页重渲也清不掉它）
 let busyLast = 0;             // busy 实时字数的节流闸（流式回调很密，150ms 一拍够用）
 
@@ -361,17 +362,41 @@ function volCardHtml(v, i, st) {
         ${v.detailState === 'done' && v.skAt && v.skAt > v.textAt ? `<div class="pp-muted">⚠ 概要/种子在卷文本定稿后改过——卷文本没跟着动，需要就修订或重跑具体化</div>` : ''}
         <div class="pp-item-ops">
             ${!skEditing ? `<span class="menu_button" data-vsk="${i}" title="就地修改本卷的卷名/楼数/概要/种子，或删除本卷。楼数改了：楼层总数跟着各卷之和走；切过章的卷要重跑「再切小」">编辑骨架</span>` : ''}
-            ${v.detailState === 'done' ? `<span class="menu_button" data-vol="${i}">${open ? '收起文本' : '卷文本'}</span>` : ''}
+            ${v.detailState === 'done' && !editing ? `<span class="menu_button" data-vol="${i}">${open ? '收起文本' : '卷文本'}</span>` : ''}
             ${v.detailState === 'done' && !editing ? `<span class="menu_button" data-vedit="${i}" title="就地手改卷文本（改完记得重跑「再切小」——章表按旧文本切的会过期）">编辑卷文本</span>` : ''}
         </div>
         ${open ? `<div class="pp-lf-text">${escapeHtml(v.text)}</div>` : ''}
         ${editing ? `
         <div>
             <textarea class="text_pole textarea_compact pp-lf-editarea" data-vetext="${i}" rows="10">${escapeHtml(v.text)}</textarea>
-            <div class="pp-btn-row"><span class="menu_button" data-vesave="${i}">保存卷文本</span></div>
+            <div class="pp-btn-row">
+                <span class="menu_button" data-vesave="${i}" title="保存改动并收起编辑框（若已切章，章表会标过期）">保存卷文本</span>
+                <span class="menu_button ${veArmVol.has(i) ? 'pp-danger-arm' : ''}" data-vecancel="${i}" title="不保存、收起编辑框${veArmVol.has(i) ? '——再点一下确认放弃改动' : '；改过内容的话会先问一句'}">${veArmVol.has(i) ? '确认放弃？' : '取消'}</span>
+            </div>
         </div>` : ''}
         ${skEditing ? skEditHtml(v, i) : ''}
     </div>`;
+}
+
+// 取消编辑卷文本：内容没动一键收起；改过内容两步确认（4 秒回退）防手滑丢字
+function cancelVeEdit(container, i, btn) {
+    const s = lfState();
+    const v = s.volumes[i];
+    const ta = container.querySelector(`[data-vetext="${i}"]`);
+    const dirty = !!(v && ta && ta.value !== v.text);
+    if (dirty && !veArmVol.has(i)) {
+        veArmVol.add(i);
+        if (btn) { btn.textContent = '确认放弃？'; btn.classList.add('pp-danger-arm'); }
+        setTimeout(() => {
+            veArmVol.delete(i);
+            const b = container.querySelector(`[data-vecancel="${i}"]`);
+            if (b) { b.textContent = '取消'; b.classList.remove('pp-danger-arm'); }
+        }, 4000);
+        return;
+    }
+    veArmVol.delete(i);
+    expanded.delete(`ve${i}`);
+    renderTab(container);
 }
 
 // 骨架就地编辑表单（第二十轮）：卷名/楼数/概要/种子＋删除本卷——骨架不再只是只读产物
@@ -682,9 +707,12 @@ function bindVolCards(container) {
         renderTab(container);
     }));
     container.querySelectorAll('[data-vedit]').forEach(el => el.addEventListener('click', () => {
+        // 同一份文本不开两份视图：编辑器一开、只读预览自动收起
         expanded.add(`ve${el.dataset.vedit}`);
+        expanded.delete(`v${el.dataset.vedit}`);
         renderTab(container);
     }));
+    container.querySelectorAll('[data-vecancel]').forEach(el => el.addEventListener('click', function () { cancelVeEdit(container, Number(el.dataset.vecancel), this); }));
     container.querySelectorAll('[data-vesave]').forEach(el => el.addEventListener('click', () => {
         const i = Number(el.dataset.vesave);
         const ta = container.querySelector(`[data-vetext="${i}"]`);
@@ -696,6 +724,7 @@ function bindVolCards(container) {
             persistLf();
             toastr.success(`第 ${i + 1} 卷文本已保存（若已切章，章表标过期）`);
         }
+        veArmVol.delete(i);
         expanded.delete(`ve${i}`);
         renderTab(container);
     }));
