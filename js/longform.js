@@ -306,6 +306,17 @@ export function lfMaterialParts() {
     return [...parts.slice(0, idx), ...(sec ?? []), ...parts.slice(idx)];
 }
 
+// 材料分区（第二十七轮）：「检索命中」与其后的「最近对话记录」开头会变（检索按最近楼层重扫、
+// 对话是滑动窗口——每轮聊天后窗口头就变）。把这两节从稳定区拆出来，垫到任务段之后发——
+// 会变的小节放材料中间，前缀会断在它头上、后面跟的骨架与任务段跟着重付；拆出去后跨步前缀
+// 最多断在这两节自己身上
+export function lfStableAndVolatile() {
+    const parts = lfMaterialParts();
+    const idx = parts.findIndex(p => String(p ?? '').startsWith('## 检索命中的世界书条目'));
+    if (idx < 0) return { stable: parts, live: [] };
+    return { stable: parts.slice(0, idx), live: parts.slice(idx) };
+}
+
 // 换算锚（§6.3）：与监听共用设置页「监听」区的区间两端（一处设置、两侧同源，免得两个数值漂移）
 export function lfPaceAnchor() {
     const c = settings.listener ?? {};
@@ -324,7 +335,11 @@ export function bookOutlineBlock(st) {
 }
 
 // ---------------------------------------------------------------------------
-// 提示词四份（全新起草，随交付报告送审；结构要点出自 §6.7——旧 v3 全文已失传，不得冒充已审原文）
+// 提示词（全新起草，随交付报告送审；结构要点出自 §6.7——旧 v3 全文已失传，不得冒充已审原文）。
+// 第二十七轮起分两层：lfCommonSystem 是全管线共用的 system 公共头（换算锚/硬约束组/JSON 元规则
+// 常驻于此、字节级不变），七份任务提示词只留各步自己的要求与输出结构、挪进 user 消息排在材料之后
+// ——前缀缓存从请求第一个字节开始逐字节匹配，各步 system 不同＝材料块每步整块重付全价；
+// system 统一后材料+骨架只在状态变化时付一次，修订/重切/修复重试全部吃同一段缓存
 // ---------------------------------------------------------------------------
 
 // 硬约束组（§6.11 同源条款的长线版：时间顺序 / 事实一致性 / user 不可编排 / 点名硬要求 / 通则一）
@@ -336,10 +351,21 @@ const GUARD_RULES = [
     '数量要求一律是「至少 N、不设上限」：N 是下限不是目标值，剧情需要更多就给更多；任何示例只示范结构与写法，具体内容自行设计，不得照抄示例。',
 ];
 
+// 全管线共用的 system 公共头（第二十七轮）：换算锚、硬约束组、JSON 元规则从七份任务提示词里
+// 抽出常驻于此。这一份与材料稳定区一起构成跨步共享前缀——它不变，材料块就永远只付一次全价
+export function lfCommonSystem() {
+    return [
+        '你是文字角色扮演作品的长线规划引擎，为「书-卷-章-节点」四层管线工作。本条消息是所有任务的公共规则层；当前任务的身份、具体要求与输出结构在用户消息末尾的任务段里，到那里对号入座。材料各小节按「稳定在前、会变的垫底」排列，先读到的多是设定与记录、末尾才是最近对话。',
+        lfPaceAnchor(),
+        '硬约束（对任何任务一律生效）：',
+        ...GUARD_RULES.map((r, i) => `${i + 1}. ${r}`),
+        '输出纪律：只按任务段给出的结构输出一个 JSON 对象，不要输出 JSON 以外的任何文字；字符串值里不要出现英文双引号（引用一律写中文「」）；长文本值（如 text/summary/seeds）内的换行一律写 \\n，短值内不要换行（用空格或分号）。',
+    ].join('\n');
+}
+
 export function skeletonSystemPrompt({ totalFloors, minFloors = 0, newChars = false } = {}) {
     return [
-        '你是文字角色扮演的长线剧情总设计师。用户正在为一部以「楼层」计量的长篇角色扮演作品做全书规划，会给你角色设定、世界书、记忆表格、进行中剧情、历史剧情摘要与最近对话等材料。你的任务：设计全书骨架——只到「卷」级，不写具体场景与台词。',
-        lfPaceAnchor(),
+        '你是文字角色扮演的长线剧情总设计师。用户正在为一部以「楼层」计量的长篇角色扮演作品做全书规划，上面给你的材料里有角色设定、世界书、记忆表格、进行中剧情、历史剧情摘要与最近对话。你的任务：设计全书骨架——只到「卷」级，不写具体场景与台词。',
         '任务要求：',
         `- 全书切成若干卷（至少 2 卷、不设上限）：每卷给卷名、剧情概要（这卷讲什么、从哪推进到哪、主要张力是什么、出场角色有谁）与本卷楼数。`,
         `- 各卷楼数之和必须等于 ${totalFloors}（硬预算，程序会校验；总和不能多也不能少）。${minFloors > 0 ? `全书剧情体量至少要撑得起 ${minFloors} 层楼的推进（保底要求）。` : ''}`,
@@ -349,8 +375,6 @@ export function skeletonSystemPrompt({ totalFloors, minFloors = 0, newChars = fa
             : '- 不引入新角色：全书只用材料里已有的角色与世界要素（临时路人可以有无名分的过场）。',
         '- 种子显式列出：每卷的伏笔与新要素在 seeds 里逐条写明（埋什么、预计在哪收）；本卷没有写「无」。',
         '- 卷与卷之间要有推进关系（后卷接着前卷的果），但每卷有自己的核心张力，不写成一卷的事抻成三卷。',
-        ...GUARD_RULES,
-        '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         '{',
         '  "volumes": [',
@@ -362,8 +386,7 @@ export function skeletonSystemPrompt({ totalFloors, minFloors = 0, newChars = fa
 
 export function detailSystemPrompt() {
     return [
-        '你是文字角色扮演的长线剧情编剧。用户已定好全书骨架（见用户消息「全书骨架」小节），你的任务：把指定的一卷写成卷级详细剧情文本——它是将来切章的母本与审阅的全景。写法定调（两头都不许走偏）：禁的是写法精度、不是情节本身——本卷要发生的每件具体情节都要在、一件不少；但每件事写到「发生了什么、导致什么」就收笔，不写台词怎么说、不写动作怎么分解——写法比章文本粗至少一级（怎么演是章层的事），情节一点不减。',
-        lfPaceAnchor(),
+        '你是文字角色扮演的长线剧情编剧。用户已定好全书骨架（见上面「全书骨架」小节），你的任务：把指定的一卷写成卷级详细剧情文本——它是将来切章的母本与审阅的全景。写法定调（两头都不许走偏）：禁的是写法精度、不是情节本身——本卷要发生的每件具体情节都要在、一件不少；但每件事写到「发生了什么、导致什么」就收笔，不写台词怎么说、不写动作怎么分解——写法比章文本粗至少一级（怎么演是章层的事），情节一点不减。',
         '任务要求：',
         '- 台词硬禁令：卷文本不得出现任何角色的台词原话——禁止引号对白、禁止「某某说：『……』」式的整句台词。对话一律概括成「谁与谁谈了什么、谈出什么结果、谁的立场动摇了」（概括可以：「审问中被审者反将一军、医修失态」；原话不行：「他说：『你来了』」）。动作同理只写到「做了什么事、造成什么影响」，不逐拍描写动作过程——台词与动作细节属于章层。',
         '- 情节完整、禁一笔带过：每件要紧的事单独写明（谁对谁做了什么、结果如何），禁止把多件事揉成一句总括——「众人各怀心思地散去」「随后冲突进一步升级」这类一笔带过不许当正文。切章的模型只能从你写明的事件里切章排节点，没写明的事件等于不存在；卷概要里的每个走向都要有对应的明写事件。',
@@ -372,8 +395,6 @@ export function detailSystemPrompt() {
         '- 锚写成独立行，格式：【锚 N】锚标题——阶段落点（一句话、只到阶段层面）。',
         '- 骨架 seeds 里点名的伏笔必须落到文本里的具体剧情点，写明在哪埋、怎么收；「本锚间自由演绎」段不算埋伏笔。',
         '- 卷内时间线自洽：长线可以跨多天多周，但先后顺序不能乱，排程从既定事实之后往后推。',
-        ...GUARD_RULES,
-        '字符串值里不要出现英文双引号（引用一律写中文「」）；text 值内的换行写 \\n。',
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         '{',
         '  "text": "卷级剧情文本（含【锚 N】行与「（本锚间自由演绎）」标注，换行写 \\n）",',
@@ -388,15 +409,12 @@ export function detailSystemPrompt() {
 export function reviseSystemPrompt() {
     return [
         '你是长线剧情大纲的修订编辑。用户会给你全部卷的当前文本与一条修改意见，你按意见修订全书。',
-        lfPaceAnchor(),
         '任务要求：',
         '- 只改意见涉及的地方与违反硬约束的地方，其余原样保留——修订不是重写：没被意见点名的卷的走向、事件与锚原则上不动。',
         '- 输出必须是全部卷的修订后全文：哪怕某卷一字未动也要原样输出，不能只给被改的卷。',
         '- 锚随文本同步：剧情改了的卷锚跟着改；没动的卷锚原样带出。锚仍是阶段级里程碑（一句话、只到阶段层面），数量维持每章 1-2 个的密度、至少各卷下限。',
         '- 修订后的卷文本同样不得出现台词原话与整句对白——对话概括成「谁与谁谈了什么、谈出什么结果」（台词与动作细节属于将来的章层；意见点名的台词写成事件概括，别写原话）。重出全文时未被意见点名的事件一件不少照写，不许顺手浓缩成一笔带过的总括。',
         '- 各卷楼数分配维持原样（修订不改预算；要改预算回骨架步重新生成）。',
-        ...GUARD_RULES,
-        '字符串值里不要出现英文双引号（引用一律写中文「」）；text 值内的换行写 \\n。',
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         '{',
         '  "volumes": [',
@@ -409,7 +427,6 @@ export function reviseSystemPrompt() {
 export function splitSystemPrompt() {
     return [
         '你是长线剧情的切章编辑。用户会给你全书骨架与某一卷的卷级文本，你的任务：把这一卷切成章、再把每章切出执行节点——一步到位。',
-        lfPaceAnchor(),
         '任务要求：',
         `- 章数由预算决定：每章至少 ${LF_MIN_CHAPTER_FLOORS} 层楼、不设上限；本卷预算 X 层楼最多切 ⌊X÷${LF_MIN_CHAPTER_FLOORS}⌋ 章（任务里给了本卷的章数上限）——预算只够一章时整卷切成一章，不要硬拆成几张薄章。推进锚是切章的刀口（阶段级里程碑）——章界尽量落在锚上（每章至少完整覆盖一个锚，锚不被腰斩）；本卷预算 X 层楼已定，各章楼数之和必须等于本卷预算。`,
         '- 章文本（text）：这一章怎么演的执行指导——按本章楼数预算给足剧情量。这章文本将来整章挂进监听逐轮判定进度，扮演模型看不到它、监听按它对账。',
@@ -422,7 +439,6 @@ export function splitSystemPrompt() {
         'user 不可编排（长线版）：不替 user 做动作、不说台词、不预设心理（对话或骨架里 user 已明的意愿可当前提）；涉及 user 只能写「若 user X，则 Y」的条件式接口，且每章的核心推进不依赖 user 的任何具体回应。',
         '事实一致性：卷文本与材料里的既定事实、既定设定是硬约束，切章与节点安排不得违反。',
         '数量要求一律是「至少 N、不设上限」；示例只示范写法，内容自行设计。',
-        '字符串值里不要出现英文双引号（引用一律写中文「」）；text 值内的换行写 \\n。',
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         '{',
         '  "chapters": [',
@@ -437,14 +453,11 @@ export function splitSystemPrompt() {
 export function skeletonReviseSystemPrompt({ totalFloors } = {}) {
     return [
         '你是长线剧情大纲的修订编辑。用户会给你全书当前骨架（各卷的卷名/楼数/概要/种子）与一条修改意见，你按意见修订骨架——只到「卷」级，不写具体场景与台词。',
-        lfPaceAnchor(),
         '任务要求：',
         '- 只改意见涉及的地方与违反硬约束的地方，其余原样保留——修订不是重写：没被意见点名的卷的走向与结构原则上不动；要增删整卷走「重新生成骨架」，修订不增删卷。',
         `- 楼数可以改（意见点名了分配问题的照意见重分）：各卷楼数之和仍必须等于 ${totalFloors}（当前总数，程序会校验）；重分时按剧情体量分配、不得平均——重头戏的卷给足、过渡卷压缩。`,
         '- 输出必须是全部卷的修订后骨架：哪怕某卷一字未动也要原样输出，不能只给被改的卷。',
         '- 概要末尾保留/补上一句本卷体量理由（重在哪／轻在哪）；种子只在剧情被意见改动时跟着动。',
-        ...GUARD_RULES,
-        '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         '{',
         '  "volumes": [',
@@ -457,13 +470,10 @@ export function skeletonReviseSystemPrompt({ totalFloors } = {}) {
 export function volSkeletonReviseSystemPrompt() {
     return [
         '你是长线剧情大纲的修订编辑。用户会给你全书骨架（作上下文）与其中一卷的当前骨架（卷名/楼数/概要/种子），你的任务：只修订这一卷的骨架——只到「卷」级，不写具体场景与台词。',
-        lfPaceAnchor(),
         '任务要求：',
         '- 只改意见涉及的地方与违反硬约束的地方，其余原样保留——修订不是重写；只输出这一卷（别的卷不归你管）。',
         '- 楼数可以改：本卷楼数按剧情体量定（重头戏给足、过渡压缩），改了之后全书楼层总数会跟着各卷之和走（程序自动重算）；每卷至少 20 层楼。',
         '- 概要末尾保留/补上一句本卷体量理由（重在哪／轻在哪）。',
-        ...GUARD_RULES,
-        '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         '{',
         '  "title": "卷名", "summary": "本卷剧情概要（含末尾一句体量理由）", "seeds": "本卷伏笔与新要素；没有写「无」", "floors": 40',
@@ -474,15 +484,12 @@ export function volSkeletonReviseSystemPrompt() {
 export function volTextReviseSystemPrompt() {
     return [
         '你是长线剧情大纲的修订编辑。用户会给你全书骨架（作上下文）与其中一卷的卷级文本，你的任务：只修订这一卷的卷文本。',
-        lfPaceAnchor(),
         '任务要求：',
         '- 只改意见涉及的地方与违反硬约束的地方，其余原样保留——修订不是重写：没被意见点名的走向、事件与锚原则上不动。',
         '- 输出必须是这一卷的修订后全文，不能只给被改的段落。',
         '- 锚随文本同步：剧情改了锚跟着改；锚仍是阶段级里程碑（【锚 N】标题——阶段落点，一句话、只到阶段层面），数量维持每章 1-2 个的密度、至少下限。',
         '- 修订后的卷文本同样不得出现台词原话与整句对白——对话概括成「谁与谁谈了什么、谈出什么结果」（台词与动作细节属于将来的章层；意见点名的台词写成事件概括，别写原话）。重出全文时未被意见点名的事件一件不少照写，不许顺手浓缩成一笔带过的总括。',
         '- 本卷楼数预算维持原样（要改预算去改骨架）。',
-        ...GUARD_RULES,
-        '字符串值里不要出现英文双引号（引用一律写中文「」）；text 值内的换行写 \\n。',
         '只输出一个符合如下结构的 JSON 对象，不要输出 JSON 以外的任何文字：',
         '{',
         '  "title": "卷名", "text": "修订后的卷级剧情文本（含【锚 N】行与「（本锚间自由演绎）」标注）", "anchors": [ { "title": "锚标题", "point": "阶段落点（一句话、只到阶段层面）" } ]',
@@ -519,13 +526,25 @@ async function lfCall({ system, user, provider, signal, mult = 2, onUsage, onDel
     return result;
 }
 
+// 先焐热再并行的 allSettled（第二十七轮）：入参是启动器数组（调用即发请求）。第一个 await 跑完
+// （成功失败都算）才发射其余——前缀缓存在第一个请求处理完之前并不存在，同前缀的并发请求
+// 互相看不到对方还没写完的缓存、全部按未命中计价；焐热之后其余并行读的是同一份已存在的缓存
+async function warmFirstAllSettled(fns) {
+    const settled = p => p.then(v => ({ status: 'fulfilled', value: v }), e => ({ status: 'rejected', reason: e }));
+    const rs = [await settled(fns[0]())];
+    if (fns.length > 1) rs.push(...await Promise.all(fns.slice(1).map(f => settled(f()))));
+    return rs;
+}
+
 // ①＋② 骨架与切块（一次调用出卷＋楼数；总和校验与重配在本地）
 export async function runLfSkeleton({ totalFloors, minFloors = 0, idea = '', newChars = false, provider, signal, onUsage, onDelta } = {}) {
     const total = posInt(totalFloors) ?? LF_DEFAULT_FLOORS;
-    const materials = lfMaterialParts().join('\n\n');
-    const system = skeletonSystemPrompt({ totalFloors: total, minFloors, newChars });
+    const { stable, live } = lfStableAndVolatile();
+    const system = lfCommonSystem();
     const user = [
-        materials,
+        stable.join('\n\n'),
+        skeletonSystemPrompt({ totalFloors: total, minFloors, newChars }),
+        ...live,
         '## 本次长线的想法与硬参数（本长线的最高优先级输入）',
         `全书楼层总数：${total}（各卷楼数之和必须等于它）`,
         `保底楼数：${minFloors > 0 ? `${minFloors}（全书剧情体量的下限）` : '未设'}`,
@@ -591,21 +610,25 @@ export function lfMatOverview() {
     ].join(' · ');
 }
 
-// ③ 分块具体化：逐卷并行一次一卷（§6.4「能分多细分多细，批次不设限」——并行由调用方 API 承担）；
-// 材料与骨架块整批只拼一次、逐卷共享（同一前缀，走缓存的服务商只付一次全价）。
-// onProgress 逐卷落定回调＋开工即报一次 0/N（页面实时状态的数据源）；onDelta 按卷报累计字数
+// ③ 分块具体化：逐卷一次一卷（§6.4「能分多细分多细，批次不设限」）；材料与骨架块整批只拼一次、
+// 逐卷共享同一份字符串。发射次序＝先焐热再并行（第二十七轮）：前缀缓存要等第一个请求跑完才落盘，
+// 一口气全发＝同前缀的并发请求互相看不到对方还没写完的缓存、全部按未命中计价——先让第一卷把
+// [system+材料稳定区+骨架+任务头] 的缓存焐热，其余卷再并行（读的是已存在的缓存，不再互抢）；
+// 批次总时长因此多约一卷的生成时间，输入费省大半。onProgress 逐卷落定回调＋开工即报一次 0/N；
+// onDelta 按卷报累计字数
 export async function runLfDetailBatch({ provider, signal, onUsage, onDelta, onProgress } = {}) {
     const st = lfState();
     const targets = st.volumes.map((v, i) => ({ v, i })).filter(x => x.v.detailState !== 'done');
     if (!targets.length) return { done: 0, failed: [] };
-    const materials = lfMaterialParts().join('\n\n');
+    const { stable, live } = lfStableAndVolatile();
+    const materials = stable.join('\n\n');
     const outline = bookOutlineBlock(st);
     for (const { v } of targets) { v.detailState = 'run'; v.detailError = ''; }
     persistLf();
     let settled = 0;
     onProgress?.({ settled: 0, total: targets.length });
     const tick = () => onProgress?.({ settled: ++settled, total: targets.length });
-    const rs = await Promise.allSettled(targets.map(({ i }) => runLfDetailOne(i, { provider, signal, materials, outline, onUsage, onDelta })
+    const rs = await warmFirstAllSettled(targets.map(({ i }) => () => runLfDetailOne(i, { provider, signal, materials, outline, live, onUsage, onDelta })
         .then(r => { tick(); return r; }, e => { tick(); throw e; })));
     const failed = [];
     rs.forEach((r, k) => { if (r.status === 'rejected') failed.push({ vol: targets[k].i, reason: String(r.reason?.message ?? r.reason) }); });
@@ -618,17 +641,19 @@ export async function runLfDetailBatch({ provider, signal, onUsage, onDelta, onP
     return { done: targets.length - failed.length, failed };
 }
 
-async function runLfDetailOne(vi, { provider, signal, materials, outline, onUsage, onDelta }) {
+async function runLfDetailOne(vi, { provider, signal, materials, outline, live = [], onUsage, onDelta }) {
     const st = lfState();
     const vol = st.volumes[vi];
     try {
         const user = [
             materials,
             outline,
+            detailSystemPrompt(),
+            ...live,
             '## 本卷任务',
             `把第 ${vi + 1} 卷「${vol.title}」写成卷级详细剧情文本。本卷预算 ${vol.floors} 层楼；推进锚建议约 ${lfAnchorTarget(vol.floors)} 个（至少 ${LF_MIN_ANCHORS} 个、一般每章 1-2 个——锚是阶段级里程碑，只说推进到哪个阶段）；骨架概要与种子如上，务必落实。`,
         ].join('\n\n');
-        const result = await lfCall({ system: detailSystemPrompt(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(vi, t.length)) });
+        const result = await lfCall({ system: lfCommonSystem(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(vi, t.length)) });
         let anchors = Array.isArray(result?.anchors) ? result.anchors.map(a => ({
             title: String(a?.title ?? '').slice(0, 120),
             point: String(a?.point ?? ''),
@@ -666,21 +691,23 @@ export async function runLfRevise({ opinion = '', provider, signal, onUsage, onD
     if (!st.volumes.length || !st.volumes.every(v => v.detailState === 'done' && v.text)) {
         throw new Error('还有卷没具体化完——先跑完「具体化各卷」再修订');
     }
-    const materials = lfMaterialParts().join('\n\n');
+    const { stable, live } = lfStableAndVolatile();
     const volsBlock = st.volumes.map((v, i) => [
         `### 第 ${i + 1} 卷「${v.title}」（预算 ${v.floors} 层楼）`,
         v.text,
         `锚：${v.anchors.map(a => a.title).join('、')}`,
     ].join('\n')).join('\n\n');
     const user = [
-        materials,
+        stable.join('\n\n'),
         bookOutlineBlock(st),
+        reviseSystemPrompt(),
+        ...live,
         '## 全部卷的当前文本',
         volsBlock,
         '## 修改意见',
         note,
     ].join('\n\n');
-    const result = await lfCall({ system: reviseSystemPrompt(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
+    const result = await lfCall({ system: lfCommonSystem(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
     const list = Array.isArray(result?.volumes) ? result.volumes : [];
     if (!list.length) throw new Error('修订输出里没有卷');
     if (list.length !== st.volumes.length) throw new Error(`修订输出卷数 ${list.length} 与现有 ${st.volumes.length} 不一致——已放弃写入，重试或把意见拆小`);
@@ -721,9 +748,9 @@ export async function runLfSkeletonRevise({ opinion = '', provider, signal, onUs
     const st = lfState();
     if (!st.volumes.length) throw new Error('还没有骨架——先生成骨架');
     const total = st.totalFloors;
-    const materials = lfMaterialParts().join('\n\n');
-    const user = [materials, bookOutlineBlock(st), '## 修改意见', note].join('\n\n');
-    const result = await lfCall({ system: skeletonReviseSystemPrompt({ totalFloors: total }), user, provider, signal, mult: 2, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
+    const { stable, live } = lfStableAndVolatile();
+    const user = [stable.join('\n\n'), bookOutlineBlock(st), skeletonReviseSystemPrompt({ totalFloors: total }), ...live, '## 修改意见', note].join('\n\n');
+    const result = await lfCall({ system: lfCommonSystem(), user, provider, signal, mult: 2, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
     const list = Array.isArray(result?.volumes) ? result.volumes : [];
     if (!list.length) throw new Error('修订输出里没有卷');
     if (list.length !== st.volumes.length) throw new Error(`修订输出卷数 ${list.length} 与现有 ${st.volumes.length} 不一致——要增删整卷走「重新生成骨架」`);
@@ -763,16 +790,18 @@ export async function runLfVolSkeletonRevise(vi, { opinion = '', provider, signa
     const st = lfState();
     const vol = st.volumes[vi];
     if (!vol) throw new Error('没有这一卷');
-    const materials = lfMaterialParts().join('\n\n');
+    const { stable, live } = lfStableAndVolatile();
     const user = [
-        materials,
+        stable.join('\n\n'),
         bookOutlineBlock(st),
+        volSkeletonReviseSystemPrompt(),
+        ...live,
         '## 本卷任务',
         `只修订第 ${vi + 1} 卷「${vol.title}」的骨架（只改意见涉及处）。它当前的字段——卷名：${vol.title}｜楼数：${vol.floors}｜概要：${vol.summary}｜种子：${vol.seeds || '无'}`,
         '## 修改意见',
         note,
     ].join('\n\n');
-    const result = await lfCall({ system: volSkeletonReviseSystemPrompt(), user, provider, signal, mult: 2, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
+    const result = await lfCall({ system: lfCommonSystem(), user, provider, signal, mult: 2, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
     const title = String(result?.title ?? '').trim().slice(0, 120);
     const floors = posInt(result?.floors);
     if (!title) throw new Error('修订输出里没有卷名');
@@ -805,17 +834,19 @@ export async function runLfVolTextRevise(vi, { opinion = '', provider, signal, o
     const vol = st.volumes[vi];
     if (!vol) throw new Error('没有这一卷');
     if (vol.detailState !== 'done' || !vol.text) throw new Error('这一卷还没有卷文本——先跑「具体化各卷」');
-    const materials = lfMaterialParts().join('\n\n');
+    const { stable, live } = lfStableAndVolatile();
     const user = [
-        materials,
+        stable.join('\n\n'),
         bookOutlineBlock(st),
+        volTextReviseSystemPrompt(),
+        ...live,
         `### 第 ${vi + 1} 卷「${vol.title}」（预算 ${vol.floors} 层楼）`,
         vol.text,
         `锚：${vol.anchors.map(a => a.title).join('、')}`,
         '## 修改意见',
         note,
     ].join('\n\n');
-    const result = await lfCall({ system: volTextReviseSystemPrompt(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
+    const result = await lfCall({ system: lfCommonSystem(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(t.length)) });
     const text = String(result?.text ?? '').trim();
     if (!text) throw new Error('修订输出里没有正文（可能被输出上限截断）——原文保留未动，重试或把意见拆小');
     const v = lfState().volumes[vi];
@@ -834,21 +865,23 @@ export async function runLfVolTextRevise(vi, { opinion = '', provider, signal, o
     return { ok: true };
 }
 
-// ⑥ 再切小：逐卷并行（卷→章→节点一步到位）；章预算重配同卷预算：算术插件说了算。
+// ⑥ 再切小：逐卷一次一卷（卷→章→节点一步到位）；章预算重配同卷预算：算术插件说了算。
+// 发射次序同具体化批次＝先焐热再并行（第二十七轮，见 warmFirstAllSettled 注释）；
 // onProgress/onDelta 口径同具体化批次
 export async function runLfSplitBatch({ provider, signal, onUsage, onDelta, onProgress } = {}) {
     const st = lfState();
     const targets = st.volumes.map((v, i) => ({ v, i }))
         .filter(x => x.v.detailState === 'done' && x.v.splitState !== 'done');
     if (!targets.length) return { done: 0, failed: [] };
-    const materials = lfMaterialParts().join('\n\n');
+    const { stable, live } = lfStableAndVolatile();
+    const materials = stable.join('\n\n');
     const outline = bookOutlineBlock(st);
     for (const { v } of targets) { v.splitState = 'run'; v.splitError = ''; }
     persistLf();
     let settled = 0;
     onProgress?.({ settled: 0, total: targets.length });
     const tick = () => onProgress?.({ settled: ++settled, total: targets.length });
-    const rs = await Promise.allSettled(targets.map(({ i }) => runLfSplitOne(i, { provider, signal, materials, outline, onUsage, onDelta })
+    const rs = await warmFirstAllSettled(targets.map(({ i }) => () => runLfSplitOne(i, { provider, signal, materials, outline, live, onUsage, onDelta })
         .then(r => { tick(); return r; }, e => { tick(); throw e; })));
     const failed = [];
     rs.forEach((r, k) => { if (r.status === 'rejected') failed.push({ vol: targets[k].i, reason: String(r.reason?.message ?? r.reason) }); });
@@ -861,7 +894,7 @@ export async function runLfSplitBatch({ provider, signal, onUsage, onDelta, onPr
     return { done: targets.length - failed.length, failed };
 }
 
-async function runLfSplitOne(vi, { provider, signal, materials, outline, onUsage, onDelta, opinion = '' }) {
+async function runLfSplitOne(vi, { provider, signal, materials, outline, live = [], onUsage, onDelta, opinion = '' }) {
     const st = lfState();
     const vol = st.volumes[vi];
     try {
@@ -869,13 +902,15 @@ async function runLfSplitOne(vi, { provider, signal, materials, outline, onUsage
         const user = [
             materials,
             outline,
+            splitSystemPrompt(),
+            ...live,
             '## 本卷任务',
             `把第 ${vi + 1} 卷「${vol.title}」切成章与节点。本卷预算 ${vol.floors} 层楼（各章之和必须等于它）；最多切 ${cap.max} 章${cap.max === 1 ? '——预算只够一章，整卷切成一章、不要硬拆' : `（建议 ${cap.typ} 章左右）`}。卷级文本如下：`,
             vol.text,
             `锚清单：${vol.anchors.map((a, k) => `${k + 1}. ${a.title}${a.point ? `——${a.point}` : ''}`).join('；')}`,
             ...(opinion ? ['## 重切参考意见（只作用于这次切章——章怎么切、节点怎么排参考它；卷文本本身不动）', opinion] : []),
         ].join('\n\n');
-        const result = await lfCall({ system: splitSystemPrompt(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(vi, t.length)) });
+        const result = await lfCall({ system: lfCommonSystem(), user, provider, signal, mult: 3, onUsage, onDelta: onDelta && (t => onDelta(vi, t.length)) });
         let chapters = Array.isArray(result?.chapters) ? result.chapters : [];
         if (!chapters.length) throw new Error('章列表为空');
         // 章预算算术：先保每章不低于一章下限，再重配到卷预算（模型给的总和不作数）；
@@ -941,10 +976,11 @@ export async function runLfVolSplit(vi, { opinion = '', provider, signal, onUsag
     vol.splitError = '';
     persistLf();
     onProgress?.({ settled: 0, total: 1 });
-    const materials = lfMaterialParts().join('\n\n');
+    const { stable, live } = lfStableAndVolatile();
+    const materials = stable.join('\n\n');
     const outline = bookOutlineBlock(st);
     try {
-        await runLfSplitOne(vi, { provider, signal, materials, outline, onUsage, onDelta, opinion });
+        await runLfSplitOne(vi, { provider, signal, materials, outline, live, onUsage, onDelta, opinion });
     } catch (err) {
         if (err?.name === 'AbortError') {
             const v = lfState().volumes[vi];

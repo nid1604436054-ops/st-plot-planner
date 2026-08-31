@@ -269,7 +269,12 @@ export function floorsSignature(chat) {
 // 纯逻辑：两套提示词组装（每次调用自包含；上一轮指导只用于防复读）
 // ---------------------------------------------------------------------------
 
-export function buildUnitPrompt({ cfg, unit, floorsText, worldbook, extra, lastGuidance }) {
+// 两套提示词的块序＝前缀缓存口径（第二十七轮）：监听每轮都跑、提示词前缀跨轮复用是监听成本的
+// 大头。稳定块（说明/单位全文/角色摘要/判定规则/输出契约）全部前置——楼层每轮在末尾追加、
+// 排楼层后面的块每轮都要按未命中重计价；节点状态（推进时才变）放在楼层前面，推进轮不再整发全价；
+// 每轮都变的块（上一轮指导/检索命中/附加材料）垫底。角色摘要与世界书检索拆开发：前者稳定
+// （跟角色卡走）、后者按最近楼层重扫逐轮变，混在一段会把稳定的也拖下水
+export function buildUnitPrompt({ cfg, unit, floorsText, charSummary = '', loreHits = '', extra, lastGuidance }) {
     const strict = STRICTNESS_LEVELS[cfg.strictness] ?? STRICTNESS_LEVELS.standard;
     const inter = INTERVENE_UNIT[cfg.intervene] ?? INTERVENE_UNIT.medium;
     const node = unit.nodes[Math.min(unit.nodeIdx, unit.nodes.length - 1)];
@@ -282,33 +287,18 @@ export function buildUnitPrompt({ cfg, unit, floorsText, worldbook, extra, lastG
             '【剧情单位说明】',
             '- 「最小剧情单位」＝当前正在执行的规划文本，内含若干「节点」；每个节点带可逐条对照的完成标准。',
             `- 「楼层」＝一条角色回复（用户消息不计楼层）。一层楼的有效剧情推进约 ${cfg.progressMin}-${cfg.progressMax} 字，按区间综合衡量，不做逐字换算。`,
-            `- 当前待判节点：${node.title}——完成标准：${node.criterion}${node.text ? `\n  节点内容：${node.text}` : ''}`,
-            `- 下一节点标题（只知名、不知戏）：${next}——只用于把握收尾方向，严禁把下一节点的具体内容编进指导。`,
-            `- 本章已点亮节点：${lit}——不得再指导模型重复演绎这些节点的内容。`,
             '',
             '【材料】',
             '<当前剧情单位全文>',
             String(unit.text ?? ''),
             '</当前剧情单位全文>',
             '',
-            '<剧情上下文（当前聊天全部未隐藏楼层，带楼层号）>',
-            floorsText,
-            '</剧情上下文>',
-            '',
-            '<出场角色世界书>',
-            worldbook,
-            '</出场角色世界书>',
-            '',
-            '<上一轮指导（仅供避免复读，不是模板）>',
-            last,
-            '</上一轮指导>',
-            '',
-            '<附加材料（如有）>',
-            extra,
-            '</附加材料>',
+            '<出场角色设定摘要>',
+            charSummary || '（无角色卡）',
+            '</出场角色设定摘要>',
             '',
             '【判定任务】',
-            '对「当前待判节点」给出三态之一：',
+            '对「当前待判节点」（见下方【当前节点状态】）给出三态之一：',
             '- achieved：本轮角色的连贯动作已偏向该节点的完成标准（口径：偏向即达成，不要求做到十足）；',
             '- not_yet：尚未达成——剧情仍在朝它走、或本轮存在有效对话、或属刻意慢节奏；',
             `- stuck：卡死——连续约 ${cfg.stuckWindow} 轮既无节点推进也无有效对话，且能排除刻意慢节奏与脱离角色的元对话。`,
@@ -343,11 +333,32 @@ export function buildUnitPrompt({ cfg, unit, floorsText, worldbook, extra, lastG
             '}',
             '说明：evidence 至少 1 条、不设上限；guidance 在卡死或按介入档决定静默时整段留空（goal 与 action_hint 均空字符串）并在 no_guidance_reason 写明原因。',
             '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
+            '',
+            '【当前节点状态】（判定的对照对象）',
+            `- 当前待判节点：${node.title}——完成标准：${node.criterion}${node.text ? `\n  节点内容：${node.text}` : ''}`,
+            `- 下一节点标题（只知名、不知戏）：${next}——只用于把握收尾方向，严禁把下一节点的具体内容编进指导。`,
+            `- 本章已点亮节点：${lit}——不得再指导模型重复演绎这些节点的内容。`,
+            '',
+            '<剧情上下文（当前聊天全部未隐藏楼层，带楼层号；新楼层追加在本节末尾）>',
+            floorsText,
+            '</剧情上下文>',
+            '',
+            '<上一轮指导（仅供避免复读，不是模板）>',
+            last,
+            '</上一轮指导>',
+            '',
+            '<世界书检索命中（按最近楼层重扫，逐轮可能变化）>',
+            loreHits || '（无）',
+            '</世界书检索命中>',
+            '',
+            '<附加材料（如有）>',
+            extra,
+            '</附加材料>',
         ].join('\n') },
     ];
 }
 
-export function buildLightPrompt({ cfg, floorsText, worldbook, extra, lastGuidance }) {
+export function buildLightPrompt({ cfg, floorsText, charSummary = '', loreHits = '', extra, lastGuidance }) {
     const inter = INTERVENE_LIGHT[cfg.intervene] ?? INTERVENE_LIGHT.medium;
     const last = String(lastGuidance ?? '').trim() || '（无——本轮是第一轮）';
     return [
@@ -356,23 +367,6 @@ export function buildLightPrompt({ cfg, floorsText, worldbook, extra, lastGuidan
             '【说明】',
             '- 「楼层」＝一条角色回复（用户消息不计楼层）。',
             '- 修正指导只影响扮演模型下一轮的写法，不改变既有人设、事实与关系。',
-            '',
-            '【材料】',
-            '<剧情上下文（当前聊天全部未隐藏楼层，带楼层号）>',
-            floorsText,
-            '</剧情上下文>',
-            '',
-            '<出场角色世界书>',
-            worldbook,
-            '</出场角色世界书>',
-            '',
-            '<上一轮修正指导（仅供避免复读，不是模板）>',
-            last,
-            '</上一轮修正指导>',
-            '',
-            '<附加材料（如有）>',
-            extra,
-            '</附加材料>',
             '',
             '【检查任务】（三项，判定基准与 1.0 剧情检查一致）',
             '1. OOC——只判角色（char）自身的问题：用户（user）在对话里明确指示、纠正或要求改变走向时（包括括号指令与作者式安排），角色照做不算 OOC，用户指示优先于人设与既有走向；只有用户没有指示、角色自行脱离人设/事实/关系/世界观时才判，evidence 引用具体楼层号与原文。',
@@ -396,6 +390,27 @@ export function buildLightPrompt({ cfg, floorsText, worldbook, extra, lastGuidan
             '  "no_guidance_reason": "不发指导时的原因；发了则留空字符串"',
             '}',
             '说明：字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
+            '',
+            '【材料】',
+            '<出场角色设定摘要>',
+            charSummary || '（无角色卡）',
+            '</出场角色设定摘要>',
+            '',
+            '<剧情上下文（当前聊天全部未隐藏楼层，带楼层号；新楼层追加在本节末尾）>',
+            floorsText,
+            '</剧情上下文>',
+            '',
+            '<上一轮修正指导（仅供避免复读，不是模板）>',
+            last,
+            '</上一轮修正指导>',
+            '',
+            '<世界书检索命中（按最近楼层重扫，逐轮可能变化）>',
+            loreHits || '（无）',
+            '</世界书检索命中>',
+            '',
+            '<附加材料（如有）>',
+            extra,
+            '</附加材料>',
         ].join('\n') },
     ];
 }
@@ -656,15 +671,17 @@ function modeOf(state) {
     return 'light';   // 无单位，或单位已演完等手动接续
 }
 
-// 组装材料（世界书/记忆共用 1.0 取数口径：检索参数全局共用，将来要分做减法）
-function assembleWorldbook(floorsText) {
+// 组装材料（世界书/记忆共用 1.0 取数口径：检索参数全局共用，将来要分做减法）。
+// 第二十七轮拆两半：角色摘要稳定（跟角色卡走）、检索命中按最近楼层重扫逐轮变——
+// 混在一段会把稳定的也拖进每轮重计价，拆开后各归各位（前者进提示词稳定段、后者垫底）
+function assembleCharSummary() {
+    return characterSummary() || '（无角色卡）';
+}
+
+function assembleLoreHits(floorsText) {
     const cfg = listenerCfg();
-    const parts = ['## 角色设定摘要', characterSummary() || '（无角色卡）'];
-    if (cfg.withLorebook) {
-        const hits = scanLorebooks(floorsText);
-        parts.push('## 世界书检索命中', buildLoreContext(hits));
-    }
-    return parts.join('\n\n');
+    if (!cfg.withLorebook) return '';
+    return buildLoreContext(scanLorebooks(floorsText));
 }
 
 function assembleExtra() {
@@ -724,20 +741,25 @@ export async function runListenerRound({ manual = false } = {}) {
 
     try {
         let messages;
+        const floorsText = formatFloors(floors);
+        const charSummary = assembleCharSummary();
+        const loreHits = assembleLoreHits(floorsText);
         if (mode === 'unit') {
             messages = buildUnitPrompt({
                 cfg,
                 unit: state.unit,
-                floorsText: formatFloors(floors),
-                worldbook: assembleWorldbook(formatFloors(floors)),
+                floorsText,
+                charSummary,
+                loreHits,
                 extra: assembleExtra(),
                 lastGuidance: state.lastGuidance,
             });
         } else {
             messages = buildLightPrompt({
                 cfg,
-                floorsText: formatFloors(floors),
-                worldbook: assembleWorldbook(formatFloors(floors)),
+                floorsText,
+                charSummary,
+                loreHits,
                 extra: assembleExtra(),
                 lastGuidance: state.lastGuidance,
             });
