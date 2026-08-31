@@ -1728,6 +1728,25 @@
     opacity: 0.85;
 }
 
+/* 卷卡纵向堆叠（第二十一轮真机修复——「竖排/框挤成竖条」真根因）：
+   .pp-item 是「左标题右按钮」的横向 space-between 列表行；卷卡借了这张皮但内容是
+   复杂块，凡没带 flex:1 1 100% 基准的子块（编辑骨架表单、编辑卷文本框、概要/种子框）
+   都不换行，被 space-between 甩到卡片右侧与按钮行并排，框宽塌到内在宽度（约 250px
+   的窄竖条）。改纵向堆叠后所有子块天然占满整行，后续往卷卡里加块也不再踩这坑。 */
+.pp-drawer .pp-lf-vol {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+}
+
+/* 卷卡标题行横排（与知识库行同款）：第 X 卷 · 名字 ｜ N 层楼 ｜ N 锚 一行看完 */
+.pp-drawer .pp-lf-vol .pp-item-main {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+}
+
 /* 卷文本 / 章文本展开区：原文预览，限高滚动 */
 .pp-drawer .pp-lf-text {
     flex: 1 1 100%;
