@@ -361,9 +361,9 @@ function volCardHtml(v, i, st) {
         ${budgetStale ? `<div class="pp-muted pp-lf-err">⚠ 章预算合计 ${chSum} 层 ≠ 本卷现预算 ${v.floors} 层（楼数改过）——重跑「再切小」重配章预算</div>` : ''}
         ${v.detailState === 'done' && v.skAt && v.skAt > v.textAt ? `<div class="pp-muted">⚠ 概要/种子在卷文本定稿后改过——卷文本没跟着动，需要就修订或重跑具体化</div>` : ''}
         <div class="pp-item-ops">
-            ${!skEditing ? `<span class="menu_button" data-vsk="${i}" title="就地修改本卷的卷名/楼数/概要/种子，或删除本卷。楼数改了：楼层总数跟着各卷之和走；切过章的卷要重跑「再切小」">编辑骨架</span>` : ''}
-            ${v.detailState === 'done' && !editing ? `<span class="menu_button" data-vol="${i}">${open ? '收起文本' : '卷文本'}</span>` : ''}
-            ${v.detailState === 'done' && !editing ? `<span class="menu_button" data-vedit="${i}" title="就地手改卷文本（改完记得重跑「再切小」——章表按旧文本切的会过期）">编辑卷文本</span>` : ''}
+            <span class="menu_button" data-vsk="${i}" title="就地修改本卷的卷名/楼数/概要/种子，或删除本卷。楼数改了：楼层总数跟着各卷之和走；切过章的卷要重跑「再切小」；再点一下收起">编辑骨架</span>
+            ${v.detailState === 'done' ? `<span class="menu_button" data-vol="${i}" title="看本卷的卷级文本；再点一下收起">${open ? '收起文本' : '卷文本'}</span>` : ''}
+            ${v.detailState === 'done' ? `<span class="menu_button" data-vedit="${i}" title="就地手改卷文本（改完记得重跑「再切小」——章表按旧文本切的会过期）；再点一下收起">编辑卷文本</span>` : ''}
         </div>
         ${open ? `<div class="pp-lf-text">${escapeHtml(v.text)}</div>` : ''}
         ${editing ? `
@@ -378,24 +378,61 @@ function volCardHtml(v, i, st) {
     </div>`;
 }
 
-// 取消编辑卷文本：内容没动一键收起；改过内容两步确认（4 秒回退）防手滑丢字
-function cancelVeEdit(container, i, btn) {
-    const s = lfState();
-    const v = s.volumes[i];
+// 卷文本编辑框脏检查：改过没保存＝true（收起/切换前问一道，防静默丢字）
+function veDirty(container, i) {
+    const v = lfState().volumes[i];
     const ta = container.querySelector(`[data-vetext="${i}"]`);
-    const dirty = !!(v && ta && ta.value !== v.text);
-    if (dirty && !veArmVol.has(i)) {
+    return !!(v && ta && ta.value !== v.text);
+}
+
+// 骨架编辑表单脏检查（同上：卷名/楼数/概要/种子任一改过＝true）
+function skDirty(container, i) {
+    const v = lfState().volumes[i];
+    const t = container.querySelector(`[data-vsktitle="${i}"]`);
+    if (!v || !t) return false;
+    const floors = Math.round(Number(container.querySelector(`[data-vskfloors="${i}"]`)?.value));
+    const summary = container.querySelector(`[data-vsksum="${i}"]`)?.value ?? '';
+    const seeds = container.querySelector(`[data-vskseeds="${i}"]`)?.value ?? '';
+    return t.value !== v.title || floors !== v.floors || summary !== v.summary || seeds !== v.seeds;
+}
+
+// 取消编辑卷文本：内容没动一键收起；改过内容两步确认（4 秒回退）防手滑丢字。
+// Armed 的视觉变化固定落在「取消」按钮上——不管这次是从哪颗按钮触发的收起
+function cancelVeEdit(container, i) {
+    if (veDirty(container, i) && !veArmVol.has(i)) {
         veArmVol.add(i);
-        if (btn) { btn.textContent = '确认放弃？'; btn.classList.add('pp-danger-arm'); }
+        const b = container.querySelector(`[data-vecancel="${i}"]`);
+        if (b) { b.textContent = '确认放弃？'; b.classList.add('pp-danger-arm'); }
         setTimeout(() => {
             veArmVol.delete(i);
-            const b = container.querySelector(`[data-vecancel="${i}"]`);
-            if (b) { b.textContent = '取消'; b.classList.remove('pp-danger-arm'); }
+            const b2 = container.querySelector(`[data-vecancel="${i}"]`);
+            if (b2) { b2.textContent = '取消'; b2.classList.remove('pp-danger-arm'); }
         }, 4000);
         return;
     }
     veArmVol.delete(i);
     expanded.delete(`ve${i}`);
+    renderTab(container);
+}
+
+// 卷卡三个展开块（v 只读预览 / ve 卷文本编辑 / sk 骨架编辑）互斥切换（第二十三轮：
+// 用户点名「这几个文本不能叠在一起」）——同一时间最多开一个，开新的先收旧的；
+// 已开着的键再点一下＝收起（ve 的收起走 cancelVeEdit 的脏检查两步）；
+// 切去别块时正开着的编辑块有没保存的改动先拦一道，干净状态才切，防丢字
+function toggleVolSection(container, i, key) {
+    if (expanded.has(key)) {
+        if (key === `ve${i}`) return cancelVeEdit(container, i);
+        expanded.delete(key);
+        return renderTab(container);
+    }
+    if (expanded.has(`ve${i}`) && veDirty(container, i))
+        return toastr.warning('卷文本编辑里有没保存的改动——先点「保存卷文本」或「取消」');
+    if (expanded.has(`sk${i}`) && skDirty(container, i))
+        return toastr.warning('骨架编辑里有没保存的改动——先点「保存」或「取消」');
+    expanded.delete(`v${i}`);
+    expanded.delete(`ve${i}`);
+    expanded.delete(`sk${i}`);
+    expanded.add(key);
     renderTab(container);
 }
 
@@ -639,8 +676,16 @@ function bindTab(container, st) {
         lfBusy = { kind: 'revise', ctl: new AbortController() };
         renderTab(container);
         try {
-            await runLfRevise({ opinion, provider: providerFromId(providerId), signal: lfBusy.ctl.signal, onUsage: u.onUsage, onDelta: len => setBusyNote(`已收 ${len.toLocaleString()} 字`) });
-            toastr.success(`全书已按意见修订（章表若已生成会标过期）；${u.line()}`);
+            const r = await runLfRevise({ opinion, provider: providerFromId(providerId), signal: lfBusy.ctl.signal, onUsage: u.onUsage, onDelta: len => setBusyNote(`已收 ${len.toLocaleString()} 字`) });
+            if (!r.updated) {
+                const why = r.keptNoText ? `有 ${r.keptNoText} 卷没给正文（可能被输出上限截断）、其余原样带回` : '全部卷都被原样带回';
+                toastr.warning(`一处都没改成：${why}——重试一次，或把意见写具体些；${u.line()}`);
+            } else {
+                const bits = [`已按意见改了 ${r.updated} 卷（章表若已生成会标过期）`];
+                if (r.unchanged) bits.push(`${r.unchanged} 卷原样带出——没被意见点名的卷属正常`);
+                if (r.keptNoText) bits.push(`${r.keptNoText} 卷没给正文、保留原文`);
+                toastr.success(`${bits.join('；')}；${u.line()}`);
+            }
         } catch (err) {
             if (err?.name !== 'AbortError') toastr.error(`修订失败：${err?.message ?? err}`);
             markErr(err);
@@ -689,11 +734,11 @@ function bindTab(container, st) {
     wireExec(container);
 }
 
-// 卷卡按钮统一接线（骨架编辑/卷文本查看与手改）：批量生成中每卷落定会就地重刷卷卡区，按钮要能重接
+// 卷卡按钮统一接线（骨架编辑/卷文本查看与手改）：批量生成中每卷落定会就地重刷卷卡区，按钮要能重接。
+// 三颗区块按钮全走 toggleVolSection——互斥切换＋再点收起，不许两块文本叠着显示
 function bindVolCards(container) {
     container.querySelectorAll('[data-vsk]').forEach(el => el.addEventListener('click', () => {
-        expanded.add(`sk${el.dataset.vsk}`);
-        renderTab(container);
+        toggleVolSection(container, Number(el.dataset.vsk), `sk${el.dataset.vsk}`);
     }));
     container.querySelectorAll('[data-vskcancel]').forEach(el => el.addEventListener('click', () => {
         expanded.delete(`sk${el.dataset.vskcancel}`);
@@ -702,17 +747,12 @@ function bindVolCards(container) {
     container.querySelectorAll('[data-vsksave]').forEach(el => el.addEventListener('click', () => saveVolSkeleton(container, Number(el.dataset.vsksave))));
     container.querySelectorAll('[data-vdel]').forEach(el => el.addEventListener('click', function () { delVolume(container, Number(el.dataset.vdel), this); }));
     container.querySelectorAll('[data-vol]').forEach(el => el.addEventListener('click', () => {
-        const k = `v${el.dataset.vol}`;
-        expanded.has(k) ? expanded.delete(k) : expanded.add(k);
-        renderTab(container);
+        toggleVolSection(container, Number(el.dataset.vol), `v${el.dataset.vol}`);
     }));
     container.querySelectorAll('[data-vedit]').forEach(el => el.addEventListener('click', () => {
-        // 同一份文本不开两份视图：编辑器一开、只读预览自动收起
-        expanded.add(`ve${el.dataset.vedit}`);
-        expanded.delete(`v${el.dataset.vedit}`);
-        renderTab(container);
+        toggleVolSection(container, Number(el.dataset.vedit), `ve${el.dataset.vedit}`);
     }));
-    container.querySelectorAll('[data-vecancel]').forEach(el => el.addEventListener('click', function () { cancelVeEdit(container, Number(el.dataset.vecancel), this); }));
+    container.querySelectorAll('[data-vecancel]').forEach(el => el.addEventListener('click', () => cancelVeEdit(container, Number(el.dataset.vecancel))));
     container.querySelectorAll('[data-vesave]').forEach(el => el.addEventListener('click', () => {
         const i = Number(el.dataset.vesave);
         const ta = container.querySelector(`[data-vetext="${i}"]`);

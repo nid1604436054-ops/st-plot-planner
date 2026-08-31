@@ -560,23 +560,33 @@ export async function runLfRevise({ opinion = '', provider, signal, onUsage, onD
     if (!list.length) throw new Error('修订输出里没有卷');
     if (list.length !== st.volumes.length) throw new Error(`修订输出卷数 ${list.length} 与现有 ${st.volumes.length} 不一致——已放弃写入，重试或把意见拆小`);
     const st2 = lfState();
+    let updated = 0, unchanged = 0, keptNoText = 0;
     st2.volumes.forEach((v, i) => {
         const r = list[i] ?? {};
         const text = String(r?.text ?? '').trim();
-        if (!text) return;   // 该卷空文本＝模型没给，保留原文（宁缺勿毁）
-        v.title = String(r?.title ?? v.title).slice(0, 120) || v.title;
-        v.text = text;
-        let anchors = Array.isArray(r?.anchors) ? r.anchors.map(a => ({ title: String(a?.title ?? ''), point: String(a?.point ?? '') })) : [];
-        if (anchors.length < LF_MIN_ANCHORS) {
-            const fromText = anchorsFromText(text);
-            if (fromText.length > anchors.length) anchors = fromText;
+        const title = String(r?.title ?? v.title).slice(0, 120) || v.title;
+        if (!text) { keptNoText++; return; }   // 该卷空文本＝模型没给，保留原文（宁缺勿毁）
+        if (text === v.text && title === v.title) { unchanged++; return; }   // 原样带回：不写也不刷 textAt（章表不白标过期）
+        if (title !== v.title) v.title = title;
+        if (text !== v.text) {
+            v.text = text;
+            let anchors = Array.isArray(r?.anchors) ? r.anchors.map(a => ({ title: String(a?.title ?? ''), point: String(a?.point ?? '') })) : [];
+            if (anchors.length < LF_MIN_ANCHORS) {
+                const fromText = anchorsFromText(text);
+                if (fromText.length > anchors.length) anchors = fromText;
+            }
+            if (anchors.length >= LF_MIN_ANCHORS) v.anchors = anchors.map(a => ({ title: a.title || '未命名锚', point: a.point }));
+            v.textAt = Date.now();   // 修订后章表（若有）标过期
         }
-        if (anchors.length >= LF_MIN_ANCHORS) v.anchors = anchors.map(a => ({ title: a.title || '未命名锚', point: a.point }));
-        v.textAt = Date.now();   // 修订后章表（若有）标过期
+        updated++;
     });
     persistLf();
     flushChatData();
-    return st2;
+    // 一卷正文都没拿到＝修订白跑。第二十三轮加的硬校验：此前全空会静默弹「成功」——
+    // 「生成正常但文本没变」的直接来源；现在明确报错，用户才知道要重试而不是误以为改完了
+    if (!updated && !unchanged && keptNoText === st2.volumes.length)
+        throw new Error('修订输出里一卷正文都没有——模型没按格式给全文（可能被输出上限截断），已保留原文不动。重试一次，或把意见拆小分次修订');
+    return { updated, unchanged, keptNoText };
 }
 
 // ⑥ 再切小：逐卷并行（卷→章→节点一步到位）；章预算重配同卷预算：算术插件说了算。
