@@ -10,8 +10,8 @@ import { eventSource, event_types, setExtensionPrompt, extension_prompt_types, e
 import { settings, save, newId } from "./settings.js";
 import { chatCompletion, parseModelJson } from "./api.js";
 import { loadChatData, saveChatData, flushChatData } from "./chatdata.js";
-import { getTavernContext, characterSummary } from "./context.js";
-import { scanLorebooks, buildLoreContext } from "./lorebook.js";
+import { getTavernContext } from "./context.js";
+import { scanLorebooks, buildLoreContext, resolveLorePicks } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
 
 const POSITION_IN_PROMPT = extension_prompt_types?.IN_PROMPT ?? 0;
@@ -61,6 +61,7 @@ export function listenerCfg() {
     c.progressMax ??= 800;
     c.withLorebook ??= true;
     c.withMemory ??= true;
+    c.floorLimit ??= 0;   // 楼层范围（第三十四轮）：0 = 全量（默认）；N > 0 = 只带最近 N 层角色楼
     if (!STRICTNESS_LEVELS[c.strictness]) c.strictness = 'standard';
     if (!INTERVENE_UNIT[c.intervene]) c.intervene = 'medium';
     return c;
@@ -98,12 +99,16 @@ export function listenerState() {
         lastGuidance: '',    // 上一轮指导全文（防复读输入线 + 面板显示）
         guideVoidReason: '', // 非空＝上一轮指导已作废（卸下/换挂/接回/关总开关/切聊天）——注入槽已清、面板改显示作废行；下一轮落账清零
         lastFloorSig: '',    // 最后一轮已分析过的楼层签名（去重：滑动/重生成内容没变不重跑）
+        lorePicks: [],       // 世界书自选勾选键（「bookId:uid」，第三十四轮）：勾中的整条原文固定进每轮判定材料，
+                             // 不设上限、不看关键词/常驻/启用状态；与检索命中自动去重（自选优先）。存监听自己的
+                             // 聊天块——与向导第 1 步 / 长线页的勾选各管各的（先例：长线勾选存 longform 块）
         dot: false,          // 红点旗标（有问题未看；打开监听页签即清除）
         dotReason: '',       // 红点问题的一句话描述
     }));
     state.unit = normalizeUnit(state.unit);
     state.sidelined = normalizeUnit(state.sidelined);
     if (!Array.isArray(state.trace)) state.trace = [];
+    if (!Array.isArray(state.lorePicks)) state.lorePicks = [];   // 旧聊天块没有该字段（第三十四轮新增）
     return state;
 }
 
@@ -289,12 +294,15 @@ export function floorsSignature(chat) {
 // 纯逻辑：两套提示词组装（每次调用自包含；上一轮指导只用于防复读）
 // ---------------------------------------------------------------------------
 
-// 两套提示词的块序＝前缀缓存口径（第二十七轮）：监听每轮都跑、提示词前缀跨轮复用是监听成本的
-// 大头。稳定块（说明/单位全文/角色摘要/判定规则/输出契约）全部前置——楼层每轮在末尾追加、
-// 排楼层后面的块每轮都要按未命中重计价；节点状态（推进时才变）放在楼层前面，推进轮不再整发全价；
-// 每轮都变的块（上一轮指导/检索命中/附加材料）垫底。角色摘要与世界书检索拆开发：前者稳定
-// （跟角色卡走）、后者按最近楼层重扫逐轮变，混在一段会把稳定的也拖下水
-export function buildUnitPrompt({ cfg, unit, floorsText, charSummary = '', loreHits = '', extra, lastGuidance }) {
+// 两套提示词的块序＝前缀缓存口径（第二十七轮立、第三十四轮重申）：监听每轮都跑、提示词前缀跨轮
+// 复用是监听成本的大头。稳定块（说明/单位全文/世界书自选/判定规则/输出契约）全部前置；节点状态
+// （推进时才变）放在楼层前面，推进轮不再整发全价；楼层这个最大的块放在「每轮都整个重写的小块」
+// （上一轮指导/检索命中/附加材料）之前——楼层的旧内容每轮都能吃缓存、只有新尾巴按未命中计价；
+// 若把楼层挪到这些小块后面绝对垫底，指导一换整段楼层全按未命中重算，缓存反而吃不满（用户要求
+// 「楼层落在最后面、缓存吃满」，落法＝大块材料里楼层最后、其后只留逐轮重写的小块）。
+// 世界书拆两半发（第三十四轮）：自选条目跟勾选走、整条不截断、进稳定段；检索命中按最近楼层重扫
+// 逐轮变，照旧垫底——同一条两边都有时自选优先，检索里让位
+export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsNote, loreHits = '', extra, lastGuidance }) {
     const strict = STRICTNESS_LEVELS[cfg.strictness] ?? STRICTNESS_LEVELS.standard;
     const inter = INTERVENE_UNIT[cfg.intervene] ?? INTERVENE_UNIT.medium;
     const node = unit.nodes[Math.min(unit.nodeIdx, unit.nodes.length - 1)];
@@ -313,9 +321,9 @@ export function buildUnitPrompt({ cfg, unit, floorsText, charSummary = '', loreH
             String(unit.text ?? ''),
             '</当前剧情单位全文>',
             '',
-            '<出场角色设定摘要>',
-            charSummary || '（无角色卡）',
-            '</出场角色设定摘要>',
+            '<世界书自选条目（用户点名常驻材料；整条原文、不截断）>',
+            picksText || '（未勾选——角色设定等对照材料以本块勾选为准，没有就按单位全文与楼层判定）',
+            '</世界书自选条目>',
             '',
             '【判定任务】',
             '对「当前待判节点」（见下方【当前节点状态】）给出三态之一：',
@@ -359,7 +367,7 @@ export function buildUnitPrompt({ cfg, unit, floorsText, charSummary = '', loreH
             `- 下一节点标题（只知名、不知戏）：${next}——只用于把握收尾方向，严禁把下一节点的具体内容编进指导。`,
             `- 本章已点亮节点：${lit}——不得再指导模型重复演绎这些节点的内容。`,
             '',
-            '<剧情上下文（当前聊天全部未隐藏楼层，带楼层号；新楼层追加在本节末尾）>',
+            `<剧情上下文（${floorsNote ?? '当前聊天全部未隐藏楼层'}，带楼层号；新楼层追加在本节末尾）>`,
             floorsText,
             '</剧情上下文>',
             '',
@@ -367,7 +375,7 @@ export function buildUnitPrompt({ cfg, unit, floorsText, charSummary = '', loreH
             last,
             '</上一轮指导>',
             '',
-            '<世界书检索命中（按最近楼层重扫，逐轮可能变化）>',
+            '<世界书检索命中（按最近楼层重扫，逐轮可能变化；与上方自选条目自动去重）>',
             loreHits || '（无）',
             '</世界书检索命中>',
             '',
@@ -378,7 +386,7 @@ export function buildUnitPrompt({ cfg, unit, floorsText, charSummary = '', loreH
     ];
 }
 
-export function buildLightPrompt({ cfg, floorsText, charSummary = '', loreHits = '', extra, lastGuidance }) {
+export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, loreHits = '', extra, lastGuidance }) {
     const inter = INTERVENE_LIGHT[cfg.intervene] ?? INTERVENE_LIGHT.medium;
     const last = String(lastGuidance ?? '').trim() || '（无——本轮是第一轮）';
     return [
@@ -412,11 +420,11 @@ export function buildLightPrompt({ cfg, floorsText, charSummary = '', loreHits =
             '说明：字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
             '',
             '【材料】',
-            '<出场角色设定摘要>',
-            charSummary || '（无角色卡）',
-            '</出场角色设定摘要>',
+            '<世界书自选条目（用户点名常驻材料；整条原文、不截断）>',
+            picksText || '（未勾选——没有点名材料就按楼层原文直接检查）',
+            '</世界书自选条目>',
             '',
-            '<剧情上下文（当前聊天全部未隐藏楼层，带楼层号；新楼层追加在本节末尾）>',
+            `<剧情上下文（${floorsNote ?? '当前聊天全部未隐藏楼层'}，带楼层号；新楼层追加在本节末尾）>`,
             floorsText,
             '</剧情上下文>',
             '',
@@ -424,7 +432,7 @@ export function buildLightPrompt({ cfg, floorsText, charSummary = '', loreHits =
             last,
             '</上一轮修正指导>',
             '',
-            '<世界书检索命中（按最近楼层重扫，逐轮可能变化）>',
+            '<世界书检索命中（按最近楼层重扫，逐轮可能变化；与上方自选条目自动去重）>',
             loreHits || '（无）',
             '</世界书检索命中>',
             '',
@@ -439,10 +447,10 @@ export function buildLightPrompt({ cfg, floorsText, charSummary = '', loreHits =
 // 纯逻辑：回归判定（第三十三轮）——重挂有进度的长线章时补一次对账报告
 // ---------------------------------------------------------------------------
 
-// 材料只多不少（与例行判定同一套：全楼层＋角色摘要＋世界书＋记忆表），窗口＝五章规划轨迹。
+// 材料与例行判定同一套（全/限楼层＋世界书自选＋检索命中＋记忆表），窗口＝五章规划轨迹。
 // 只出报告不出指导：后两章的规划在窗口里，任何「指导」都可能把后续剧情漏进扮演模型——回归判定
 // 的产物给用户看，注入槽一概不碰（旧作废标记也留着，等下一轮例行判定重新生成指导）
-export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, charSummary = '', loreHits = '', extra }) {
+export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, picksText = '', floorsNote, loreHits = '', extra }) {
     const lit = unit.nodeIdx;
     return [
         { role: 'system', content: '你是剧情监听器，在一场正在进行的长篇角色扮演里执勤。这一次是「回归判定」：当前这章规划此前执行到一半被卸下、期间剧情继续演了；现在它重新挂载，你对照规划补一份判定报告，回答两件事——剧情走到哪了、偏没偏。你不与任何人对话，你的全部输出是一个 JSON 对象。' },
@@ -456,9 +464,9 @@ export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, 
             windowText,
             '</五章规划窗口>',
             '',
-            '<出场角色设定摘要>',
-            charSummary || '（无角色卡）',
-            '</出场角色设定摘要>',
+            '<世界书自选条目（用户点名常驻材料；整条原文、不截断）>',
+            picksText || '（未勾选——没有点名材料就按窗口与楼层判定）',
+            '</世界书自选条目>',
             '',
             '【任务一：走到哪了】',
             '对照「当前挂载章」的节点表（见窗口内），按聊天实际重新核对全部节点：',
@@ -483,11 +491,11 @@ export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, 
             '}',
             '说明：progress 的 evidence 至少 1 条、不设上限；字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
             '',
-            '<剧情上下文（当前聊天全部未隐藏楼层，带楼层号）>',
+            `<剧情上下文（${floorsNote ?? '当前聊天全部未隐藏楼层'}，带楼层号）>`,
             floorsText,
             '</剧情上下文>',
             '',
-            '<世界书检索命中（按最近楼层重扫）>',
+            '<世界书检索命中（按最近楼层重扫；与上方自选条目自动去重）>',
             loreHits || '（无）',
             '</世界书检索命中>',
             '',
@@ -828,21 +836,34 @@ function modeOf(state) {
     return 'light';   // 无单位，或单位已演完等手动接续
 }
 
-// 组装材料（世界书/记忆共用 1.0 取数口径：检索参数全局共用，将来要分做减法）。
-// 第二十七轮拆两半：角色摘要稳定（跟角色卡走）、检索命中按最近楼层重扫逐轮变——
-// 混在一段会把稳定的也拖进每轮重计价，拆开后各归各位（前者进提示词稳定段、后者垫底）
-// 第三十三轮：上限 800 → 20000——判定要拿角色卡对照（OOC 判罚、事实一致性都靠它），
-// 800 字连一张卡都装不下等于半瞎；2 万字够装绝大多数整卡，仍在稳定前缀段（前缀缓存吃得住）
-function assembleCharSummary() {
-    return characterSummary(20_000) || '（无角色卡）';
+// 世界书自选（第三十四轮用户拍板：角色资料都在世界书里、撤掉角色卡摘要这条独立材料线）：
+// 勾选键存监听聊天块，复用第七轮 §6.10 的 resolveLorePicks——勾选即点名，不看关键词/常驻/
+// 启用状态，整条原文不截断（十人卡体量两万字级，任何上限都是卡边）。稳定材料排进提示词前部
+// 吃前缀缓存；返回 keys 给检索让位用（自选优先，同一条不进材料两次）
+function assembleLorePicks(state) {
+    const picks = resolveLorePicks(state.lorePicks);
+    if (!picks.length) return { text: '', count: 0, chars: 0, keys: null };
+    const text = picks.map(p => `【${p.book.name} / ${p.entry.comment ?? `条目 ${p.entry.uid + 1}`}】\n${p.entry.content}`).join('\n\n');
+    return { text, count: picks.length, chars: text.length, keys: new Set(picks.map(p => p.key)) };
 }
 
-// 世界书命中拆成 {text, count}：text 进提示词、count 进材料清单（第三十三轮材料透明化）
-function assembleLore(floorsText) {
+// 世界书命中拆成 {text, count}：text 进提示词、count 进材料清单（第三十三轮材料透明化）；
+// excludeKeys＝自选条目键集，命中里让位防同一条进材料两次（第三十四轮）
+function assembleLore(floorsText, excludeKeys = null) {
     const cfg = listenerCfg();
     if (!cfg.withLorebook) return { text: '', count: null };
-    const hits = scanLorebooks(floorsText);
+    const hits = scanLorebooks(floorsText, excludeKeys ? { excludeKeys } : undefined);
     return { text: buildLoreContext(hits), count: hits.length };
+}
+
+// 楼层范围（第三十四轮）：limit > 0 时只带最近 limit 层角色楼——其间夹的用户消息一并保留
+// （拦腰砍会丢上下文），楼层号仍是全聊天绝对号（判定引证不受影响）。返回原数组或尾段切片
+export function limitFloors(list, limit) {
+    if (!Number.isFinite(limit) || limit <= 0) return list;
+    const charIdx = [];
+    (Array.isArray(list) ? list : []).forEach((m, i) => { if (m && !m.isUser) charIdx.push(i); });
+    if (charIdx.length <= limit) return list;
+    return list.slice(charIdx[charIdx.length - limit]);
 }
 
 function assembleExtra() {
@@ -891,7 +912,7 @@ export async function runListenerRound({ manual = false } = {}) {
     const mode = modeOf(state);
     const roundOwnerId = state.unit?.id ?? null;   // 本轮的主人：判完时单位槽若已换人（挂/卸/接回），产物整体作废
     const floorSig = floorsSignature(chat);
-    const floors = collectFloorsFromChat(chat);
+    const floors = limitFloors(collectFloorsFromChat(chat), Number(cfg.floorLimit) || 0);   // 楼层范围（第三十四轮）：成功与失败留痕同一个口径
     const round = state.round + 1;
     const at = Date.now();
     const tokens = { promptTokens: 0, completionTokens: 0 };
@@ -904,15 +925,17 @@ export async function runListenerRound({ manual = false } = {}) {
     try {
         let messages;
         const floorsText = formatFloors(floors);
-        const charSummary = assembleCharSummary();
-        const lore = assembleLore(floorsText);
+        const floorsNote = cfg.floorLimit > 0 ? `最近 ${cfg.floorLimit} 层角色楼（楼层号为全聊天绝对号）` : undefined;
+        const picks = assembleLorePicks(state);
+        const lore = assembleLore(floorsText, picks.keys);
         const extra = assembleExtra();
         if (mode === 'unit') {
             messages = buildUnitPrompt({
                 cfg,
                 unit: state.unit,
                 floorsText,
-                charSummary,
+                floorsNote,
+                picksText: picks.text,
                 loreHits: lore.text,
                 extra,
                 lastGuidance: state.lastGuidance,
@@ -921,7 +944,8 @@ export async function runListenerRound({ manual = false } = {}) {
             messages = buildLightPrompt({
                 cfg,
                 floorsText,
-                charSummary,
+                floorsNote,
+                picksText: picks.text,
                 loreHits: lore.text,
                 extra,
                 lastGuidance: state.lastGuidance,
@@ -934,8 +958,10 @@ export async function runListenerRound({ manual = false } = {}) {
             ...(state.unit
                 ? { unitChars: String(state.unit.text ?? '').length, nodeIdx: state.unit.nodeIdx, nodesTotal: state.unit.nodes.length }
                 : { light: true }),
-            charChars: charSummary.length,
+            lorePicks: picks.count,
+            picksChars: picks.chars,
             floors: nums.length ? { first: nums[0], last: nums[nums.length - 1], count: nums.length } : null,
+            floorsLimited: cfg.floorLimit > 0,
             loreHits: lore.count,
             memory: Boolean(cfg.withMemory && extra && extra !== '（无）'),
         };
@@ -1030,17 +1056,19 @@ export async function runReentryRound({ window: win, unitId } = {}) {
     const { provider } = listenerProvider();
 
     try {
-        const floors = collectFloorsFromChat(chat);
+        const floors = limitFloors(collectFloorsFromChat(chat), Number(cfg.floorLimit) || 0);
         const floorsText = formatFloors(floors);
-        const charSummary = assembleCharSummary();
-        const lore = assembleLore(floorsText);
+        const floorsNote = cfg.floorLimit > 0 ? `最近 ${cfg.floorLimit} 层角色楼（楼层号为全聊天绝对号）` : undefined;
+        const picks = assembleLorePicks(state);
+        const lore = assembleLore(floorsText, picks.keys);
         const extra = assembleExtra();
         const messages = buildReentryPrompt({
             unit: state.unit,
             windowLabel: win.label,
             windowText: win.text,
             floorsText,
-            charSummary,
+            floorsNote,
+            picksText: picks.text,
             loreHits: lore.text,
             extra,
         });
@@ -1051,8 +1079,10 @@ export async function runReentryRound({ window: win, unitId } = {}) {
             windowChars: String(win.text ?? '').length,
             nodeIdx: state.unit.nodeIdx,
             nodesTotal: state.unit.nodes.length,
-            charChars: charSummary.length,
+            lorePicks: picks.count,
+            picksChars: picks.chars,
             floors: nums.length ? { first: nums[0], last: nums[nums.length - 1], count: nums.length } : null,
+            floorsLimited: cfg.floorLimit > 0,
             loreHits: lore.count,
             memory: Boolean(cfg.withMemory && extra && extra !== '（无）'),
         };

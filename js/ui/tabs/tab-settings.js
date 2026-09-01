@@ -146,9 +146,11 @@ export const settingsTab = {
                         <input id="pp_set_ls_pmax" class="text_pole textarea_compact" type="number" min="100" step="50" />
                     </div>
                 </div>
+                <label class="pp-label" title="楼层范围（第三十四轮）：判定携带的楼层原文。0 = 全量（默认，判定引证最全）；N = 只带最近 N 层角色楼（其间夹的用户消息保留、楼层号仍是全聊天绝对号）——长对话省钱用，砍太狠可能伤「走到哪」判得准不准，自己权衡">监听楼层数</label>
+                <input id="pp_set_ls_floors" class="text_pole textarea_compact" type="number" min="0" step="5" />
                 <div class="pp-grid2">
                     <div>
-                        <label class="pp-label" title="附加材料：判定时附带世界书检索命中（共用上面的检索口径）">附带世界书</label>
+                        <label class="pp-label" title="附加材料：判定时附带世界书检索命中（按最近楼层重扫、共用上面的检索口径）；与监听页「世界书自选」自动去重——同一条两边都有时自选优先、只进一次">附带世界书检索</label>
                         <input id="pp_set_ls_lore" type="checkbox" />
                     </div>
                     <div>
@@ -290,6 +292,7 @@ export const settingsTab = {
         bindNum('#pp_set_ls_depth', () => ls.depth, v => ls.depth = Math.max(0, v));
         bindNum('#pp_set_ls_pmin', () => ls.progressMin, v => ls.progressMin = Math.max(50, v));
         bindNum('#pp_set_ls_pmax', () => ls.progressMax, v => ls.progressMax = Math.max(ls.progressMin + 50, v));
+        bindNum('#pp_set_ls_floors', () => ls.floorLimit ?? 0, v => { ls.floorLimit = Math.max(0, Math.floor(v || 0)); });
         const lsLore = container.querySelector('#pp_set_ls_lore');
         lsLore.checked = ls.withLorebook !== false;
         lsLore.addEventListener('change', () => { ls.withLorebook = lsLore.checked; save(); });

@@ -4,6 +4,7 @@
 import { settings, save } from "../../settings.js";
 import { escapeHtml, clamp } from "../../utils.js";
 import { storyState } from "../../story.js";
+import { resolveLorePicks } from "../../lorebook.js";
 // 监听槽一动就对一次长线账本（listener.js 不能反向引 longform.js——longform 已经引了监听，只能在界面层搭桥）
 import { syncLfProgress, scheduleReentryFor } from "../../longform.js";
 import {
@@ -20,17 +21,17 @@ const SOURCE_BADGE = { manual: '手动导入', plan10: '剧情规划导入', lon
 // 回归判定的偏离三档（第三十三轮）：措辞给用户看，不照搬模型内部词
 const DEV_LABEL = { on_track: '没偏——剧情仍在规划轨迹上', minor: '偏了，但能自然拉回', major: '⚠ 偏大了——继续演会损坏后续章节的安排' };
 
-// 材料清单一行（第三十三轮透明化）：留痕里的 materials 小账拼成大白话
+// 材料清单一行（第三十三轮透明化、第三十四轮改世界书自选）：留痕里的 materials 小账拼成大白话
 function materialsLine(m) {
     if (!m) return '';
     const parts = [];
     if (m.window) parts.push(`五章窗口 ${m.window}（${Number(m.windowChars || 0).toLocaleString()} 字）`);
     else parts.push(m.light ? '轻量检查（无单位）' : `单位全文 ${Number(m.unitChars || 0).toLocaleString()} 字`);
     if (!m.light) parts.push(`节点 ${m.nodeIdx ?? 0}/${m.nodesTotal ?? 0}`);
-    parts.push(`角色摘要 ${Number(m.charChars || 0).toLocaleString()} 字${Number(m.charChars || 0) >= 19_950 ? '（近上限，可能截断）' : ''}`);
-    if (m.floors) parts.push(`楼层 ${m.floors.first}-${m.floors.last}（${m.floors.count} 层）`);
+    parts.push(Number(m.lorePicks) > 0 ? `世界书自选 ${m.lorePicks} 条（${Number(m.picksChars || 0).toLocaleString()} 字）` : '世界书自选 未勾');
+    if (m.floors) parts.push(`楼层 ${m.floors.first}-${m.floors.last}（${m.floors.count} 层${m.floorsLimited ? ' · 限最近范围' : ''}）`);
     else parts.push('楼层 无');
-    parts.push(m.loreHits == null ? '世界书 关' : `世界书命中 ${m.loreHits} 条`);
+    parts.push(m.loreHits == null ? '世界书检索 关' : `世界书命中 ${m.loreHits} 条`);
     parts.push(m.memory ? '记忆表 已带' : '记忆表 关');
     return parts.join(' · ');
 }
@@ -203,6 +204,7 @@ function renderTab(container) {
     <div class="pp-section">
         <b>本轮指导</b>
         <span class="pp-muted" title="注入槽里当前生效的指导全文（微量指导或轻量修正指导）；静默轮显示静默原因">（第 ${state.round} 轮）</span>
+        <span id="pp_ls_lore" class="menu_button" title="勾选世界书条目固定进每轮判定材料：整条原文、不截断、不看关键词/常驻/启用状态；与每轮重扫的「检索命中」自动去重（这边优先）。只管监听，与「剧情指导」第 1 步、长线页的勾选互不影响；无冷却">世界书自选（已勾 ${resolveLorePicks(state.lorePicks).length} 条）</span>
         <span id="pp_ls_prompt" class="menu_button" title="查看最近一次判定（例行轮或回归判定）实际发给监听模型的提示词全文——只保留最近一次、刷新页面后清空（全文随楼层膨胀，不进聊天存档）">看提示词全文</span>
         ${rec?.materials ? `<div class="pp-muted" title="本次判定实际喂给监听模型的材料清单">材料：${escapeHtml(materialsLine(rec.materials))}</div>` : ''}
         ${state.guideVoidReason ? `
@@ -396,6 +398,119 @@ function bindTab(container) {
         traceWinOpen = true;
         openTraceWindow();
     });
+
+    container.querySelector('#pp_ls_lore')?.addEventListener('click', () => openLorePickWindow());
+}
+
+// ---------------------------------------------------------------------------
+// 世界书自选悬浮窗（第三十四轮）：勾选存监听自己的聊天块——与向导第 1 步 / 长线页互不影响。
+// 交互照长线页同款：按书折叠、搜索、整书全勾/全清
+// ---------------------------------------------------------------------------
+
+function openLorePickWindow() {
+    let query = '';
+    const foldState = new Map();
+    let win = document.getElementById('pp_ls_lorewin');
+    if (win) { win.remove(); }
+    win = document.createElement('div');
+    win.id = 'pp_ls_lorewin';
+    win.className = 'pp-ls-float';
+    document.body.appendChild(win);
+    const isFolded = (book, searching) => (foldState.has(book.id) ? foldState.get(book.id) : !searching);
+    const syncBtn = () => {
+        const btn = document.getElementById('pp_ls_lore');
+        if (btn) btn.textContent = `世界书自选（已勾 ${resolveLorePicks(listenerState().lorePicks).length} 条）`;
+    };
+
+    const render = () => {
+        const books = settings.lorebooks ?? [];
+        const sel = new Set(listenerState().lorePicks);
+        if (!books.length) {
+            win.innerHTML = `
+            <div class="pp-ls-float-head"><b>世界书自选 · 监听</b><span id="pp_ls_lore_close" class="menu_button fa-solid fa-xmark" title="关闭"></span></div>
+            <div class="pp-ls-float-body"><div class="pp-muted">还没有世界书——在「世界书」页签导入或新建后再来</div></div>`;
+            win.querySelector('#pp_ls_lore_close').addEventListener('click', () => win.remove());
+            return;
+        }
+        const q = query.trim().toLowerCase();
+        const searching = Boolean(q);
+        const groupHtml = books.map(book => {
+            const entries = (book.entries ?? []).filter(e => !q
+                || String(e.comment ?? '').toLowerCase().includes(q)
+                || String(e.content ?? '').toLowerCase().includes(q)
+                || (Array.isArray(e.keys) ? e.keys : []).some(k => String(k).toLowerCase().includes(q)));
+            if (!entries.length) return '';
+            const onN = entries.filter(e => sel.has(`${book.id}:${e.uid}`)).length;
+            const allOn = entries.length > 0 && onN === entries.length;
+            const folded = isFolded(book, searching);
+            return `
+        <div class="pp-gd-ughead">
+            <label class="pp-label" title="整本书一起勾/一起清（已勾＝全勾；再点＝全清）"><input type="checkbox" data-lbook="${escapeHtml(book.id)}" ${allOn ? 'checked' : ''} /> ${escapeHtml(book.name)}（已勾 ${onN}/${entries.length}）</label>
+            <span class="menu_button" data-lfold="${escapeHtml(book.id)}"><i class="fa-solid fa-chevron-${folded ? 'right' : 'down'}"></i> ${folded ? '展开' : '收起'}</span>
+        </div>
+        ${folded ? '' : entries.map(e => {
+            const key = `${book.id}:${e.uid}`;
+            const on = sel.has(key);
+            return `
+        <div class="pp-kb-erow${on ? '' : ' pp-kb-unsel'}">
+            <label title="勾上＝这条的原文整条固定进每轮判定材料（不截断）"><input type="checkbox" data-lore="${escapeHtml(key)}" ${on ? 'checked' : ''} /></label>
+            <span class="pp-kb-ebody" title="${escapeHtml(String(e.content ?? ''))}">${escapeHtml(String(e.comment ?? `条目 ${e.uid + 1}`))}</span>
+        </div>`; }).join('')}`;
+        }).join('');
+
+        win.innerHTML = `
+        <div class="pp-ls-float-head">
+            <b>世界书自选 · 监听</b>
+            <span class="pp-muted">勾上＝整条原文固定进每轮判定材料</span>
+            <span id="pp_ls_lore_close" class="menu_button fa-solid fa-xmark" title="关闭"></span>
+        </div>
+        <div class="pp-ls-float-body">
+        <input type="text" class="text_pole textarea_compact" id="pp_ls_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动勾选；检索时命中的书自动展开…" value="${escapeHtml(query)}" style="width:100%" />
+        ${groupHtml || '<div class="pp-muted">没有命中检索词的条目，清空检索词看全部</div>'}
+        <div class="pp-muted" style="margin-top:6px">勾上＝整条原文固定进每轮判定材料（例行判定与回归判定都带、不截断）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与每轮重扫的「检索命中」自动去重（这边优先）。只管监听，与「剧情指导」第 1 步、长线页互不影响；无冷却</div>
+        </div>`;
+
+        win.querySelector('#pp_ls_lore_close').addEventListener('click', () => win.remove());
+        const qEl = win.querySelector('#pp_ls_lore_q');
+        qEl?.addEventListener('input', () => {
+            query = qEl.value;
+            render();
+            const nq = win.querySelector('#pp_ls_lore_q');
+            nq?.focus();
+            nq?.setSelectionRange(nq.value.length, nq.value.length);
+        });
+        const apply = keys => {
+            const s = listenerState();
+            s.lorePicks = [...keys];
+            persistListener();
+            render();
+            syncBtn();
+        };
+        win.querySelectorAll('[data-lore]').forEach(cb => cb.addEventListener('change', () => {
+            const s = new Set(listenerState().lorePicks);
+            if (cb.checked) s.add(cb.dataset.lore); else s.delete(cb.dataset.lore);
+            apply(s);
+        }));
+        win.querySelectorAll('[data-lbook]').forEach(cb => cb.addEventListener('change', () => {
+            const s = new Set(listenerState().lorePicks);
+            const book = (settings.lorebooks ?? []).find(b => b.id === cb.dataset.lbook);
+            if (!book) return;
+            for (const e of (book.entries ?? []).filter(e => e.content)) {
+                const k = `${book.id}:${e.uid}`;
+                if (cb.checked) s.add(k); else s.delete(k);
+            }
+            apply(s);
+        }));
+        win.querySelectorAll('[data-lfold]').forEach(el => el.addEventListener('click', () => {
+            const id = el.dataset.lfold;
+            const book = (settings.lorebooks ?? []).find(b => b.id === id);
+            if (!book) return;
+            const q2 = query.trim().toLowerCase();
+            foldState.set(id, !isFolded(book, Boolean(q2)));
+            render();
+        }));
+    };
+    render();
 }
 
 // ---------------------------------------------------------------------------

@@ -861,8 +861,9 @@
 }
 
 /* 知识库条目行（§6.9）：紧凑一行一条——编号 + 内容 + 徽章/操作，内容超出省略。
-   双作用域：知识库页签在抽屉里、抓取面板在查看器里（§13 铁则 5：查看器不吃抽屉规则） */
-.pp-drawer .pp-kb-erow, .pp-viewer .pp-kb-erow {
+   三作用域：知识库页签在抽屉里、抓取面板在查看器里（§13 铁则 5：查看器不吃抽屉规则）、
+   监听页世界书自选悬浮窗（第三十四轮） */
+.pp-drawer .pp-kb-erow, .pp-viewer .pp-kb-erow, .pp-ls-float .pp-kb-erow {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -947,9 +948,10 @@
 }
 
 /* 抓取面板「自选」方式下未勾选行灰显（采用方式二选一：全部采用＝整把发送让模型挑、自选＝勾谁发谁——2026-08-30 真机反馈第四轮定形；未勾＝留在面板不随材料发送）。
-   双作用域：知识库页签在抽屉里、抓取面板在查看器里 */
+   三作用域：知识库页签在抽屉里、抓取面板在查看器里、监听页世界书自选悬浮窗（第三十四轮） */
 .pp-drawer .pp-kb-erow.pp-kb-unsel,
-.pp-viewer .pp-kb-erow.pp-kb-unsel {
+.pp-viewer .pp-kb-erow.pp-kb-unsel,
+.pp-ls-float .pp-kb-erow.pp-kb-unsel {
     opacity: 0.5;
 }
 
