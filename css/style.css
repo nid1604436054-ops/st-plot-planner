@@ -129,9 +129,12 @@
 /* 按钮文字横排铁则（多次返工的坑，全局一次治死）：插件内按钮一律不许折行、不许被
    flex 挤窄——挤窄后文字会一个字一行竖着排；容器放不下靠容器自己的 wrap 换行解决。
    width:auto 对冲酒馆 .menu_button 的 width:min-content（中文没空格时它按单字算）。
+   作用域跟着容器走：除抽屉/查看器外，凡挂 body 的悬浮窗必须把自己的作用域类补进来
+   （铁则 5 的坑以按钮形态复发——2026-09-01 世界书自选悬浮窗「展开/收起」竖排教训）。
    例外 .pp-option：它是「选项名 + 幕后提示」靠换行排布的两行结构（规则放后面同权重胜出） */
 .pp-drawer .menu_button,
-.pp-viewer .menu_button {
+.pp-viewer .menu_button,
+.pp-ls-float .menu_button {
     width: auto;
     white-space: nowrap;
     flex-shrink: 0;
