@@ -115,7 +115,7 @@ function renderTab(container) {
             ${stuckShown ? `<div>卡死：连续多轮无节点推进也无有效对话。出路：换指导方式（手动改单位/换单位）、点下面「标记达成」跳过该节点，或继续观察。</div>` : ''}
             ${!rec?.ok && rec ? `<div>最近一轮失败：${escapeHtml(rec.error ?? '')}</div>` : ''}
             ${state.dotReason ? `<div class="pp-muted">${escapeHtml(state.dotReason)}</div>` : ''}
-            ${rec?.guidance ? `<div class="pp-ls-problem-advice">指导建议：${escapeHtml(clamp(rec.guidance, 160))}</div>` : ''}
+            ${rec?.guidance && !state.guideVoidReason ? `<div class="pp-ls-problem-advice">指导建议：${escapeHtml(clamp(rec.guidance, 160))}</div>` : ''}
         </div>` : ''}
     </div>
 
@@ -162,7 +162,8 @@ function renderTab(container) {
     <div class="pp-section">
         <b>本轮指导</b>
         <span class="pp-muted" title="注入槽里当前生效的指导全文（微量指导或轻量修正指导）；静默轮显示静默原因">（第 ${state.round} 轮）</span>
-        ${rec && rec.ok && rec.guidance ? `
+        ${state.guideVoidReason ? `
+        <div class="pp-muted">上一轮指导已随「${escapeHtml(state.guideVoidReason)}」作废：注入槽已清空、下一轮不再注入；等新一轮判定重新生成。</div>` : rec && rec.ok && rec.guidance ? `
         <div class="pp-ls-guidance">${escapeHtml(rec.guidance)}</div>` : rec && rec.ok ? `
         ${rec.mode === 'light' ? `<div class="pp-muted">${escapeHtml(lightChecksLine(rec.findings))}</div>` : ''}
         <div class="pp-muted">本轮静默：${escapeHtml(rec.noGuidanceReason || '未给原因')}</div>` : `

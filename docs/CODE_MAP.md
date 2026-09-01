@@ -39,7 +39,7 @@
 | 文件 | 行数 | 职责 | 关键导出 |
 |---|---|---|---|
 | planner.js | ~680 | 规划分析（两遍调用编排）/检查报告/联网研究/规划系统提示词 | runPlotGuidance、runStoryReview、buildGuidanceMessages、guidanceSystemPrompt、alignTailPrompt |
-| listener.js | ~950 | 2.0 监听引擎：单位/轻量双模式、两套提示词（块序＝前缀缓存口径：稳定段前置、节点状态与楼层垫底，第二十七轮）、判定落账、排队闸、宿主接线、挂载规则（第三十一轮：同 id 再挂不造重复副本——退位槽旧副本作废、活动槽就地换新） | runListenerRound、initListener、listenerProvider、buildUnitPrompt、buildLightPrompt、createSendGate |
+| listener.js | ~1020 | 2.0 监听引擎：单位/轻量双模式、两套提示词（块序＝前缀缓存口径：稳定段前置、节点状态与楼层垫底，第二十七轮）、判定落账、排队闸、宿主接线、挂载规则（第三十一轮：同 id 再挂不造重复副本——退位槽旧副本作废、活动槽就地换新）、**指导随主人作废制**（第三十二轮：换主人的挂/卸/接回成功即清注入槽＋立 guideVoidReason 作废标记，关总开关/切聊天补标，三轮落账自动解除；判定在途换主人＝整轮作废不落账——runListenerRound 开头记 roundOwnerId、判完对不上就丢） | runListenerRound、initListener、listenerProvider、buildUnitPrompt、buildLightPrompt、createSendGate |
 | knowledge.js | ~430 | 知识库数据层：清单/条目/轮换抓取/发送集裁决/冷却/长草稿分批导入 | kbSendPayload、grabFromList、knowledgeSection、structureImport、settleCooldown |
 | longform.js | ~1160 | 2.0 长线规划：chatdata longform 块（书-卷-章-节点＋进度账＋材料勾选 mats＋重新生成备份 regenBackup）、提示词两层（**lfCommonSystem 全管线公共头**：换算锚/硬约束组/JSON 元规则字节级不变＋七份任务提示词只留各步要求与 schema 排在材料后，第二十七轮前缀缓存改；口径：卷文本禁台词与一笔带过〔情节一件不少、加详细＝多排事件〕、章文本展开式重写禁照抄、【节点 N】内嵌挂钩＋判据从段正文提炼反空话）、六步编排＋单卷档（runLfVolSkeletonRevise/runLfVolTextRevise/runLfVolSplit）、**runLfRevise 整书卷文本修订＝逐卷执行**（第二十八轮：一次调用整书全文重出必撞输出上限〔maxTokens 1500×3=4500 vs 五卷 8000+ 字→截断→修复梯子两遍钱、捞回原样/缺正文一处不写＝页面不动〕；每次调用带全部卷当前文本＋整书意见、只重出点名卷，bookReviseVolSystemPrompt 分卷契约；逐卷落袋、失败进 failed 不连坐）、**runLfChapterRevise 整书章层修订**（第三十轮「按意见修订所有章」：对已切章的卷逐卷带整书意见重切——同 R28 经济学；settleSplitResult 章产物校验共用〔批量/单卷/整书三处同源〕；失败卷标 error 仍可重试）、**进度账对账制**（第三十一轮：syncLfProgress 三分支——活动长线章写回并跟随执行位/退位槽冻结进度抢救落账/不在岗清执行位，监听页卸下/丢弃/顶掉后长线页不再假显示「执行中」）、批量步先焐热再并行（warmFirstAllSettled）、材料拆稳定/会变区（lfStableAndVolatile）、数量建议三纯函数（卷数/锚密度＝每章 1-2 个/章上限随预算）、nodesFromText 节点行兜底解析 | lfState、lfCommonSystem、runLfSkeleton、runLfDetailBatch、runLfRevise、runLfSplitBatch、runLfSkeletonRevise、runLfVolSkeletonRevise、runLfVolTextRevise、runLfVolSplit、runLfChapterRevise、stashLfRegenBackup、mountChapter、syncLfProgress、rescaleFloors、nodesFromText、lfMaterialParts、lfStableAndVolatile、lfVolumeRange、lfAnchorTarget、lfChapterCap |
 | randomEvents.js | ~310 | M3 随机事件三层（维度/条目/掷骰管线）＋三路生成 | 各生成入口 |
@@ -59,7 +59,7 @@
 | ui/tabs/tab-events.js | ~500 | 事件库设置＋AI 建库两折叠区 |
 | ui/tabs/tab-worldbook.js | ~460 | 世界书页（导入/启停/条目编辑/检索测试/回收站） |
 | ui/tabs/tab-knowledge.js | ~450 | 知识库页（清单管理/结构化导入/冷却徽章） |
-| ui/tabs/tab-listener.js | ~400 | 监听页（状态条/当前单位/本轮指导/旋钮/留痕悬浮窗；第三十一轮：单位槽六操作成功后就地重渲染＋与长线账本对账〔syncLfProgress 界面层搭桥——listener.js 不能反向引 longform〕、退位槽行独立于单位块——卸下后也够得着接回/丢弃） |
+| ui/tabs/tab-listener.js | ~395 | 监听页（状态条/当前单位/本轮指导/旋钮/留痕悬浮窗；第三十一轮：单位槽六操作成功后就地重渲染＋与长线账本对账〔syncLfProgress 界面层搭桥——listener.js 不能反向引 longform〕、退位槽行独立于单位块——卸下后也够得着接回/丢弃；第三十二轮：本轮指导区作废行优先显示〔guideVoidReason 非空＝旧指导已随挂/卸/接回/关停/切聊天作废〕、红点区「指导建议」行同步设闸） |
 | ui/tabs/tab-longform.js | ~1390 | 长线规划页（第二十四轮重构；第二十五轮操作条挪到参数/材料折叠区下面、卷列表上面：参数/材料折叠＋卷列表三页签〔骨架/卷文本/章与节点〕＋执行区瘦身；**第三十轮操作条改阶段驱动**——第一步只有生成骨架、之后恒三颗〔从零开始/按意见修订X/下一步〕、继续具体化/继续切章降为半拉子恢复位〔有卷没跑完才出现、跑完自动消失〕、意见框三目标 revKind〔骨架/所有卷/所有章〕；修订下沉每步——整书骨架/卷文本（逐卷）/章（逐卷重切）、单卷×骨架/卷文本/带意见重切、章文本手改；busy 横幅带模型·用时·思考字数＋静默表针「已 N 秒无新内容」；页顶报错留痕在每次开工（startBusy）清掉、整书修订部分失败也留痕带原因〔第二十九轮〕；重新生成带备份恢复；世界书自选悬浮面板也在这） |
 | ui/tabs/tab-storage.js | ~330 | 游戏玩法工具区（条目库＋就地编辑） |
 
@@ -86,7 +86,7 @@
 | 计费/usage | planner.runPlotGuidance 的 usage 合并＋api 的 onUsage | 两遍合并实报；中断/掐断的口径要如实 |
 | 冷却/轮换 | knowledge.js（settleCooldown/grabFromList） | 结算只在确认采用/转注入；轮换两层防重复与冷却互不替代 |
 | 长线管线/章挂载/长线材料 | longform.js 对应分区＋tab-longform | 楼层算术（rescaleFloors/validateVolumes）全在本地、模型给的数只作参考；卷/章预算改了必须过校验；进度账在 longform 块、监听槽只是执行位（syncLfProgress 对账制：在岗写回/退位槽抢救落账/不在岗清执行位——第三十一轮）；换算锚与监听共用 settings.listener.progressMin/Max；材料勾选在 longform 块的 mats（长线自备、不读 1.0 的 picks）；知识库整表随行不结冷却（冷却账只属向导确认采用流） |
-| 监听判定/指导 | listener.js 对应分区 | 发调恒 thinkingOff:true；失败路径绝不挂死发送（排队闸兜底） |
+| 监听判定/指导 | listener.js 对应分区 | 发调恒 thinkingOff:true；失败路径绝不挂死发送（排队闸兜底）；指导跟着单位槽的主人走——换主人（挂/卸/接回）即作废：注入槽清空、面板作废行，判完再对不上 roundOwnerId 整轮丢弃（第三十二轮） |
 | 加设置项 | settings.js 的 DEFAULTS＋ensureDefaults＋tab-settings.js | 三处一起动；老安装迁移靠 ensureDefaults 补键 |
 | 注入相关 | injection.js＋index.js 事件 | setExtensionPrompt 只准在 injection.js / store.js / listener.js 三处出现 |
 | 思考关闭/参数方言 | api.js 的 thinkingOffParams＋重试梯子 | 用户环境＝DeepSeek 官方（DESIGN §6.5）；新增方言加在 thinkingOffParams |
@@ -107,4 +107,4 @@
 - **酒馆页面跑旧 JS**：真机复验前 Ctrl+F5 强刷。
 - **展开字符串字面量**：`...(cond ? 'a' : 'b')` 会按字符拆散，必须 `['...']` 包数组。
 - **cmd 环境**：无 ls/rm/head/grep；`;` 不是命令分隔符（用 &&）；rg 正则里的 `|` 会被 shell 当管道（拆多个 -e）；rg 中文经管道输出会 GBK 乱码；node --import 必须 file:///C:/... 带盘符冒号。
-- **离线测试台**：%TEMP%\pp-re-test（第十六轮重建的精简台，第十八轮 61 项、第十九轮扩至 72 项、第二十轮扩至 87 项、第二十四轮 104 项、第二十五轮 113 项、第二十六轮 121 项、第二十七轮 136 项、第二十八轮 146 项、第二十九轮 149 项、第三十轮 166 项、第三十一轮 180 项——改动 js 后记得把工作区文件拷进测试台再跑，测试台 import 的是自己的副本；jsonResponse 桩的 text 字段返回真 JSON 正文——非流式路径读 text 再本地 parse，桩与真实 Response 对齐）；%TEMP% 会被系统清理——重要断言随轮次记进交付记录，丢了照记录重建（搭法在记忆 offline-testbed-technique）。
+- **离线测试台**：%TEMP%\pp-re-test（第十六轮重建的精简台，第十八轮 61 项、第十九轮扩至 72 项、第二十轮扩至 87 项、第二十四轮 104 项、第二十五轮 113 项、第二十六轮 121 项、第二十七轮 136 项、第二十八轮 146 项、第二十九轮 149 项、第三十轮 166 项、第三十一轮 180 项、第三十二轮 199 项——改动 js 后记得把工作区文件拷进测试台再跑，测试台 import 的是自己的副本；jsonResponse 桩的 text 字段返回真 JSON 正文——非流式路径读 text 再本地 parse，桩与真实 Response 对齐；setExtensionPrompt 替身全量留痕进 globalThis.__slotWrites、document 替身带 dispatchEvent〔第三十二轮起断言注入槽用〕）；%TEMP% 会被系统清理——重要断言随轮次记进交付记录，丢了照记录重建（搭法在记忆 offline-testbed-technique）。

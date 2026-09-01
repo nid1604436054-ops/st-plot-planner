@@ -96,6 +96,7 @@ export function listenerState() {
         failStreak: 0,       // 连续失败计数（L2 失联用）
         paused: false,       // L2 失联后暂停，等用户在面板恢复
         lastGuidance: '',    // 上一轮指导全文（防复读输入线 + 面板显示）
+        guideVoidReason: '', // 非空＝上一轮指导已作废（卸下/换挂/接回/关总开关/切聊天）——注入槽已清、面板改显示作废行；下一轮落账清零
         lastFloorSig: '',    // 最后一轮已分析过的楼层签名（去重：滑动/重生成内容没变不重跑）
         dot: false,          // 红点旗标（有问题未看；打开监听页签即清除）
         dotReason: '',       // 红点问题的一句话描述
@@ -183,6 +184,13 @@ export function makeUnitFromStory(entry) {
     });
 }
 
+// 指导作废（第三十二轮）：单位槽换主人／监听关停／切聊天时调用——
+// 旧指导是为主人变动前的下一轮写的，留着会照样注入、照样挂在面板上；作废后下一轮判定重新生成
+function voidGuidance(state, reason) {
+    state.lastGuidance = '';   // 防复读输入线一并断掉：旧措辞对新单位/新模式没有参照意义（同失败轮口径）
+    state.guideVoidReason = String(reason ?? '').slice(0, 60) || '单位变动';
+}
+
 // 挂载的唯一规则（判断点 14 提案：被顶下来的单位进退位槽，进度账不动）：
 // 槽里已有单位且退位槽也占着 → 拒绝挂载（先去面板接回或丢弃），不让数据静默蒸发
 export function mountUnit(state, unit) {
@@ -193,6 +201,7 @@ export function mountUnit(state, unit) {
     if (state.unit && state.unit.id === unit.id) {
         state.unit = unit;
         state.lastFloorSig = '';
+        voidGuidance(state, '重挂同一单位');   // 文本可能改过：旧指导按过期处理
         return { ok: true };
     }
     if (state.unit && state.sidelined) {
@@ -203,6 +212,7 @@ export function mountUnit(state, unit) {
     }
     state.unit = unit;
     state.lastFloorSig = '';   // 新单位立即按当前楼层重判一轮
+    voidGuidance(state, '挂载新单位');
     return { ok: true };
 }
 
@@ -218,6 +228,7 @@ export function recallSidelined(state) {
         state.sidelined = null;
     }
     state.lastFloorSig = '';
+    voidGuidance(state, '接回退位单位');
     return { ok: true };
 }
 
@@ -227,6 +238,7 @@ export function unmountUnit(state) {
     if (state.sidelined) return { ok: false, reason: '退位槽已有单位：先「接回」或「丢弃」它' };
     state.sidelined = state.unit;
     state.unit = null;
+    voidGuidance(state, '卸下单位');   // 卸下后按轻量口径执勤：单位指导绝不留到下一轮注入
     return { ok: true };
 }
 
@@ -514,6 +526,7 @@ export function applyUnitOutcome(state, report, meta) {
     }
     state.round = meta.round;
     state.lastGuidance = meta.guidance;
+    state.guideVoidReason = '';   // 新一轮落账：作废标记解除（哪怕本轮静默，静默状态也是新轮的）
     state.failStreak = 0;
     state.lastFloorSig = meta.floorSig;
     const rec = {
@@ -547,6 +560,7 @@ export function applyUnitOutcome(state, report, meta) {
 export function applyLightOutcome(state, report, meta) {
     state.round = meta.round;
     state.lastGuidance = meta.guidance;
+    state.guideVoidReason = '';   // 新一轮落账：作废标记解除
     state.failStreak = 0;
     state.lastFloorSig = meta.floorSig;
     const rec = {
@@ -584,6 +598,7 @@ export function applyFailure(state, meta) {
     state.failStreak += 1;
     state.lastFloorSig = '';   // 失败轮不锁签名：下一事件还允许重试同一楼
     state.lastGuidance = '';   // 绝不复用过期指导：失败即清空输入线
+    state.guideVoidReason = '';   // 失败轮有自己的显示口径（留痕 ok:false），不吃作废行
     const rec = {
         at: meta.at,
         round: meta.round,
@@ -736,6 +751,7 @@ export async function runListenerRound({ manual = false } = {}) {
     holdToastShown = false;
 
     const mode = modeOf(state);
+    const roundOwnerId = state.unit?.id ?? null;   // 本轮的主人：判完时单位槽若已换人（挂/卸/接回），产物整体作废
     const floorSig = floorsSignature(chat);
     const floors = collectFloorsFromChat(chat);
     const round = state.round + 1;
@@ -778,6 +794,13 @@ export async function runListenerRound({ manual = false } = {}) {
             call: req => listenerAttempt(req.messages, provider, req.onUsage ?? onUsage),
             onUsage,
         });
+
+        // 判定期间单位槽换了主人（第三十二轮竞态收口）：判定与指导都是给旧主人写的——
+        // 不写注入槽（换人操作已清槽）、不落账、不点亮、不清作废标记，这轮就当没发生
+        if ((listenerState().unit?.id ?? null) !== roundOwnerId) {
+            if (manual) toastr.info('本轮判定作废：判定期间单位槽变了（挂载／卸下／接回），等下一轮重判');
+            return { ok: true, mode, round, voided: true };
+        }
 
         if (mode === 'unit') {
             const report = normalizeUnitJudgment(parsed.result);
@@ -887,11 +910,15 @@ export function initListener() {
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
         // 换聊天：丢掉扣住的发送（点了会发进新聊天）、清注入槽（旧聊天的指导不外溢），
-        // listenerState() 随 chatdata 按聊天身份自动切换，红点按新聊天状态重算
+        // listenerState() 随 chatdata 按聊天身份自动切换，红点按新聊天状态重算；
+        // 槽清了显示也得认账——回本聊天时旧指导不再算「注入槽里生效」（第三十二轮）
         gate?.abort();
         clearListenerSlot();
+        const st = listenerState();
+        voidGuidance(st, '切换聊天');
+        persistListener();
         clearTimeout(analyzeTimer);
-        updateWandDot(listenerState());
+        updateWandDot(st);
         notifyPanel();
     });
 
@@ -922,7 +949,10 @@ export function setListenerEnabled(on) {
     if (!on) {
         clearListenerSlot();
         gate?.abort();
-        updateWandDot(listenerState());
+        const state = listenerState();
+        voidGuidance(state, '监听已关闭');   // 关停时槽已清：面板不能再把旧指导显示成「生效中」
+        persistListener();
+        updateWandDot(state);
     }
     notifyPanel();
 }
@@ -939,11 +969,13 @@ export function manualLitCurrentNode() {
     return true;
 }
 
-// 挂载/卸下/接回/丢弃的操作出口（面板调用；带持久化与失败提示）
+// 挂载/卸下/接回/丢弃的操作出口（面板调用；带持久化与失败提示）。
+// 换主人的三个操作（挂/卸/接回）同步清注入槽：旧指导是给旧主人写的，不清就会注入进下一轮生成
 export function opMountUnit(unit) {
     const state = listenerState();
     const r = mountUnit(state, unit);
     if (r.ok) {
+        clearListenerSlot();
         persistListener();
         flushChatData();
     }
@@ -953,14 +985,20 @@ export function opMountUnit(unit) {
 export function opUnmountUnit() {
     const state = listenerState();
     const r = unmountUnit(state);
-    if (r.ok) persistListener();
+    if (r.ok) {
+        clearListenerSlot();
+        persistListener();
+    }
     return r;
 }
 
 export function opRecallSidelined() {
     const state = listenerState();
     const r = recallSidelined(state);
-    if (r.ok) persistListener();
+    if (r.ok) {
+        clearListenerSlot();
+        persistListener();
+    }
     return r;
 }
 
