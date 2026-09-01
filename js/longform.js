@@ -9,7 +9,7 @@ import { loadChatData, saveChatData, flushChatData } from "./chatdata.js";
 import { chatCompletion, parseModelJson } from "./api.js";
 import { materialSections } from "./materials.js";
 import { storyState, activeStory } from "./story.js";
-import { listenerState, opMountUnit } from "./listener.js";
+import { listenerState, opMountUnit, runReentryRound } from "./listener.js";
 import { storageItemsInEffect } from "./store.js";
 import { knowledgeLists, payloadFromIds, entryText } from "./knowledge.js";
 
@@ -1158,8 +1158,47 @@ export function mountChapter(vi, ci) {
         st.mount = { vol: vi, ch: ci, unitId: unit.id, at: Date.now() };
         persistLf();
         flushChatData();
+        // 重挂对账（第三十三轮用户拍板）：这章有进度＝不是首挂，立即跑一次回归判定——
+        // 对照五章规划窗口出「走到哪、偏没偏」的报告（钱照花一次，报告落在监听页）
+        scheduleReentryFor(unit);
     }
     return r;
+}
+
+// 回归判定的五章窗口（第三十三轮用户拍板）：以当前章为中心、卷内前二后二补足五章；
+// 前面不足往后补、后面不足往前补；卷不足五章整卷判——窗口不跨卷（短卷就整卷）
+export function reentryWindow(st, vi, ci) {
+    const vol = st.volumes[vi];
+    const chs = vol?.chapters ?? [];
+    const n = chs.length;
+    if (!n) return null;
+    let start = 0, len = n;
+    if (n > 5) {
+        start = Math.min(Math.max(ci - 2, 0), n - 5);
+        len = 5;
+    }
+    return { start, len, chapters: chs.slice(start, start + len) };
+}
+
+// 备料并开跑回归判定：这里负责从账本拼五章窗口文本（当前章带完整节点表与账面进度标注），
+// 判定循环在 listener.js（longform 引监听、监听不得反向引 longform——界面层搭桥的老规矩在备料处绕开）
+export function scheduleReentryFor(unit) {
+    if (!unit || unit.source !== 'longform' || !unit.lfRef) return null;
+    if (!(unit.nodeIdx > 0)) return null;   // 零进度＝首挂：没有要对账的账，照常等下一轮例行判定
+    const st = lfState();
+    const vol = st.volumes[unit.lfRef.vol];
+    const w = reentryWindow(st, unit.lfRef.vol, unit.lfRef.ch);
+    if (!vol || !w) return null;
+    const label = `《${vol.title}》第${w.start + 1}-${w.start + w.len}章（共${vol.chapters.length}章）`;
+    const text = w.chapters.map((c, i) => {
+        const idx = w.start + i;
+        const cur = idx === unit.lfRef.ch;
+        const nodes = cur
+            ? `\n本章节点表（挂载时账面已点亮前 ${unit.nodeIdx} 个）：\n${(c.nodes ?? []).map((nn, k) => `${k + 1}. ${nn.title}——完成标准：${nn.criterion}${nn.text ? `；内容：${nn.text}` : ''}`).join('\n') || '（无节点）'}`
+            : '';
+        return `【第${idx + 1}章${cur ? '·当前挂载章' : ''}】《${c.title}》${nodes}\n${String(c.text ?? '')}`;
+    }).join('\n\n');
+    return runReentryRound({ window: { label, text }, unitId: unit.id }).catch(() => null);   // 失败已在引擎里留痕上屏，不炸挂载流程
 }
 
 // 接续＝全书顺序里下一章未演完的章（节点衔接只做手动，§6.8；当前章没演完时拒绝并指路）

@@ -1463,6 +1463,43 @@
     word-break: break-word;
 }
 
+/* 回归判定（第三十三轮）：偏离结论着色——偏大了红、可拉回琥珀、没偏不着色 */
+.pp-drawer .pp-ls-dev {
+    margin-top: 6px;
+    font-weight: 600;
+}
+
+.pp-drawer .pp-ls-dev-major {
+    color: #e5484d;
+}
+
+.pp-drawer .pp-ls-dev-minor {
+    color: #d4a94e;
+}
+
+/* 回归判定的总结段：与指导正文同款容器，左边线换灰（是报告不是指导） */
+.pp-drawer .pp-ls-reentry-summary,
+.pp-ls-float .pp-ls-reentry-summary {
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-left: 3px solid var(--SmartThemeBorderColor, #555);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* 「看提示词全文」的正文：只保留最近一次的完整提示词，长文限高滚动 */
+.pp-drawer .pp-ls-prompt {
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    max-height: 420px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.85em;
+    border: 1px dashed var(--SmartThemeBorderColor, #555);
+    border-radius: 6px;
+}
+
 /* 旋钮区：一行横排铺满（宁宽勿挤），控件保持小尺寸 */
 .pp-drawer .pp-ls-knobs {
     display: flex;

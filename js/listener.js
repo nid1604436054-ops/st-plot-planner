@@ -436,6 +436,69 @@ export function buildLightPrompt({ cfg, floorsText, charSummary = '', loreHits =
 }
 
 // ---------------------------------------------------------------------------
+// 纯逻辑：回归判定（第三十三轮）——重挂有进度的长线章时补一次对账报告
+// ---------------------------------------------------------------------------
+
+// 材料只多不少（与例行判定同一套：全楼层＋角色摘要＋世界书＋记忆表），窗口＝五章规划轨迹。
+// 只出报告不出指导：后两章的规划在窗口里，任何「指导」都可能把后续剧情漏进扮演模型——回归判定
+// 的产物给用户看，注入槽一概不碰（旧作废标记也留着，等下一轮例行判定重新生成指导）
+export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, charSummary = '', loreHits = '', extra }) {
+    const lit = unit.nodeIdx;
+    return [
+        { role: 'system', content: '你是剧情监听器，在一场正在进行的长篇角色扮演里执勤。这一次是「回归判定」：当前这章规划此前执行到一半被卸下、期间剧情继续演了；现在它重新挂载，你对照规划补一份判定报告，回答两件事——剧情走到哪了、偏没偏。你不与任何人对话，你的全部输出是一个 JSON 对象。' },
+        { role: 'user', content: [
+            '【说明】',
+            '- 「楼层」＝一条角色回复（用户消息不计楼层）。',
+            '- 「回归判定」只出报告给用户看：不生成给扮演模型的指导、不注入任何内容。',
+            '',
+            '【材料】',
+            `<五章规划窗口（${windowLabel}）>`,
+            windowText,
+            '</五章规划窗口>',
+            '',
+            '<出场角色设定摘要>',
+            charSummary || '（无角色卡）',
+            '</出场角色设定摘要>',
+            '',
+            '【任务一：走到哪了】',
+            '对照「当前挂载章」的节点表（见窗口内），按聊天实际重新核对全部节点：',
+            `- 挂载时账面已点亮前 ${lit} 个节点；请独立重判——实际达成数可能多于账面（卸下期间剧情继续走），也可能持平。`,
+            '- reached＝实际已达成的节点总数（0 到全部）；节点按序推进，报第 K 个达成即默认前 K-1 个也已达成。',
+            '- 「达成」口径与例行判定一致：角色的连贯动作偏向该节点完成标准即算，不要求做到十足；戏中戏/梦境/玩笑里的「假装完成」不算。',
+            '- 你认定为已达成的每个节点至少给一条楼层作证（楼层号＋该楼原文片段）。',
+            '',
+            '【任务二：偏没偏】',
+            '对照五章窗口的规划轨迹（前面的章＝已规划的来路、后面的章＝已规划的去路），判定当前剧情的偏离程度三选一：',
+            '- on_track：没偏——剧情仍在规划轨迹上自然生长；',
+            '- minor：偏了但能自然拉回——走岔的内容可以由后续剧情自然衔接回轨迹；',
+            '- major：偏大了——走岔的内容与规划轨迹冲突，继续演下去会损坏后续章节的安排。',
+            'note 写明偏在哪（对照哪一章哪一段的安排）；至少一条楼层作证；判 on_track 时 note 给一句现状描述、evidence 可为空数组。',
+            '',
+            '【输出】',
+            '只输出一个 JSON 对象，不输出任何其他文字：',
+            '{',
+            '  "progress": { "reached": 数值, "evidence": [{"floor": 楼层号, "quote": "该楼原文片段", "note": "作证哪个节点"}] },',
+            '  "deviation": { "level": "on_track | minor | major", "note": "偏离情况描述", "evidence": [{"floor": 楼层号, "quote": "该楼原文片段", "note": "为什么这段能作证"}] },',
+            '  "summary": "给用户的一段大白话总结（两三句）：走到哪了、偏没偏、要不要处理",',
+            '}',
+            '说明：progress 的 evidence 至少 1 条、不设上限；字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
+            '',
+            '<剧情上下文（当前聊天全部未隐藏楼层，带楼层号）>',
+            floorsText,
+            '</剧情上下文>',
+            '',
+            '<世界书检索命中（按最近楼层重扫）>',
+            loreHits || '（无）',
+            '</世界书检索命中>',
+            '',
+            '<附加材料（如有）>',
+            extra,
+            '</附加材料>',
+        ].join('\n') },
+    ];
+}
+
+// ---------------------------------------------------------------------------
 // 纯逻辑：输出契约规约（模型输出不可信，字段全部收敛到合法形状；违契约抛错走 L1）
 // ---------------------------------------------------------------------------
 
@@ -512,6 +575,36 @@ export function lightShouldIntervene(r, level) {
     return worst > 0;                          // high：与中同——档位差异体现在单位模式的发送频率
 }
 
+// 回归判定契约（第三十三轮）：reached 与 level 是硬字段（错值即违契约，走 L1 重试），
+// 其余字段宽容收敛——报告是给人看的，措辞残缺不致命
+export function normalizeReentryReport(obj, unit) {
+    if (!obj || typeof obj !== 'object') throw new Error('输出不是一个 JSON 对象');
+    const total = unit.nodes.length;
+    const reachedRaw = Number(obj?.progress?.reached);
+    if (!Number.isFinite(reachedRaw) || reachedRaw < 0 || reachedRaw > total) {
+        throw new Error(`progress.reached 非法（合法范围 0-${total}）：「${String(obj?.progress?.reached ?? '').slice(0, 40)}」`);
+    }
+    const level = String(obj?.deviation?.level ?? '').trim();
+    if (!['on_track', 'minor', 'major'].includes(level)) {
+        throw new Error(`deviation.level 非法：「${String(obj?.deviation?.level ?? '').slice(0, 40)}」`);
+    }
+    const evs = arr => (Array.isArray(arr) ? arr : [])
+        .filter(e => e && typeof e === 'object')
+        .map(e => ({
+            floor: Number.isFinite(Number(e.floor)) && Number(e.floor) > 0 ? Math.floor(Number(e.floor)) : null,
+            quote: String(e.quote ?? '').slice(0, 300),
+            note: String(e.note ?? '').slice(0, 300),
+        }));
+    return {
+        reached: Math.round(reachedRaw),
+        progressEvidence: evs(obj?.progress?.evidence),
+        deviationLevel: level,
+        deviationNote: String(obj?.deviation?.note ?? '').slice(0, 300),
+        deviationEvidence: evs(obj?.deviation?.evidence),
+        summary: String(obj?.summary ?? '').slice(0, 400),
+    };
+}
+
 // ---------------------------------------------------------------------------
 // 纯逻辑：判定结果落账（进度账只在这里点亮——监听判定是正路；失败路径绝不碰它）
 // ---------------------------------------------------------------------------
@@ -544,6 +637,7 @@ export function applyUnitOutcome(state, report, meta) {
         noGuidanceReason: report.goal ? '' : report.noGuidanceReason,
         retried: Boolean(meta.retried),
         ...(meta.tokens ? { tokens: meta.tokens } : {}),
+        ...(meta.materials ? { materials: meta.materials } : {}),
     };
     state.trace.unshift(rec);
     // 红点口径：卡死要人拍板、watch 抓到 OOC/假完成值得看一眼
@@ -579,6 +673,7 @@ export function applyLightOutcome(state, report, meta) {
         noGuidanceReason: meta.guidance ? '' : report.noGuidanceReason,
         retried: Boolean(meta.retried),
         ...(meta.tokens ? { tokens: meta.tokens } : {}),
+        ...(meta.materials ? { materials: meta.materials } : {}),
     };
     state.trace.unshift(rec);
     const hasFinding = report.ooc.found || report.plotRepeat.found || report.styleRepeat.level !== '无';
@@ -589,6 +684,39 @@ export function applyLightOutcome(state, report, meta) {
             report.plotRepeat.found ? '剧情重复' : '',
             report.styleRepeat.level !== '无' ? `文风重复（${report.styleRepeat.level}）` : '',
         ].filter(Boolean).join('、')}`;
+    }
+    return rec;
+}
+
+// 回归判定落账（第三十三轮）：不走例行轮的任何一笔——不加轮次、不碰指导线与作废标记、
+// 不清失败计数；节点批量补点亮（只进不退）；偏大了才亮红点（要人拍板的事才打扰）
+export function applyReentryOutcome(state, report, meta) {
+    const before = state.unit?.nodeIdx ?? 0;
+    const applied = Math.max(before, report.reached);
+    if (state.unit) state.unit.nodeIdx = Math.min(applied, state.unit.nodes.length);
+    const rec = {
+        at: meta.at,
+        round: state.round,          // 信息性显示：回归判定不是楼层轮，不推进轮次计数
+        mode: 'reentry',
+        ok: true,
+        reentry: {
+            window: meta.windowLabel,
+            before,
+            reached: report.reached,
+            applied,
+            nodesTotal: state.unit?.nodes.length ?? 0,
+            deviation: report.deviationLevel,
+            deviationNote: report.deviationNote,
+            summary: report.summary,
+            evidence: [...report.progressEvidence, ...report.deviationEvidence].slice(0, 10),
+        },
+        ...(meta.tokens ? { tokens: meta.tokens } : {}),
+        ...(meta.materials ? { materials: meta.materials } : {}),
+    };
+    state.trace.unshift(rec);
+    if (report.deviationLevel === 'major') {
+        state.dot = true;
+        state.dotReason = `回归判定：剧情偏大了——${report.deviationNote.slice(0, 120)}`;
     }
     return rec;
 }
@@ -678,6 +806,12 @@ let running = false;          // 一轮未结束不叠新一轮
 let gate = null;              // 排队闸（initListener 装配）
 let analyzeTimer = null;      // 事件去抖
 let holdToastShown = false;   // 扣发送提示一轮只弹一次
+let lastPromptText = '';      // 最近一次判定（例行轮或回归判定）实际发出的提示词全文——只在内存留最近一份，
+                              // 全文随楼层数线性膨胀，进存档会把聊天文件撑翻倍；面板「看提示词全文」读它
+
+export function lastListenerPrompt() {
+    return lastPromptText;
+}
 
 function writeSlot(text) {
     const cfg = listenerCfg();
@@ -697,14 +831,18 @@ function modeOf(state) {
 // 组装材料（世界书/记忆共用 1.0 取数口径：检索参数全局共用，将来要分做减法）。
 // 第二十七轮拆两半：角色摘要稳定（跟角色卡走）、检索命中按最近楼层重扫逐轮变——
 // 混在一段会把稳定的也拖进每轮重计价，拆开后各归各位（前者进提示词稳定段、后者垫底）
+// 第三十三轮：上限 800 → 20000——判定要拿角色卡对照（OOC 判罚、事实一致性都靠它），
+// 800 字连一张卡都装不下等于半瞎；2 万字够装绝大多数整卡，仍在稳定前缀段（前缀缓存吃得住）
 function assembleCharSummary() {
-    return characterSummary() || '（无角色卡）';
+    return characterSummary(20_000) || '（无角色卡）';
 }
 
-function assembleLoreHits(floorsText) {
+// 世界书命中拆成 {text, count}：text 进提示词、count 进材料清单（第三十三轮材料透明化）
+function assembleLore(floorsText) {
     const cfg = listenerCfg();
-    if (!cfg.withLorebook) return '';
-    return buildLoreContext(scanLorebooks(floorsText));
+    if (!cfg.withLorebook) return { text: '', count: null };
+    const hits = scanLorebooks(floorsText);
+    return { text: buildLoreContext(hits), count: hits.length };
 }
 
 function assembleExtra() {
@@ -767,15 +905,16 @@ export async function runListenerRound({ manual = false } = {}) {
         let messages;
         const floorsText = formatFloors(floors);
         const charSummary = assembleCharSummary();
-        const loreHits = assembleLoreHits(floorsText);
+        const lore = assembleLore(floorsText);
+        const extra = assembleExtra();
         if (mode === 'unit') {
             messages = buildUnitPrompt({
                 cfg,
                 unit: state.unit,
                 floorsText,
                 charSummary,
-                loreHits,
-                extra: assembleExtra(),
+                loreHits: lore.text,
+                extra,
                 lastGuidance: state.lastGuidance,
             });
         } else {
@@ -783,11 +922,23 @@ export async function runListenerRound({ manual = false } = {}) {
                 cfg,
                 floorsText,
                 charSummary,
-                loreHits,
-                extra: assembleExtra(),
+                loreHits: lore.text,
+                extra,
                 lastGuidance: state.lastGuidance,
             });
         }
+        lastPromptText = messages.map(m => `【${m.role}】\n${m.content}`).join('\n\n');
+        // 材料清单（第三十三轮透明化）：本轮实际喂了什么随留痕落一笔小账，核对材料不必翻提示词全文
+        const nums = floors.filter(f => f.floor != null).map(f => f.floor);
+        const materials = {
+            ...(state.unit
+                ? { unitChars: String(state.unit.text ?? '').length, nodeIdx: state.unit.nodeIdx, nodesTotal: state.unit.nodes.length }
+                : { light: true }),
+            charChars: charSummary.length,
+            floors: nums.length ? { first: nums[0], last: nums[nums.length - 1], count: nums.length } : null,
+            loreHits: lore.count,
+            memory: Boolean(cfg.withMemory && extra && extra !== '（无）'),
+        };
         const raw = await listenerAttempt(messages, provider, onUsage);
         const parsed = await parseModelJson(raw, {
             messages,
@@ -806,14 +957,14 @@ export async function runListenerRound({ manual = false } = {}) {
             const report = normalizeUnitJudgment(parsed.result);
             const text = guidanceText(report.goal, report.actionHint);
             writeSlot(text);   // 滚动覆写：静默轮写空串（旧指导不留到下一轮）
-            applyUnitOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, guidance: text, retried: parsed.retried, tokens });
+            applyUnitOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, guidance: text, retried: parsed.retried, tokens, materials });
         } else {
             const report = normalizeLightReport(parsed.result);
             const intervene = lightShouldIntervene(report, cfg.intervene) && report.goal;
             const text = intervene ? guidanceText(report.goal, report.actionHint) : '';
             if (!intervene && report.goal) report.noGuidanceReason = `介入档（${INTERVENE_LIGHT[cfg.intervene].label}）不够格：${report.noGuidanceReason || '本轮发现未达发送门槛'}`;
             writeSlot(text);
-            applyLightOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, guidance: text, retried: parsed.retried, tokens });
+            applyLightOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, guidance: text, retried: parsed.retried, tokens, materials });
         }
         const capped = Math.max(1, Math.floor(Number(cfg.traceRounds) || 50));
         if (state.trace.length > capped) state.trace.length = capped;
@@ -822,6 +973,12 @@ export async function runListenerRound({ manual = false } = {}) {
         notifyPanel();
         return { ok: true, mode, round };
     } catch (err) {
+        // 失败路径同样吃 owner 对账（第三十三轮补漏）：在途那轮的主人已换，失败留痕与失败计数
+        // 不该写进新主人的账——就当这轮没发生（换人操作已把注入槽清了，这里也不必再写）
+        if ((listenerState().unit?.id ?? null) !== roundOwnerId) {
+            if (manual) toastr.info('本轮判定作废：判定期间单位槽变了（挂载／卸下／接回），等下一轮重判');
+            return { ok: false, voided: true };
+        }
         const { rec, pausedNow } = applyFailure(state, {
             round, at, mode,
             floorCount: floors.filter(f => !f.isUser).length,
@@ -839,6 +996,100 @@ export async function runListenerRound({ manual = false } = {}) {
     } finally {
         running = false;
         gate?.endRound();   // 放行被扣的发送（成功=带着指导走，失败=裸发但不阻塞）
+    }
+}
+
+/**
+ * 回归判定（第三十三轮）：重挂有进度的长线章时跑一次对账——「走到哪、偏没偏」。
+ * 由 longform 侧的 scheduleReentryFor 备好五章窗口材料后调用；不碰排队闸（不是发送链路上的轮），
+ * 不写注入槽、不出指导。与例行轮共用 running 锁：来时若例行轮在途（挂载已把它作废），等它落地再跑。
+ */
+export async function runReentryRound({ window: win, unitId } = {}) {
+    const cfg = listenerCfg();
+    if (!cfg.enabled) return { skipped: 'disabled' };
+    const state = listenerState();
+    if (state.paused) return { skipped: 'paused' };
+    if (!win?.label || !String(win.text ?? '').trim()) return { skipped: 'no-window' };
+    if (!state.unit || state.unit.id !== unitId) return { skipped: 'owner-changed' };   // 排到队时槽里已不是它
+    const ctx = getTavernContext();
+    const chat = Array.isArray(ctx.chat) ? ctx.chat : null;
+    if (!chat || !chat.length) return { skipped: 'no-chat' };
+    // 等例行引擎空出来（挂载瞬间在途的旧主人轮几秒内会被 owner 对账作废释放；上限两分钟）
+    for (let waited = 0; running && waited < 120_000; waited += 300) await new Promise(r => setTimeout(r, 300));
+    if (running) {
+        toastr.warning('回归判定没排上：监听引擎一直忙——账面进度不变，下一轮扮演输出后照常例行判定');
+        return { skipped: 'busy' };
+    }
+    running = true;
+    const at = Date.now();
+    const tokens = { promptTokens: 0, completionTokens: 0 };
+    const onUsage = u => {
+        tokens.promptTokens += u?.prompt_tokens ?? u?.promptTokens ?? 0;
+        tokens.completionTokens += u?.completion_tokens ?? u?.completionTokens ?? 0;
+    };
+    const { provider } = listenerProvider();
+
+    try {
+        const floors = collectFloorsFromChat(chat);
+        const floorsText = formatFloors(floors);
+        const charSummary = assembleCharSummary();
+        const lore = assembleLore(floorsText);
+        const extra = assembleExtra();
+        const messages = buildReentryPrompt({
+            unit: state.unit,
+            windowLabel: win.label,
+            windowText: win.text,
+            floorsText,
+            charSummary,
+            loreHits: lore.text,
+            extra,
+        });
+        lastPromptText = messages.map(m => `【${m.role}】\n${m.content}`).join('\n\n');
+        const nums = floors.filter(f => f.floor != null).map(f => f.floor);
+        const materials = {
+            window: win.label,
+            windowChars: String(win.text ?? '').length,
+            nodeIdx: state.unit.nodeIdx,
+            nodesTotal: state.unit.nodes.length,
+            charChars: charSummary.length,
+            floors: nums.length ? { first: nums[0], last: nums[nums.length - 1], count: nums.length } : null,
+            loreHits: lore.count,
+            memory: Boolean(cfg.withMemory && extra && extra !== '（无）'),
+        };
+        const raw = await listenerAttempt(messages, provider, onUsage);
+        const parsed = await parseModelJson(raw, {
+            messages,
+            call: req => listenerAttempt(req.messages, provider, req.onUsage ?? onUsage),
+            onUsage,
+        });
+
+        // 判定期间槽里换了主人：与例行轮同一口径，产物整体作废（失败成功都一样）
+        if ((listenerState().unit?.id ?? null) !== unitId) {
+            return { ok: true, mode: 'reentry', voided: true };
+        }
+        const report = normalizeReentryReport(parsed.result, state.unit);
+        applyReentryOutcome(state, report, { at, windowLabel: win.label, tokens, materials });
+        const capped = Math.max(1, Math.floor(Number(cfg.traceRounds) || 50));
+        if (state.trace.length > capped) state.trace.length = capped;
+        persistListener();
+        updateWandDot(state);
+        notifyPanel();
+        return { ok: true, mode: 'reentry' };
+    } catch (err) {
+        if ((listenerState().unit?.id ?? null) !== unitId) {
+            return { ok: false, voided: true };
+        }
+        const msg = String(err?.message ?? err).slice(0, 400);
+        state.trace.unshift({ at: Date.now(), round: state.round, mode: 'reentry', ok: false, error: msg });
+        state.dot = true;
+        state.dotReason = `回归判定失败：${msg.slice(0, 120)}`;
+        persistListener();
+        updateWandDot(state);
+        notifyPanel();
+        toastr.error(`回归判定失败：${msg.slice(0, 160)}——账面进度不变，下一轮扮演输出后照常例行判定`);
+        return { ok: false, error: msg };
+    } finally {
+        running = false;   // 不碰排队闸：回归判定不在发送链路上，扣发送没有任何理由
     }
 }
 
