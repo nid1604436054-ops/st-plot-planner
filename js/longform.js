@@ -1105,19 +1105,40 @@ export function chapterUnit(st, vi, ci) {
     };
 }
 
-// 进度账同步：监听单位上点亮的节点数写回长线章（监听槽是执行位，长线块是账本——两本账里
-// 「进度数据账」的持久方；单位被卸下/顶掉后账不丢）
+// 进度账同步（第三十一轮改对账制）：监听单位槽是唯一的「执行位」，长线块的 mount 只是渲染缓存——
+// 在监听页卸下/丢弃/顶掉/接回后这里要对得上账，不然长线页假显示「执行中」、挂载按钮也不回来。
+// 三分支：①活动单位是长线章→进度写回账本、执行位跟随（被接回也能重新认回来）；
+// ②退位槽里的长线章→冻结进度抢救进账本（丢弃前先落账，账不丢）；③没有长线章在岗→执行位清空
 export function syncLfProgress() {
     const st = lfState();
-    if (!st.mount) return st;
-    const unit = listenerState().unit;
-    if (unit && unit.id === st.mount.unitId) {
-        const ch = st.volumes[st.mount.vol]?.chapters?.[st.mount.ch];
-        if (ch) {
-            ch.lit = Math.min(unit.nodeIdx, ch.nodes.length);
-            if (unit.nodeIdx >= unit.nodes.length) ch.done = true;
+    const ls = listenerState();
+    const active = ls.unit;
+    if (active && active.source === 'longform' && active.lfRef) {
+        const ch = st.volumes[active.lfRef.vol]?.chapters?.[active.lfRef.ch];
+        if (ch && ch.unitId === active.id) {
+            const lit = Math.min(active.nodeIdx, ch.nodes.length);
+            if (lit > ch.lit) ch.lit = lit;   // 只进不退：退位槽旧副本接回时不把账本倒回去
+            if (active.nodeIdx >= active.nodes.length) ch.done = true;
+            if (!st.mount || st.mount.unitId !== active.id) {
+                st.mount = { vol: active.lfRef.vol, ch: active.lfRef.ch, unitId: active.id, at: active.at };
+            }
+            persistLf();
+            return st;
+        }
+    }
+    const side = ls.sidelined;
+    if (side && side.source === 'longform' && side.lfRef) {
+        const ch = st.volumes[side.lfRef.vol]?.chapters?.[side.lfRef.ch];
+        if (ch && ch.unitId === side.id && ch.nodes.length === side.nodes.length) {
+            const lit = Math.min(side.nodeIdx, ch.nodes.length);
+            if (lit > ch.lit) ch.lit = lit;   // 重切过（节点数对不上）不回写，防错账
+            if (side.nodeIdx >= side.nodes.length) ch.done = true;
             persistLf();
         }
+    }
+    if (st.mount) {
+        st.mount = null;
+        persistLf();
     }
     return st;
 }

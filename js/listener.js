@@ -187,6 +187,14 @@ export function makeUnitFromStory(entry) {
 // 槽里已有单位且退位槽也占着 → 拒绝挂载（先去面板接回或丢弃），不让数据静默蒸发
 export function mountUnit(state, unit) {
     if (!unit) return { ok: false, reason: '单位内容为空' };
+    // 同一单位再挂（长线章卸下重挂／挂载中重挂换新文本）：不造重复副本——
+    // 退位槽里的旧副本作废（进度账在长线账本里、新副本自带），活动槽就地换新、不进退位槽
+    if (state.sidelined && state.sidelined.id === unit.id) state.sidelined = null;
+    if (state.unit && state.unit.id === unit.id) {
+        state.unit = unit;
+        state.lastFloorSig = '';
+        return { ok: true };
+    }
     if (state.unit && state.sidelined) {
         return { ok: false, reason: '退位槽已有单位：先「接回」或「丢弃」它，再挂载新单位' };
     }

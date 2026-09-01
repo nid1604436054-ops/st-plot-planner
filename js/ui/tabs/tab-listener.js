@@ -4,6 +4,8 @@
 import { settings, save } from "../../settings.js";
 import { escapeHtml, clamp } from "../../utils.js";
 import { storyState } from "../../story.js";
+// 监听槽一动就对一次长线账本（listener.js 不能反向引 longform.js——longform 已经引了监听，只能在界面层搭桥）
+import { syncLfProgress } from "../../longform.js";
 import {
     listenerState, listenerCfg, listenerProvider, listenerModeLabel, persistListener,
     runListenerRound, resumeListener, setListenerEnabled, manualLitCurrentNode,
@@ -140,18 +142,22 @@ function renderTab(container) {
                 <span class="pp-muted pp-ls-node-crit">${escapeHtml(clamp(n.criterion, 44))}</span>
             </div>`).join('')}
         </div>
-        ${state.sidelined ? `
+    </div>` : `
+    <div class="pp-section">
+        <div class="pp-muted">当前没有挂载单位——轻量执勤中（OOC / 剧情重复 / 文风重复三项检查）。要按规划逐节点推进，从下面挂载一个单位。</div>
+    </div>`}
+
+    ${/* 退位槽行独立于单位块（第三十一轮）：卸下后没有活动单位时「接回/丢弃」也得够得着，别跟着单位卡一起消失 */ ''}
+    ${state.sidelined ? `
+    <div class="pp-section">
         <div class="pp-ls-sidelined">
             <span>退位槽：${escapeHtml(state.sidelined.title)}（${state.sidelined.nodeIdx}/${state.sidelined.nodes.length} 点亮，进度冻结）</span>
             <span class="pp-item-ops">
                 <span id="pp_ls_recall" class="menu_button" title="退位单位重新上岗；当前活动单位（若有）换进退位槽">接回</span>
                 <span id="pp_ls_discard" class="menu_button" title="彻底删除退位槽里的单位（不可恢复）">丢弃</span>
             </span>
-        </div>` : ''}
-    </div>` : `
-    <div class="pp-section">
-        <div class="pp-muted">当前没有挂载单位——轻量执勤中（OOC / 剧情重复 / 文风重复三项检查）。要按规划逐节点推进，从下面挂载一个单位。</div>
-    </div>`}
+        </div>
+    </div>` : ''}
 
     <div class="pp-section">
         <b>本轮指导</b>
@@ -261,7 +267,8 @@ function bindTab(container) {
         if (state.sidelined) {
             const title = state.sidelined.title;
             const r = opRecallSidelined();
-            toastr[r.ok ? 'success' : 'warning'](r.ok ? `已接回「${title}」` : r.reason);
+            if (r.ok) { syncLfProgress(); renderTab(container); toastr.success(`已接回「${title}」`); }
+            else toastr.warning(r.reason);
         } else {
             toastr.info('退位槽是空的：到下方「挂载单位」导入下一个（手动导入 / 1.0 剧情规划导入）');
         }
@@ -269,17 +276,20 @@ function bindTab(container) {
 
     container.querySelector('#pp_ls_unmount')?.addEventListener('click', () => {
         const r = opUnmountUnit();
-        toastr[r.ok ? 'success' : 'warning'](r.ok ? '已卸下（进退位槽，进度保留）' : r.reason);
+        if (r.ok) { syncLfProgress(); renderTab(container); toastr.success('已卸下（进退位槽，进度保留）'); }
+        else toastr.warning(r.reason);
     });
 
     container.querySelector('#pp_ls_recall')?.addEventListener('click', () => {
         const r = opRecallSidelined();
-        toastr[r.ok ? 'success' : 'warning'](r.ok ? '已接回' : r.reason);
+        if (r.ok) { syncLfProgress(); renderTab(container); toastr.success('已接回'); }
+        else toastr.warning(r.reason);
     });
 
     container.querySelector('#pp_ls_discard')?.addEventListener('click', () => {
         const r = opDiscardSidelined();
-        toastr[r.ok ? 'success' : 'warning'](r.ok ? '退位单位已删除' : r.reason);
+        if (r.ok) { syncLfProgress(); renderTab(container); toastr.success('退位单位已删除'); }
+        else toastr.warning(r.reason);
     });
 
     const bindSel = (id, key, map) => {
@@ -304,11 +314,8 @@ function bindTab(container) {
         const text = String(container.querySelector('#pp_ls_m_text')?.value ?? '').trim();
         if (!text) { toastr.warning('单位内容为空'); return; }
         const r = opMountUnit(makeUnitFromText(title, text));
-        if (r.ok) {
-            container.querySelector('#pp_ls_m_title').value = '';
-            container.querySelector('#pp_ls_m_text').value = '';
-            toastr.success('单位已挂载（单节点：整个文本一块判）');
-        } else toastr.warning(r.reason);
+        if (r.ok) { syncLfProgress(); renderTab(container); toastr.success('单位已挂载（单节点：整个文本一块判）'); }
+        else toastr.warning(r.reason);
     });
 
     container.querySelector('#pp_ls_mount_story')?.addEventListener('click', () => {
@@ -317,7 +324,7 @@ function bindTab(container) {
         const unit = entry ? makeUnitFromStory(entry) : null;
         if (!unit) { toastr.warning('这份规划是空的'); return; }
         const r = opMountUnit(unit);
-        if (r.ok) toastr.success(`已挂载「${unit.title}」：${unit.nodes.length} 个节点（各阶段直接当节点，完成标准＝该阶段安排实际发生）`);
+        if (r.ok) { syncLfProgress(); renderTab(container); toastr.success(`已挂载「${unit.title}」：${unit.nodes.length} 个节点（各阶段直接当节点，完成标准＝该阶段安排实际发生）`); }
         else toastr.warning(r.reason);
     });
 
