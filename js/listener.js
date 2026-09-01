@@ -102,8 +102,9 @@ export function listenerState() {
                              // 不设上限、不看关键词/常驻/启用状态；与检索命中自动去重（自选优先）。存监听自己的
                              // 聊天块——与向导第 1 步 / 长线页的勾选各管各的（先例：长线勾选存 longform 块）。
                              // 第三十七轮起它属于「日常监听」材料单；重挂对账单有自己的 picks（matReentry.picks）
-        matRoutine: null,    // 日常监听材料单（第三十七轮）{ scan, floors, memModes, memTags, memRecent }——
-                             // 每轮例行判定（单位轮＋轻量轮）用；null 由下面的迁移播种补
+        matRoutine: null,    // 日常监听材料单（第三十七轮）{ scan, floors, scanFloors, memModes, memTags, memRecent }——
+                             // 每轮例行判定（单位轮＋轻量轮）用；null 由下面的迁移播种补。
+                             // scanFloors（第三十八轮）＝「世界书检索」按关键词激活的回看窗口，与正文楼层数分开
         matReentry: null,    // 重挂对账材料单（第三十七轮）同形状另加 picks——重挂那一刻的一次性回归判定用
         dot: false,          // 红点旗标（有问题未看；打开监听页签即清除）
         dotReason: '',       // 红点问题的一句话描述
@@ -123,6 +124,7 @@ export function listenerState() {
         state.matRoutine = {
             scan: raw.withLorebook !== false,
             floors: Math.max(0, Math.round(Number(raw.floorLimit) || 0)),
+            scanFloors: 0,   // 第三十八轮新字段：旧全局键没有「扫描窗口」这概念，播种 0＝全聊天（按对话里实际出现的关键词激活）
             memModes: offAll,
             memTags: [],
             memRecent: 0,
@@ -130,9 +132,9 @@ export function listenerState() {
         delete raw.withLorebook; delete raw.withMemory; delete raw.floorLimit;
         try { save(); } catch { /* 设置存不进不阻断判定 */ }
     }
-    if (!state.matReentry) state.matReentry = { scan: true, floors: 0, memModes: null, memTags: [], memRecent: 0, picks: [] };
-    normalizeMatCfg(state.matRoutine, { scan: true, floors: 0, memModes: null });
-    normalizeMatCfg(state.matReentry, { scan: true, floors: 0, memModes: null });
+    if (!state.matReentry) state.matReentry = { scan: true, floors: 0, scanFloors: 0, memModes: null, memTags: [], memRecent: 0, picks: [] };
+    normalizeMatCfg(state.matRoutine, { scan: true, floors: 0, scanFloors: 0, memModes: null });
+    normalizeMatCfg(state.matReentry, { scan: true, floors: 0, scanFloors: 0, memModes: null });
     return state;
 }
 
@@ -141,6 +143,7 @@ const MEM_MODES = new Set(['off', 'tags', 'always']);
 function normalizeMatCfg(r, seed) {
     if (typeof r.scan !== 'boolean') r.scan = seed.scan;
     r.floors = Number.isFinite(Number(r.floors)) && Number(r.floors) > 0 ? Math.floor(Number(r.floors)) : 0;
+    r.scanFloors = Number.isFinite(Number(r.scanFloors)) && Number(r.scanFloors) > 0 ? Math.floor(Number(r.scanFloors)) : 0;   // 第三十八轮：关键词激活的回看窗口（0＝全聊天）
     if (!r.memModes || typeof r.memModes !== 'object' || Array.isArray(r.memModes)) r.memModes = seed.memModes;
     else for (const k of Object.keys(r.memModes)) if (!MEM_MODES.has(r.memModes[k])) delete r.memModes[k];
     if (!Array.isArray(r.memTags)) r.memTags = [];
@@ -955,7 +958,8 @@ export async function runListenerRound({ manual = false } = {}) {
     const mode = modeOf(state);
     const roundOwnerId = state.unit?.id ?? null;   // 本轮的主人：判完时单位槽若已换人（挂/卸/接回），产物整体作废
     const floorSig = floorsSignature(chat);
-    const floors = limitFloors(collectFloorsFromChat(chat), Number(state.matRoutine.floors) || 0);   // 日常监听材料单（第三十七轮）：成功与失败留痕同一个口径
+    const allFloors = collectFloorsFromChat(chat);
+    const floors = limitFloors(allFloors, Number(state.matRoutine.floors) || 0);   // 日常监听材料单（第三十七轮）：成功与失败留痕同一个口径
     const round = state.round + 1;
     const at = Date.now();
     const tokens = { promptTokens: 0, completionTokens: 0 };
@@ -970,7 +974,10 @@ export async function runListenerRound({ manual = false } = {}) {
         const floorsText = formatFloors(floors);
         const floorsNote = state.matRoutine.floors > 0 ? `最近 ${state.matRoutine.floors} 层角色楼（楼层号为全聊天绝对号）` : undefined;
         const picks = assembleLorePicks(state.lorePicks);
-        const lore = assembleLore(floorsText, picks.keys, state.matRoutine.scan);
+        // 关键词激活窗口（第三十八轮，用户拍板「单独一个楼层数、与正文的分开」）：扫描文本与正文窗口
+        // 各裁各的——正文楼层数只管「剧情上下文」带几层，「世界书检索」往回看几层归 scanFloors（0＝全聊天）
+        const scanText = formatFloors(limitFloors(allFloors, Number(state.matRoutine.scanFloors) || 0));
+        const lore = assembleLore(scanText, picks.keys, state.matRoutine.scan);
         const memoryText = assembleMemory(state.matRoutine);
         if (mode === 'unit') {
             messages = buildUnitPrompt({
@@ -1099,11 +1106,13 @@ export async function runReentryRound({ window: win, unitId } = {}) {
     const { provider } = listenerProvider();
 
     try {
-        const floors = limitFloors(collectFloorsFromChat(chat), Number(state.matReentry.floors) || 0);   // 重挂对账材料单（第三十七轮）：与日常单互不影响
+        const allFloors = collectFloorsFromChat(chat);
+        const floors = limitFloors(allFloors, Number(state.matReentry.floors) || 0);   // 重挂对账材料单（第三十七轮）：与日常单互不影响
         const floorsText = formatFloors(floors);
         const floorsNote = state.matReentry.floors > 0 ? `最近 ${state.matReentry.floors} 层角色楼（楼层号为全聊天绝对号）` : undefined;
         const picks = assembleLorePicks(state.matReentry.picks);
-        const lore = assembleLore(floorsText, picks.keys, state.matReentry.scan);
+        const scanText = formatFloors(limitFloors(allFloors, Number(state.matReentry.scanFloors) || 0));   // 关键词激活窗口与正文楼层数分开（第三十八轮，同例行轮口径）
+        const lore = assembleLore(scanText, picks.keys, state.matReentry.scan);
         const memoryText = assembleMemory(state.matReentry);
         const messages = buildReentryPrompt({
             unit: state.unit,

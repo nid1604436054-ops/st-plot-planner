@@ -417,7 +417,8 @@ function bindTab(container) {
 // 判定材料区（第三十七轮，用户拍板）：两套材料单各自独立、按聊天存——「日常监听」＝每轮例行
 // 判定（单位轮＋轻量轮共用），「重挂对账」＝重挂有进度的章那一刻、你开口对话前自动跑的一次性
 // 回归判定。选择范围相同：世界书自选 / 记忆表格挑选器（照向导第 1 步同款克隆——用户定则：
-// 一切提示词材料都在全量版本上做减法、一套机器，不做每板块单独算法）/ 世界书检索 / 楼层数。
+// 一切提示词材料都在全量版本上做减法、一套机器，不做每板块单独算法）/ 世界书检索 / 楼层数×2
+// （第三十八轮：判定正文的楼层数与「世界书检索」关键词激活的回看层数分开，各管各的窗口）。
 // ---------------------------------------------------------------------------
 
 let matPage = 'routine';   // 当前展开的页签（会话记忆；默认日常监听）
@@ -470,15 +471,16 @@ function matZoneHtml() {
     </div>`).join('');
     return `
     <b>判定材料</b>
-    <div class="pp-seg" id="pp_ls_mattab" title="两套材料单都按聊天存、勾选互不影响，选择范围相同（世界书自选 / 记忆表格 / 世界书检索 / 楼层数）">
+    <div class="pp-seg" id="pp_ls_mattab" title="两套材料单都按聊天存、勾选互不影响，选择范围相同（世界书自选 / 记忆表格 / 世界书检索 / 楼层数——正文与关键词扫描两枚，各管各的窗口）">
         <span class="pp-seg-opt${kind === 'routine' ? ' on' : ''}" data-mpage="routine">日常监听</span>
         <span class="pp-seg-opt${kind === 'reentry' ? ' on' : ''}" data-mpage="reentry">重挂对账</span>
     </div>
     <span class="pp-muted">${zoneTip}</span>
     <div class="pp-ls-knobs">
         <span id="pp_ls_lore" class="menu_button" title="勾选世界书条目固定进本页材料单：整条原文、不截断、不看关键词/常驻/启用状态；与本页「世界书检索」自动去重（这边优先）">世界书自选（已勾 ${resolveLorePicks(matPicksArr(kind)).length} 条）</span>
-        <label title="按最近楼层重扫世界书、命中条目随本页判定附带（共用「世界书」页的检索口径）；与本页「世界书自选」自动去重（自选优先）"><input type="checkbox" id="pp_ls_scan" ${mat.scan ? 'checked' : ''} /> 世界书检索</label>
-        <label title="本页判定携带的楼层原文范围：0 = 全量（默认，判定引证最全）；N = 只带最近 N 层角色楼（其间夹的用户消息保留、楼层号仍是全聊天绝对号）——长对话省钱用，砍太狠可能伤判定准头，自己权衡">楼层数 <input id="pp_ls_floors" class="text_pole" type="number" min="0" step="5" value="${mat.floors}" /></label>
+        <label title="按对话里出现的关键词激活世界书、命中条目随本页判定附带（书与关键词都用「世界书」页里配好的；往回看几层由「关键词扫描层数」管）；与本页「世界书自选」自动去重（自选优先）"><input type="checkbox" id="pp_ls_scan" ${mat.scan ? 'checked' : ''} /> 世界书检索</label>
+        <label title="本页判定携带的楼层原文范围：0 = 全量（默认，判定引证最全）；N = 只带最近 N 层角色楼（其间夹的用户消息保留、楼层号仍是全聊天绝对号）——长对话省钱用，砍太狠可能伤判定准头，自己权衡。只管判定正文带几层；「世界书检索」按关键词往回看几层由「关键词扫描层数」单独管，两者互不影响">楼层数 <input id="pp_ls_floors" class="text_pole" type="number" min="0" step="5" value="${mat.floors}" /></label>
+        <label title="「世界书检索」按关键词激活时往回看多少层角色楼找关键词（窗口内夹的用户消息也算「对话里出现」）：0 = 全聊天（默认——很久前提过的关键词也能激活）；N = 只看最近 N 层，窗外提过的不激活。只管激活范围，不改变判定正文带几层（那个归「楼层数」管）">关键词扫描层数 <input id="pp_ls_scan_floors" class="text_pole" type="number" min="0" step="5" value="${mat.scanFloors}" /></label>
     </div>
     ${sheets.length ? `
     <label class="pp-label" title="照向导第 1 步同款（一套机器，在全量版本上做减法）：每张表一个档位、标签过滤、表尾最新行；选择随本页材料单按聊天存，两页互不影响">记忆表格召回</label>
@@ -512,6 +514,12 @@ function bindMatZone(container) {
         const mat = matStore(matPage);
         mat.floors = Math.max(0, Math.floor(Number(e.target.value) || 0));
         e.target.value = String(mat.floors);
+        persist();
+    });
+    zone.querySelector('#pp_ls_scan_floors')?.addEventListener('change', e => {
+        const mat = matStore(matPage);
+        mat.scanFloors = Math.max(0, Math.floor(Number(e.target.value) || 0));
+        e.target.value = String(mat.scanFloors);
         persist();
     });
     zone.querySelector('#pp_ls_lore')?.addEventListener('click', () => openLorePickWindow(matPage));
