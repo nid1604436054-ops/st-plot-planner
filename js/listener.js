@@ -294,15 +294,18 @@ export function floorsSignature(chat) {
 // 纯逻辑：两套提示词组装（每次调用自包含；上一轮指导只用于防复读）
 // ---------------------------------------------------------------------------
 
-// 两套提示词的块序＝前缀缓存口径（第二十七轮立、第三十四轮重申）：监听每轮都跑、提示词前缀跨轮
-// 复用是监听成本的大头。稳定块（说明/单位全文/世界书自选/判定规则/输出契约）全部前置；节点状态
-// （推进时才变）放在楼层前面，推进轮不再整发全价；楼层这个最大的块放在「每轮都整个重写的小块」
-// （上一轮指导/检索命中/附加材料）之前——楼层的旧内容每轮都能吃缓存、只有新尾巴按未命中计价；
-// 若把楼层挪到这些小块后面绝对垫底，指导一换整段楼层全按未命中重算，缓存反而吃不满（用户要求
-// 「楼层落在最后面、缓存吃满」，落法＝大块材料里楼层最后、其后只留逐轮重写的小块）。
-// 世界书拆两半发（第三十四轮）：自选条目跟勾选走、整条不截断、进稳定段；检索命中按最近楼层重扫
-// 逐轮变，照旧垫底——同一条两边都有时自选优先，检索里让位
-export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsNote, loreHits = '', extra, lastGuidance }) {
+// 两套提示词的块序＝前缀缓存口径（第二十七轮立、第三十四/三十五轮两次修正）：监听每轮都跑、
+// 提示词前缀跨轮复用是监听成本的大头。稳定块（说明/单位全文/世界书自选/**记忆表格**/判定规则/
+// 输出契约）全部前置；节点状态（推进时才变）放在楼层前面，推进轮不再整发全价；楼层这个每轮
+// 追加的大块放在「每轮都整个重写的小块」（上一轮指导/检索命中）之前——楼层的旧内容每轮都能
+// 吃缓存、只有新尾巴按未命中计价。**记忆表格按「大而少变」归稳定段（第三十五轮用户拍桌：
+// 「谁告诉你记忆表是小块？我记忆表 4 万多字」——第二十七轮把附加材料归进「每轮都变的小块」
+// 的老分类两头都不成立：体量可以很大、变化只随记忆更新不随轮次；排在楼层后面会让它每轮跟着
+// 丢缓存、整块按全价重算）。若把楼层挪到指导/检索后面绝对垫底，同样整段楼层每轮重算——
+// 缓存吃满的最优解＝大块材料全部在前、其后只留真正的小块。
+// 世界书拆两半发（第三十四轮）：自选条目跟勾选走、整条不截断、进稳定段；检索命中按最近楼层
+// 重扫逐轮变，照旧垫底——同一条两边都有时自选优先，检索里让位
+export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsNote, memoryText = '', loreHits = '', lastGuidance }) {
     const strict = STRICTNESS_LEVELS[cfg.strictness] ?? STRICTNESS_LEVELS.standard;
     const inter = INTERVENE_UNIT[cfg.intervene] ?? INTERVENE_UNIT.medium;
     const node = unit.nodes[Math.min(unit.nodeIdx, unit.nodes.length - 1)];
@@ -324,6 +327,10 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             '<世界书自选条目（用户点名常驻材料；整条原文、不截断）>',
             picksText || '（未勾选——角色设定等对照材料以本块勾选为准，没有就按单位全文与楼层判定）',
             '</世界书自选条目>',
+            '',
+            '<记忆表格（既有事件记录；判定推进与重复时参考）>',
+            memoryText || '（无）',
+            '</记忆表格>',
             '',
             '【判定任务】',
             '对「当前待判节点」（见下方【当前节点状态】）给出三态之一：',
@@ -378,15 +385,11 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             '<世界书检索命中（按最近楼层重扫，逐轮可能变化；与上方自选条目自动去重）>',
             loreHits || '（无）',
             '</世界书检索命中>',
-            '',
-            '<附加材料（如有）>',
-            extra,
-            '</附加材料>',
         ].join('\n') },
     ];
 }
 
-export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, loreHits = '', extra, lastGuidance }) {
+export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, memoryText = '', loreHits = '', lastGuidance }) {
     const inter = INTERVENE_LIGHT[cfg.intervene] ?? INTERVENE_LIGHT.medium;
     const last = String(lastGuidance ?? '').trim() || '（无——本轮是第一轮）';
     return [
@@ -424,6 +427,10 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
             picksText || '（未勾选——没有点名材料就按楼层原文直接检查）',
             '</世界书自选条目>',
             '',
+            '<记忆表格（既有事件记录；检查剧情重复时参考）>',
+            memoryText || '（无）',
+            '</记忆表格>',
+            '',
             `<剧情上下文（${floorsNote ?? '当前聊天全部未隐藏楼层'}，带楼层号；新楼层追加在本节末尾）>`,
             floorsText,
             '</剧情上下文>',
@@ -435,10 +442,6 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
             '<世界书检索命中（按最近楼层重扫，逐轮可能变化；与上方自选条目自动去重）>',
             loreHits || '（无）',
             '</世界书检索命中>',
-            '',
-            '<附加材料（如有）>',
-            extra,
-            '</附加材料>',
         ].join('\n') },
     ];
 }
@@ -450,7 +453,7 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
 // 材料与例行判定同一套（全/限楼层＋世界书自选＋检索命中＋记忆表），窗口＝五章规划轨迹。
 // 只出报告不出指导：后两章的规划在窗口里，任何「指导」都可能把后续剧情漏进扮演模型——回归判定
 // 的产物给用户看，注入槽一概不碰（旧作废标记也留着，等下一轮例行判定重新生成指导）
-export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, picksText = '', floorsNote, loreHits = '', extra }) {
+export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, picksText = '', floorsNote, memoryText = '', loreHits = '' }) {
     const lit = unit.nodeIdx;
     return [
         { role: 'system', content: '你是剧情监听器，在一场正在进行的长篇角色扮演里执勤。这一次是「回归判定」：当前这章规划此前执行到一半被卸下、期间剧情继续演了；现在它重新挂载，你对照规划补一份判定报告，回答两件事——剧情走到哪了、偏没偏。你不与任何人对话，你的全部输出是一个 JSON 对象。' },
@@ -467,6 +470,10 @@ export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, 
             '<世界书自选条目（用户点名常驻材料；整条原文、不截断）>',
             picksText || '（未勾选——没有点名材料就按窗口与楼层判定）',
             '</世界书自选条目>',
+            '',
+            '<记忆表格（既有事件记录；判定走到哪与偏没偏时参考）>',
+            memoryText || '（无）',
+            '</记忆表格>',
             '',
             '【任务一：走到哪了】',
             '对照「当前挂载章」的节点表（见窗口内），按聊天实际重新核对全部节点：',
@@ -498,10 +505,6 @@ export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, 
             '<世界书检索命中（按最近楼层重扫；与上方自选条目自动去重）>',
             loreHits || '（无）',
             '</世界书检索命中>',
-            '',
-            '<附加材料（如有）>',
-            extra,
-            '</附加材料>',
         ].join('\n') },
     ];
 }
@@ -866,11 +869,12 @@ export function limitFloors(list, limit) {
     return list.slice(charIdx[charIdx.length - limit]);
 }
 
-function assembleExtra() {
+// 记忆表（第三十五轮归位稳定段）：大而少变——体量可以到几万字（用户实测 4 万+）、变化只随
+// 记忆更新不随轮次，排楼层后面会每轮跟着丢缓存整块全价。返回纯内容，空＝（无）由块标签兜底
+function assembleMemory() {
     const cfg = listenerCfg();
-    if (!cfg.withMemory) return '（无）';
-    const mem = buildMemoryContext();   // 全量口径（共用 1.0 召回规则）
-    return mem ? `## 记忆表格（既有事件记录；判定推进与重复时参考）\n${mem}` : '（无）';
+    if (!cfg.withMemory) return '';
+    return buildMemoryContext() ?? '';   // 全量口径（共用 1.0 召回规则）
 }
 
 async function listenerAttempt(messages, provider, onUsage) {
@@ -928,7 +932,7 @@ export async function runListenerRound({ manual = false } = {}) {
         const floorsNote = cfg.floorLimit > 0 ? `最近 ${cfg.floorLimit} 层角色楼（楼层号为全聊天绝对号）` : undefined;
         const picks = assembleLorePicks(state);
         const lore = assembleLore(floorsText, picks.keys);
-        const extra = assembleExtra();
+        const memoryText = assembleMemory();
         if (mode === 'unit') {
             messages = buildUnitPrompt({
                 cfg,
@@ -936,8 +940,8 @@ export async function runListenerRound({ manual = false } = {}) {
                 floorsText,
                 floorsNote,
                 picksText: picks.text,
+                memoryText,
                 loreHits: lore.text,
-                extra,
                 lastGuidance: state.lastGuidance,
             });
         } else {
@@ -946,8 +950,8 @@ export async function runListenerRound({ manual = false } = {}) {
                 floorsText,
                 floorsNote,
                 picksText: picks.text,
+                memoryText,
                 loreHits: lore.text,
-                extra,
                 lastGuidance: state.lastGuidance,
             });
         }
@@ -963,7 +967,7 @@ export async function runListenerRound({ manual = false } = {}) {
             floors: nums.length ? { first: nums[0], last: nums[nums.length - 1], count: nums.length } : null,
             floorsLimited: cfg.floorLimit > 0,
             loreHits: lore.count,
-            memory: Boolean(cfg.withMemory && extra && extra !== '（无）'),
+            memory: Boolean(cfg.withMemory && memoryText),
         };
         const raw = await listenerAttempt(messages, provider, onUsage);
         const parsed = await parseModelJson(raw, {
@@ -1061,7 +1065,7 @@ export async function runReentryRound({ window: win, unitId } = {}) {
         const floorsNote = cfg.floorLimit > 0 ? `最近 ${cfg.floorLimit} 层角色楼（楼层号为全聊天绝对号）` : undefined;
         const picks = assembleLorePicks(state);
         const lore = assembleLore(floorsText, picks.keys);
-        const extra = assembleExtra();
+        const memoryText = assembleMemory();
         const messages = buildReentryPrompt({
             unit: state.unit,
             windowLabel: win.label,
@@ -1069,8 +1073,8 @@ export async function runReentryRound({ window: win, unitId } = {}) {
             floorsText,
             floorsNote,
             picksText: picks.text,
+            memoryText,
             loreHits: lore.text,
-            extra,
         });
         lastPromptText = messages.map(m => `【${m.role}】\n${m.content}`).join('\n\n');
         const nums = floors.filter(f => f.floor != null).map(f => f.floor);
@@ -1084,7 +1088,7 @@ export async function runReentryRound({ window: win, unitId } = {}) {
             floors: nums.length ? { first: nums[0], last: nums[nums.length - 1], count: nums.length } : null,
             floorsLimited: cfg.floorLimit > 0,
             loreHits: lore.count,
-            memory: Boolean(cfg.withMemory && extra && extra !== '（无）'),
+            memory: Boolean(cfg.withMemory && memoryText),
         };
         const raw = await listenerAttempt(messages, provider, onUsage);
         const parsed = await parseModelJson(raw, {
