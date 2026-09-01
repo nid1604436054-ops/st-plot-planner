@@ -146,18 +146,7 @@ export const settingsTab = {
                         <input id="pp_set_ls_pmax" class="text_pole textarea_compact" type="number" min="100" step="50" />
                     </div>
                 </div>
-                <label class="pp-label" title="楼层范围（第三十四轮）：判定携带的楼层原文。0 = 全量（默认，判定引证最全）；N = 只带最近 N 层角色楼（其间夹的用户消息保留、楼层号仍是全聊天绝对号）——长对话省钱用，砍太狠可能伤「走到哪」判得准不准，自己权衡">监听楼层数</label>
-                <input id="pp_set_ls_floors" class="text_pole textarea_compact" type="number" min="0" step="5" />
-                <div class="pp-grid2">
-                    <div>
-                        <label class="pp-label" title="附加材料：判定时附带世界书检索命中（按最近楼层重扫、共用上面的检索口径）；与监听页「世界书自选」自动去重——同一条两边都有时自选优先、只进一次">附带世界书检索</label>
-                        <input id="pp_set_ls_lore" type="checkbox" />
-                    </div>
-                    <div>
-                        <label class="pp-label" title="附加材料：判定时附带记忆表格（全量口径；将来要与 1.0 分开口径时在这里做减法）">附带记忆表格</label>
-                        <input id="pp_set_ls_mem" type="checkbox" />
-                    </div>
-                </div>
+                <label class="pp-label" title="第三十七轮：材料开关搬进监听页最下面的「判定材料」区——两套页签（日常监听/重挂对账）各自有世界书自选、记忆表格挑选器（照第 1 步同款）、世界书检索、楼层数，按聊天存；本区不再管这些">判定材料：已搬到监听页「判定材料」区（两套页签、按聊天存）</label>
             </details>
         </div>
         <div class="pp-section">
@@ -292,13 +281,7 @@ export const settingsTab = {
         bindNum('#pp_set_ls_depth', () => ls.depth, v => ls.depth = Math.max(0, v));
         bindNum('#pp_set_ls_pmin', () => ls.progressMin, v => ls.progressMin = Math.max(50, v));
         bindNum('#pp_set_ls_pmax', () => ls.progressMax, v => ls.progressMax = Math.max(ls.progressMin + 50, v));
-        bindNum('#pp_set_ls_floors', () => ls.floorLimit ?? 0, v => { ls.floorLimit = Math.max(0, Math.floor(v || 0)); });
-        const lsLore = container.querySelector('#pp_set_ls_lore');
-        lsLore.checked = ls.withLorebook !== false;
-        lsLore.addEventListener('change', () => { ls.withLorebook = lsLore.checked; save(); });
-        const lsMem = container.querySelector('#pp_set_ls_mem');
-        lsMem.checked = ls.withMemory !== false;
-        lsMem.addEventListener('change', () => { ls.withMemory = lsMem.checked; save(); });
+        // 第三十七轮：监听楼层数/附带世界书检索/附带记忆表格三控件随材料单搬进监听页「判定材料」区，这里不再绑定
 
         // 知识库区：每清单抓取条数 / 冷却生成次数（清单与条目在「知识库」页签管理）
         const kb = settings.knowledge ?? {};

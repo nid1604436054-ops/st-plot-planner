@@ -5,6 +5,7 @@ import { settings, save } from "../../settings.js";
 import { escapeHtml, clamp } from "../../utils.js";
 import { storyState } from "../../story.js";
 import { resolveLorePicks } from "../../lorebook.js";
+import { memoryState } from "../../memoryTable.js";   // 判定材料区的记忆挑选器（第三十七轮）：读镜像表与标签
 // 监听槽一动就对一次长线账本（listener.js 不能反向引 longform.js——longform 已经引了监听，只能在界面层搭桥）
 import { syncLfProgress, scheduleReentryFor } from "../../longform.js";
 import {
@@ -32,7 +33,10 @@ function materialsLine(m) {
     if (m.floors) parts.push(`楼层 ${m.floors.first}-${m.floors.last}（${m.floors.count} 层${m.floorsLimited ? ' · 限最近范围' : ''}）`);
     else parts.push('楼层 无');
     parts.push(m.loreHits == null ? '世界书检索 关' : `世界书命中 ${m.loreHits} 条`);
-    parts.push(m.memory ? '记忆表 已带' : '记忆表 关');
+    // 第三十七轮起 memory 记字数（全停用＝0）；旧留痕是布尔，兼容显示
+    parts.push(typeof m.memory === 'number'
+        ? (m.memory > 0 ? `记忆表 ${m.memory.toLocaleString()} 字` : '记忆表 不带')
+        : (m.memory ? '记忆表 已带' : '记忆表 关'));
     return parts.join(' · ');
 }
 
@@ -201,11 +205,10 @@ function renderTab(container) {
         <div class="pp-muted">账面进度不变；下一轮扮演输出后照常例行判定。</div>
     </div>`) : ''}
 
+    ${/* 第三十七轮（用户立规「功能按钮不与生成文本混排」）：指导区只留纯文本——两个按钮分别搬去
+        留痕行（看提示词全文）与判定材料区（世界书自选）；轮号按甲案挪到留痕行「已判定 N 轮」、作废期间隐藏 */ ''}
     <div class="pp-section">
-        <b>本轮指导</b>
-        <span class="pp-muted" title="注入槽里当前生效的指导全文（微量指导或轻量修正指导）；静默轮显示静默原因">（第 ${state.round} 轮）</span>
-        <span id="pp_ls_lore" class="menu_button" title="勾选世界书条目固定进每轮判定材料：整条原文、不截断、不看关键词/常驻/启用状态；与每轮重扫的「检索命中」自动去重（这边优先）。只管监听，与「剧情指导」第 1 步、长线页的勾选互不影响；无冷却">世界书自选（已勾 ${resolveLorePicks(state.lorePicks).length} 条）</span>
-        <span id="pp_ls_prompt" class="menu_button" title="查看最近一次判定（例行轮或回归判定）实际发给监听模型的提示词全文——只保留最近一次、刷新页面后清空（全文随楼层膨胀，不进聊天存档）">看提示词全文</span>
+        <b title="注入槽里当前生效的指导全文（微量指导或轻量修正指导）；静默轮显示静默原因">本轮指导</b>
         ${rec?.materials ? `<div class="pp-muted" title="本次判定实际喂给监听模型的材料清单">材料：${escapeHtml(materialsLine(rec.materials))}</div>` : ''}
         ${state.guideVoidReason ? `
         <div class="pp-muted">上一轮指导已随「${escapeHtml(state.guideVoidReason)}」作废：注入槽已清空、下一轮不再注入；等新一轮判定重新生成。</div>` : rec && rec.ok && rec.guidance ? `
@@ -213,7 +216,6 @@ function renderTab(container) {
         ${rec.mode === 'light' ? `<div class="pp-muted">${escapeHtml(lightChecksLine(rec.findings))}</div>` : ''}
         <div class="pp-muted">本轮静默：${escapeHtml(rec.noGuidanceReason || '未给原因')}</div>` : `
         <div class="pp-muted">${rec ? '最近一轮失败，注入槽已清空（绝不复用过期指导）' : '还没有判定记录'}</div>`}
-        <pre id="pp_ls_prompt_pre" class="pp-ls-prompt" hidden></pre>
     </div>
 
     <div class="pp-section">
@@ -273,8 +275,17 @@ function renderTab(container) {
     <div class="pp-section">
         <div class="pp-ls-tracebar">
             <span id="pp_ls_trace_btn" class="menu_button" title="滚动查看逐轮判定记录：判定三态、楼层作证、watch 标记、指导或静默原因">留痕记录 <span class="pp-ls-count">${state.trace.length}</span></span>
-            <span class="pp-muted">最新在前 · 滚动保留 ${cfg.traceRounds} 轮 · 点开悬浮窗查看</span>
+            <span id="pp_ls_prompt" class="menu_button" title="查看最近一次判定（例行轮或回归判定）实际发给监听模型的提示词全文——只保留最近一次、刷新页面后清空（全文随楼层膨胀，不进聊天存档）">看提示词全文</span>
+            ${!state.guideVoidReason && state.round > 0 ? `<span class="pp-muted" title="本聊天例行判定的累计次数（挂单位的轮与轻量轮都计；回归判定不计数；指导作废期间不显示——作废行只说作废）">已判定 ${state.round} 轮</span>` : ''}
+            <span class="pp-muted">最新在前 · 滚动保留 ${cfg.traceRounds} 轮</span>
         </div>
+        <pre id="pp_ls_prompt_pre" class="pp-ls-prompt" hidden></pre>
+    </div>
+
+    ${/* 判定材料区（第三十七轮，用户拍板）：监听页最下面、两套页签——「日常监听」管每轮例行判定（单位轮＋轻量轮），
+        「重挂对账」管重挂有进度的章那一刻、你开口对话前自动跑的一次性回归判定；选择范围相同、勾选互不影响、按聊天存 */ ''}
+    <div class="pp-section" id="pp_ls_matzone">
+        ${matZoneHtml()}
     </div>`;
 
     bindTab(container);
@@ -399,15 +410,166 @@ function bindTab(container) {
         openTraceWindow();
     });
 
-    container.querySelector('#pp_ls_lore')?.addEventListener('click', () => openLorePickWindow());
+    bindMatZone(container);
 }
 
 // ---------------------------------------------------------------------------
-// 世界书自选悬浮窗（第三十四轮）：勾选存监听自己的聊天块——与向导第 1 步 / 长线页互不影响。
+// 判定材料区（第三十七轮，用户拍板）：两套材料单各自独立、按聊天存——「日常监听」＝每轮例行
+// 判定（单位轮＋轻量轮共用），「重挂对账」＝重挂有进度的章那一刻、你开口对话前自动跑的一次性
+// 回归判定。选择范围相同：世界书自选 / 记忆表格挑选器（照向导第 1 步同款克隆——用户定则：
+// 一切提示词材料都在全量版本上做减法、一套机器，不做每板块单独算法）/ 世界书检索 / 楼层数。
+// ---------------------------------------------------------------------------
+
+let matPage = 'routine';   // 当前展开的页签（会话记忆；默认日常监听）
+
+function matStore(kind) {
+    const st = listenerState();
+    return kind === 'reentry' ? st.matReentry : st.matRoutine;
+}
+
+function matPicksArr(kind) {
+    return kind === 'reentry' ? (listenerState().matReentry.picks ?? []) : listenerState().lorePicks;
+}
+
+function matModeOf(mat, uid) {
+    return (mat?.memModes ?? {})[uid] ?? 'always';
+}
+
+// 标签 chips（照第 1 步口径）：计数只统计未停用表格里的行
+function matTagChips(mat) {
+    const ms = memoryState();
+    const sheets = ms.mirror.sheets ?? [];
+    const scope = new Set(sheets.filter(s => matModeOf(mat, s.uid) !== 'off').map(s => s.uid));
+    const counts = new Map();
+    for (const sheet of sheets) {
+        if (!scope.has(sheet.uid)) continue;
+        for (const r of sheet.rows) for (const t of (ms.tags[r.rid] ?? [])) counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    const tags = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    return tags.length
+        ? `<label class="pp-mem-chip" title="没全勾时勾上=一键勾选全部标签；已全勾时点掉=一键全清"><input type="checkbox" data-mtag-all /> 全选</label>`
+            + tags.map(([t, n]) => `<label class="pp-mem-chip" title="带这个标签的记忆行"><input type="checkbox" data-mtag="${escapeHtml(t)}" ${(mat.memTags ?? []).includes(t) ? 'checked' : ''}/> ${escapeHtml(t)} (${n})</label>`).join('')
+        : '<span class="pp-muted">所选表格里还没有带标签的行：到「记忆表格」页打标签</span>';
+}
+
+function matZoneHtml() {
+    const kind = matPage;
+    const mat = matStore(kind);
+    const sheets = memoryState().mirror.sheets ?? [];
+    const zoneTip = kind === 'routine'
+        ? '本页＝日常监听的材料单：挂单位的判定轮与无单位的轻量轮都用这一份，每轮判定都生效'
+        : '本页＝重挂对账的材料单：重新挂上有进度的章、你开口对话前自动跑的那一次回归判定用这一份（只那一次；之后的日常轮回到上一页的材料单）';
+    const sheetRows = sheets.map(s => `
+    <div class="pp-gd-sheetrow">
+        <span class="pp-gd-sheetname" title="${escapeHtml(s.name)} · ${s.rows.length} 行">${escapeHtml(s.name)} · ${s.rows.length} 行</span>
+        <div class="pp-seg" data-mseg="${escapeHtml(s.uid)}" title="停用＝本页判定不带这张表；标签＝只带命中所勾标签的行（没打标签的表用这档带不出东西，那类表选常驻）；常驻＝无论标签全量带出">
+            <span class="pp-seg-opt${matModeOf(mat, s.uid) === 'off' ? ' on' : ''}" data-state="off">停用</span>
+            <span class="pp-seg-opt${matModeOf(mat, s.uid) === 'tags' ? ' on' : ''}" data-state="tags">标签</span>
+            <span class="pp-seg-opt${matModeOf(mat, s.uid) === 'always' ? ' on' : ''}" data-state="always">常驻</span>
+        </div>
+    </div>`).join('');
+    return `
+    <b>判定材料</b>
+    <div class="pp-seg" id="pp_ls_mattab" title="两套材料单都按聊天存、勾选互不影响，选择范围相同（世界书自选 / 记忆表格 / 世界书检索 / 楼层数）">
+        <span class="pp-seg-opt${kind === 'routine' ? ' on' : ''}" data-mpage="routine">日常监听</span>
+        <span class="pp-seg-opt${kind === 'reentry' ? ' on' : ''}" data-mpage="reentry">重挂对账</span>
+    </div>
+    <span class="pp-muted">${zoneTip}</span>
+    <div class="pp-ls-knobs">
+        <span id="pp_ls_lore" class="menu_button" title="勾选世界书条目固定进本页材料单：整条原文、不截断、不看关键词/常驻/启用状态；与本页「世界书检索」自动去重（这边优先）">世界书自选（已勾 ${resolveLorePicks(matPicksArr(kind)).length} 条）</span>
+        <label title="按最近楼层重扫世界书、命中条目随本页判定附带（共用「世界书」页的检索口径）；与本页「世界书自选」自动去重（自选优先）"><input type="checkbox" id="pp_ls_scan" ${mat.scan ? 'checked' : ''} /> 世界书检索</label>
+        <label title="本页判定携带的楼层原文范围：0 = 全量（默认，判定引证最全）；N = 只带最近 N 层角色楼（其间夹的用户消息保留、楼层号仍是全聊天绝对号）——长对话省钱用，砍太狠可能伤判定准头，自己权衡">楼层数 <input id="pp_ls_floors" class="text_pole" type="number" min="0" step="5" value="${mat.floors}" /></label>
+    </div>
+    ${sheets.length ? `
+    <label class="pp-label" title="照向导第 1 步同款（一套机器，在全量版本上做减法）：每张表一个档位、标签过滤、表尾最新行；选择随本页材料单按聊天存，两页互不影响">记忆表格召回</label>
+    <div class="pp-gd-memlay">
+        <div>
+            <b class="pp-gd-layname">表格档位</b>
+            <div class="pp-gd-sheetlist">${sheetRows}</div>
+        </div>
+        <div>
+            <b class="pp-gd-layname">标签过滤</b>
+            <div class="pp-gd-selp" id="pp_ls_mem_chips">${matTagChips(mat)}</div>
+            <label class="pp-gd-recentrow" title="标签过滤会漏掉近期发生但没打标签的事件：填 N，「标签」档的每张表无论标签都把表尾最新 N 行一并带给本页判定——常驻档本来就全量、用不上本项；记忆行没有时间戳、新记录在表尾，「最新」即表尾；0 = 不另附">「标签」档每表另附最新 <input type="number" class="text_pole" id="pp_ls_mem_recent" min="0" step="1" value="${mat.memRecent}" /> 行</label>
+        </div>
+    </div>` : '<div class="pp-muted">镜像里还没有记忆表，本页判定不带记忆表格</div>'}`;
+}
+
+function bindMatZone(container) {
+    const zone = container.querySelector('#pp_ls_matzone');
+    if (!zone) return;
+    const persist = () => persistListener();
+
+    zone.querySelectorAll('#pp_ls_mattab .pp-seg-opt').forEach(el => el.addEventListener('click', () => {
+        if (el.classList.contains('on')) return;
+        matPage = el.dataset.mpage === 'reentry' ? 'reentry' : 'routine';
+        zone.innerHTML = matZoneHtml();   // 就地重建本区（不整页重渲染、不丢滚动位置）
+        bindMatZone(container);
+    }));
+
+    zone.querySelector('#pp_ls_scan')?.addEventListener('change', e => { matStore(matPage).scan = e.target.checked; persist(); });
+    zone.querySelector('#pp_ls_floors')?.addEventListener('change', e => {
+        const mat = matStore(matPage);
+        mat.floors = Math.max(0, Math.floor(Number(e.target.value) || 0));
+        e.target.value = String(mat.floors);
+        persist();
+    });
+    zone.querySelector('#pp_ls_lore')?.addEventListener('click', () => openLorePickWindow(matPage));
+
+    const chipsBox = zone.querySelector('#pp_ls_mem_chips');
+    const applyTags = () => {
+        if (!chipsBox) return;
+        matStore(matPage).memTags = [...chipsBox.querySelectorAll('[data-mtag]:checked')].map(x => x.dataset.mtag);
+        persist();
+    };
+    const syncAll = () => {
+        const allBox = chipsBox?.querySelector('[data-mtag-all]');
+        if (!allBox) return;
+        const boxes = [...chipsBox.querySelectorAll('[data-mtag]')];
+        allBox.checked = boxes.length > 0 && boxes.every(b => b.checked);
+        allBox.indeterminate = !allBox.checked && boxes.some(b => b.checked);
+    };
+    // 档位三段：就地翻高亮＋重建标签 chips（照第 1 步手法，不整页重渲染不丢滚动位置）
+    const rewireChips = () => {
+        if (!chipsBox) return;
+        chipsBox.innerHTML = matTagChips(matStore(matPage));
+        syncAll();
+        chipsBox.querySelector('[data-mtag-all]')?.addEventListener('change', () => {
+            const allBox = chipsBox.querySelector('[data-mtag-all]');
+            chipsBox.querySelectorAll('[data-mtag]').forEach(cb => { cb.checked = allBox.checked; });
+            applyTags();
+            syncAll();
+        });
+        chipsBox.querySelectorAll('[data-mtag]').forEach(cb => cb.addEventListener('change', () => {
+            applyTags();
+            syncAll();
+        }));
+    };
+    zone.querySelectorAll('.pp-seg[data-mseg] .pp-seg-opt').forEach(el => el.addEventListener('click', () => {
+        if (el.classList.contains('on')) return;
+        const mat = matStore(matPage);
+        mat.memModes = { ...(mat.memModes ?? {}), [el.closest('.pp-seg').dataset.mseg]: el.dataset.state };
+        persist();
+        el.closest('.pp-seg').querySelectorAll('.pp-seg-opt').forEach(o => o.classList.toggle('on', o === el));
+        rewireChips();
+    }));
+    rewireChips();
+
+    zone.querySelector('#pp_ls_mem_recent')?.addEventListener('change', e => {
+        const mat = matStore(matPage);
+        mat.memRecent = Math.max(0, Math.round(Number(e.target.value) || 0));
+        e.target.value = String(mat.memRecent);
+        persist();
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 世界书自选悬浮窗（第三十四轮；第三十七轮起按材料单分家）：勾选存监听自己的聊天块——
+// 日常单写 state.lorePicks、重挂单写 state.matReentry.picks，与向导第 1 步 / 长线页互不影响。
 // 交互照长线页同款：按书折叠、搜索、整书全勾/全清
 // ---------------------------------------------------------------------------
 
-function openLorePickWindow() {
+function openLorePickWindow(kind = 'routine') {
     let query = '';
     const foldState = new Map();
     let win = document.getElementById('pp_ls_lorewin');
@@ -419,15 +581,15 @@ function openLorePickWindow() {
     const isFolded = (book, searching) => (foldState.has(book.id) ? foldState.get(book.id) : !searching);
     const syncBtn = () => {
         const btn = document.getElementById('pp_ls_lore');
-        if (btn) btn.textContent = `世界书自选（已勾 ${resolveLorePicks(listenerState().lorePicks).length} 条）`;
+        if (btn) btn.textContent = `世界书自选（已勾 ${resolveLorePicks(matPicksArr(kind)).length} 条）`;
     };
 
     const render = () => {
         const books = settings.lorebooks ?? [];
-        const sel = new Set(listenerState().lorePicks);
+        const sel = new Set(matPicksArr(kind));
         if (!books.length) {
             win.innerHTML = `
-            <div class="pp-ls-float-head"><b>世界书自选 · 监听</b><span id="pp_ls_lore_close" class="menu_button fa-solid fa-xmark" title="关闭"></span></div>
+            <div class="pp-ls-float-head"><b>世界书自选 · ${kind === 'reentry' ? '重挂对账' : '日常监听'}</b><span id="pp_ls_lore_close" class="menu_button fa-solid fa-xmark" title="关闭"></span></div>
             <div class="pp-ls-float-body"><div class="pp-muted">还没有世界书——在「世界书」页签导入或新建后再来</div></div>`;
             win.querySelector('#pp_ls_lore_close').addEventListener('click', () => win.remove());
             return;
@@ -453,21 +615,21 @@ function openLorePickWindow() {
             const on = sel.has(key);
             return `
         <div class="pp-kb-erow${on ? '' : ' pp-kb-unsel'}">
-            <label title="勾上＝这条的原文整条固定进每轮判定材料（不截断）"><input type="checkbox" data-lore="${escapeHtml(key)}" ${on ? 'checked' : ''} /></label>
+            <label title="勾上＝这条的原文整条固定进${kind === 'reentry' ? '重挂对账那次判定' : '每轮例行判定'}的材料（不截断）"><input type="checkbox" data-lore="${escapeHtml(key)}" ${on ? 'checked' : ''} /></label>
             <span class="pp-kb-ebody" title="${escapeHtml(String(e.content ?? ''))}">${escapeHtml(String(e.comment ?? `条目 ${e.uid + 1}`))}</span>
         </div>`; }).join('')}`;
         }).join('');
 
         win.innerHTML = `
         <div class="pp-ls-float-head">
-            <b>世界书自选 · 监听</b>
-            <span class="pp-muted">勾上＝整条原文固定进每轮判定材料</span>
+            <b>世界书自选 · ${kind === 'reentry' ? '重挂对账' : '日常监听'}</b>
+            <span class="pp-muted">勾上＝整条原文固定进${kind === 'reentry' ? '重挂对账那次判定' : '每轮例行判定'}的材料</span>
             <span id="pp_ls_lore_close" class="menu_button fa-solid fa-xmark" title="关闭"></span>
         </div>
         <div class="pp-ls-float-body">
         <input type="text" class="text_pole textarea_compact" id="pp_ls_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动勾选；检索时命中的书自动展开…" value="${escapeHtml(query)}" style="width:100%" />
         ${groupHtml || '<div class="pp-muted">没有命中检索词的条目，清空检索词看全部</div>'}
-        <div class="pp-muted" style="margin-top:6px">勾上＝整条原文固定进每轮判定材料（例行判定与回归判定都带、不截断）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与每轮重扫的「检索命中」自动去重（这边优先）。只管监听，与「剧情指导」第 1 步、长线页互不影响；无冷却</div>
+        <div class="pp-muted" style="margin-top:6px">勾上＝整条原文固定进${kind === 'reentry' ? '重挂对账那次判定' : '每轮例行判定'}的材料（不截断）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与本页「世界书检索」自动去重（这边优先）。只管监听本页材料单——与「剧情指导」第 1 步、长线页、另一页材料单互不影响；无冷却</div>
         </div>`;
 
         win.querySelector('#pp_ls_lore_close').addEventListener('click', () => win.remove());
@@ -481,7 +643,8 @@ function openLorePickWindow() {
         });
         const apply = keys => {
             const s = listenerState();
-            s.lorePicks = [...keys];
+            if (kind === 'reentry') s.matReentry.picks = [...keys];
+            else s.lorePicks = [...keys];
             persistListener();
             render();
             syncBtn();

@@ -66,8 +66,8 @@ const DEFAULTS = {
         stuckWindow: 3,     // 卡死参考窗口（连续约 N 轮无推进也无有效对话才考虑 stuck；提案值）
         progressMin: 400,   // 换算锚：一层楼有效推进字数区间的低端（示意默认，两端可调）
         progressMax: 800,   // 换算锚：区间高端
-        withLorebook: true, // 附加材料：世界书检索命中（共用 1.0 检索口径）
-        withMemory: true,   // 附加材料：记忆表格（全量口径）
+        // 材料开关（世界书检索/记忆表/楼层数）第三十七轮搬进按聊天的双材料单（监听页「判定材料」区），
+        // 全局不再留默认键；旧存档的这三个键由 listenerState 迁移播种读走后删除
     },
     chatData: {},           // 每聊天数据的冷层留底（见 js/chatdata.js）：{ [聊天身份]: { memory/story/picks/reaction/books } }
     uiZoom: 100,            // 面板内容缩放百分比（80–160，抽屉头部步进器调）：字与控件等比放大、页面相应变长
