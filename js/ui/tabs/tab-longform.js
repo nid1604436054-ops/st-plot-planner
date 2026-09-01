@@ -41,6 +41,7 @@ let revOpen = false;           // 操作条「按意见修订」的意见框展�
 let paramOpen = null, matOpen = null;   // 参数/材料折叠位（null＝首次按阶段自动定：生成前展开、之后收起）
 let busyLast = 0;              // busy 实时字数的节流闸（流式回调很密，150ms 一拍够用）
 let busyT0 = 0, busyTimer = null, busyThink = 0;   // busy 计时与思考计数（第二十四轮：横幅补模型·用时·思考）
+let busyFeedAt = 0;   // 最近一次收到模型事件的时刻（吐字/思考增量/逐卷落定都算——「N 秒无新内容」的表针，第二十九轮）
 
 // 卷内 UI 状态：open 展开、tab 页签（sk 骨架/text 卷文本/ch 章与节点）、skEdit/veEdit 编辑态、
 // skRev/veRev/spRev 意见框、chView/chEdit 章文本查看与编辑
@@ -114,6 +115,11 @@ function startBusy(kind) {
     lfBusy = { kind, ctl: new AbortController() };
     busyT0 = Date.now();
     busyThink = 0;
+    busyFeedAt = Date.now();
+    // 页顶「最近一次操作失败」留痕在开工这一下清掉（第二十九轮）：报错跟着「最近一次操作」走，
+    // 不跟着历史走——旧实现只在骨架生成成功/作废/回参数时清，具体化/修订/切章成功后旧报错一直挂着
+    const s = lfState();
+    if (s.error) { s.error = ''; persistLf(); }
 }
 function endBusy() {
     lfBusy = null;
@@ -133,7 +139,10 @@ function updateBusyMeta() {
     const sec = Math.max(0, Math.round((Date.now() - busyT0) / 1000));
     const mm = String(Math.floor(sec / 60)).padStart(2, '0');
     const ss = String(sec % 60).padStart(2, '0');
-    el.textContent = `${lfModelLabel()} · ${mm}:${ss}${busyThink ? ` · 思考 ${busyThink.toLocaleString()} 字` : ''}`;
+    // 静默表针（第二十九轮）：计时本身是每秒一拍、不依赖吐字；但长时间没吐字时页面原先毫无表示，
+    // 看着像卡死——20 秒没收到任何模型事件就明说「还在等」，秒数照跳
+    const quiet = Math.floor((Date.now() - busyFeedAt) / 1000);
+    el.textContent = `${lfModelLabel()} · ${mm}:${ss}${busyThink ? ` · 思考 ${busyThink.toLocaleString()} 字` : ''}${quiet >= 20 ? ` · 已 ${quiet} 秒无新内容` : ''}`;
 }
 
 function renderTab(container) {
@@ -859,7 +868,7 @@ function bindTab(container, st) {
                 signal: lfBusy.ctl.signal,
                 onUsage: u.onUsage,
                 onDelta: len => setBusyNote(`已收 ${len.toLocaleString()} 字`),
-                onReasoning: t => { busyThink = t.length; },
+                onReasoning: t => { busyThink = t.length; busyFeedAt = Date.now(); },
             });
             paramOpen = false;
             matOpen = false;
@@ -903,7 +912,7 @@ function bindTab(container, st) {
             signal: null,
             onUsage: u.onUsage,
             onDelta: len => setBusyNote(`已收 ${len.toLocaleString()} 字`),
-            onReasoning: t => { busyThink = t.length; },
+            onReasoning: t => { busyThink = t.length; busyFeedAt = Date.now(); },
         };
         if (s.stage === 'skeleton') {
             startBusy('revsk');
@@ -936,15 +945,20 @@ function bindTab(container, st) {
             const r = await runLfRevise({ opinion, ...common });
             if (!r.updated) {
                 const why = r.failed?.length
-                    ? `${r.failed.length} 卷调用失败（${r.failed.map(f => `第 ${f.vol + 1} 卷`).join('、')}）、其余原样带回`
+                    ? `${r.failed.length} 卷调用失败（${r.failed.map(f => `第 ${f.vol + 1} 卷：${clamp(f.reason, 60)}`).join('；')}）、其余原样带回`
                     : r.keptNoText ? `有 ${r.keptNoText} 卷没给正文、其余原样带回` : '全部卷都被原样带回';
                 toastr.warning(`一处都没改成：${why}——重试一次，或去各卷「卷文本」页签按卷修订；${u.line()}`);
             } else {
                 const bits = [`已按意见改了 ${r.updated} 卷（章表若已生成会标过期）`];
                 if (r.unchanged) bits.push(`${r.unchanged} 卷原样带出——没被意见点名的卷属正常`);
                 if (r.keptNoText) bits.push(`${r.keptNoText} 卷没给正文、保留原文`);
-                if (r.failed?.length) bits.push(`${r.failed.length} 卷失败（${r.failed.map(f => `第 ${f.vol + 1} 卷`).join('、')}，重试或用各卷「卷文本」页签的修订）`);
+                if (r.failed?.length) bits.push(`${r.failed.length} 卷失败（${r.failed.map(f => `第 ${f.vol + 1} 卷：${clamp(f.reason, 60)}`).join('；')}，重试或用各卷「卷文本」页签的修订）`);
                 toastr.success(`${bits.join('；')}；${u.line()}`);
+            }
+            if (r.failed?.length) {   // 部分失败也留页顶痕（与批量步同口径；下一次开工时清）——原因带上，不再只有卷号
+                const s = lfState();
+                s.error = r.failed.map(f => `第 ${f.vol + 1} 卷修订失败：${clamp(f.reason, 80)}`).join('；');
+                persistLf();
             }
         } catch (err) {
             if (err?.name !== 'AbortError') toastr.error(`修订失败：${err?.message ?? err}`);
@@ -1141,8 +1155,10 @@ function wireExec(container) {
     }));
 }
 
-// busy 横幅的实时字样（节流 150ms 一拍——流式回调很密，DOM 不必跟着逐块跳）
+// busy 横幅的实时字样（节流 150ms 一拍——流式回调很密，DOM 不必跟着逐块跳）。
+// 进来即刷静默表针：能走到这＝刚有模型事件（吐字/逐卷落定），「N 秒无新内容」归零
 function setBusyNote(t) {
+    busyFeedAt = Date.now();
     const now = Date.now();
     if (now - busyLast < 150) return;
     busyLast = now;
@@ -1177,7 +1193,7 @@ async function runBatch(container, kind) {
         provider: providerFromId(providerId),
         signal: lfBusy.ctl.signal,
         onUsage: u.onUsage,
-        onReasoning: t => { busyThink = t.length; },
+        onReasoning: t => { busyThink = t.length; busyFeedAt = Date.now(); },
         onDelta: (vi, len) => { lens.set(vi, Math.max(lens.get(vi) ?? 0, len)); setBusyNote(note()); },
         onProgress: p => { settledN = p.settled; totalN = p.total; rerenderVols(container); setBusyNote(note()); },
     };
@@ -1215,7 +1231,7 @@ async function runVolOp(container, kind, i, opinion) {
             onDelta: kind === 'volsplit'
                 ? (_vi, len) => setBusyNote(`已收 ${len.toLocaleString()} 字`)   // 单卷切章的 onDelta 带 (vi,len)
                 : len => setBusyNote(`已收 ${len.toLocaleString()} 字`),
-            onReasoning: t => { busyThink = t.length; },
+            onReasoning: t => { busyThink = t.length; busyFeedAt = Date.now(); },
         };
         if (kind === 'volsk') {
             const r = await runLfVolSkeletonRevise(i, { opinion, ...common });

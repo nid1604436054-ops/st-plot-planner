@@ -35,7 +35,7 @@ export function lfState() {
         createdAt: 0,
         volumes: [],
         mount: null,              // { vol, ch, unitId, at } 当前挂进监听的章
-        error: '',                // 最近一次失败原因（页面上留痕，成功后清）
+        error: '',                // 最近一次失败原因（页面留痕；下一次生成开工那一下清——第二十九轮起，旧注释「成功后清」从未实现）
     }));
     // 就地清洗（listenerState 同款）：必须返回缓存对象本身——调用方的就地改动要落在
     // 会话缓存里，persistLf 回读时才读得到；另造新对象＝改动写进孤儿副本、存回去的是旧值

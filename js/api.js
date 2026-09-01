@@ -251,15 +251,23 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
     }
 
     if (!stream) {
-        const data = await res.json();
+        // 200 但不是 JSON（网关错误页一类）不再裸抛浏览器的 SyntaxError——带返回原文片段，
+        // 用户对账看得懂（第二十九轮真机反馈：报错要带原生返回）
+        const rawText = await res.text().catch(() => '');
+        let data = null;
+        try { data = JSON.parse(rawText); } catch {
+            throw new ApiError(`API 返回了 200 但内容不是 JSON（前 150 字）：${rawText.slice(0, 150)}`);
+        }
         const choice = data?.choices?.[0];
-        if (!choice?.message) throw new ApiError('API 返回结构异常（缺少 choices[0].message）');
+        if (!choice?.message) throw new ApiError(`API 返回结构异常（缺少 choices[0].message；返回前 150 字）：${rawText.slice(0, 150)}`);
         if (typeof onUsage === 'function' && data?.usage) onUsage(data.usage);
         return pickContent(choice.message, { finishReason: choice.finish_reason, completionTokens: data?.usage?.completion_tokens, promptTokens: data?.usage?.prompt_tokens, thinkingOff: thinkOff });
     }
 
     // SSE 流式：逐行解析 data: {...}，聚合增量并回调 onDelta；末包的 usage（若有）回传对账。
-    // 正文增量全空时兜底聚合思考字段增量——与非流式 pickContent 同一口径
+    // 正文增量全空时兜底聚合思考字段增量——与非流式 pickContent 同一口径。
+    // 中途断流（读流出错）不裸抛浏览器原文（terminated/network error 一类等于什么都没说）：
+    // 带上等了多少秒、已收多少字与底层报错原文——第二十九轮真机反馈「报错太笼统」的病根之一
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -267,46 +275,53 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
     let reasoning = '';
     let usage = null;
     let watchHeader = !tolerateThinkingHeader;   // 思考标头监视：第一发才看，重发的一发放行收完
+    const streamT0 = Date.now();
     const finish = () => {
         if (usage && typeof onUsage === 'function') onUsage(usage);
         return full || reasoning;
     };
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith('data:')) continue;
-            const data = trimmed.slice(5).trim();
-            if (data === '[DONE]') return finish();
-            try {
-                const chunk = JSON.parse(data);
-                if (chunk?.usage && (chunk.usage.prompt_tokens || chunk.usage.completion_tokens)) usage = chunk.usage;
-                const delta = chunk?.choices?.[0]?.delta;
-                if (typeof delta?.content === 'string' && delta.content) {
-                    full += delta.content;
-                    // 思考标头监视：首行流全即判定，命中就掐断流、抛给外层重试（见 chatCompletion）
-                    if (watchHeader) {
-                        const st = thinkingHeaderPrefixState(full);
-                        if (st === 'yes') {
-                            await reader.cancel().catch(() => {});
-                            throw new ThinkingHeaderError();
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('data:')) continue;
+                const data = trimmed.slice(5).trim();
+                if (data === '[DONE]') return finish();
+                try {
+                    const chunk = JSON.parse(data);
+                    if (chunk?.usage && (chunk.usage.prompt_tokens || chunk.usage.completion_tokens)) usage = chunk.usage;
+                    const delta = chunk?.choices?.[0]?.delta;
+                    if (typeof delta?.content === 'string' && delta.content) {
+                        full += delta.content;
+                        // 思考标头监视：首行流全即判定，命中就掐断流、抛给外层重试（见 chatCompletion）
+                        if (watchHeader) {
+                            const st = thinkingHeaderPrefixState(full);
+                            if (st === 'yes') {
+                                await reader.cancel().catch(() => {});
+                                throw new ThinkingHeaderError();
+                            }
+                            if (st === 'no') watchHeader = false;   // 定了不是标头：后续增量不再逐块判定
                         }
-                        if (st === 'no') watchHeader = false;   // 定了不是标头：后续增量不再逐块判定
+                        onDelta(full);
+                    } else if (delta && (delta.reasoning_content || delta.reasoning)) {
+                        reasoning += String(delta.reasoning_content ?? delta.reasoning ?? '');
+                        if (typeof onReasoning === 'function') onReasoning(reasoning);
                     }
-                    onDelta(full);
-                } else if (delta && (delta.reasoning_content || delta.reasoning)) {
-                    reasoning += String(delta.reasoning_content ?? delta.reasoning ?? '');
-                    if (typeof onReasoning === 'function') onReasoning(reasoning);
-                }
                 } catch (err) {
                     if (err instanceof ThinkingHeaderError) throw err;   // 心跳行兜底不吃思考标头掐断（2026-08-30 第十一轮测试台抓出的吞错）
                     // 忽略无法解析的心跳/注释行
                 }
+            }
         }
+    } catch (err) {
+        if (err?.name === 'AbortError' || err instanceof ThinkingHeaderError) throw err;
+        const sec = Math.round((Date.now() - streamT0) / 1000);
+        throw new ApiError(`流式响应中断：等了 ${sec} 秒、已收 ${full.length} 字时连接被掐断（底层报错：${err?.message ?? err}）——多半是服务商中途断连或网关超时，重试通常可恢复`);
     }
     return finish();   // 流没等到 [DONE] 就断了：按已收到的内容收尾
 }
