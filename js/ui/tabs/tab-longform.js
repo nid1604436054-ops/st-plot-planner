@@ -1,9 +1,11 @@
-// 2.0 长线规划页签（第二十四轮重构；第二十五轮操作条挪位）：状态行＋ 参数/材料两个折叠区
-// （生成前展开、过程中收起）＋ 操作条（四步生成按钮常驻、按流程置灰——放两个折叠区下面、
-// 卷列表上面：用户在卷卡上下编辑时往上够按钮，不用每次跨过两行折叠头）＋ 卷列表（每卷折叠，
-// 展开后三页签切换：骨架 / 卷文本 / 章与节点——同一附属区里切着看，不往下摞长页）＋ 执行区
-// （当前章＋接续）。「按意见修订」下沉到每一步：骨架整书 / 单卷骨架 / 单卷卷文本 / 单卷带意见
-// 重切，与手动编辑并存。状态与编排全在 js/longform.js，本文件只管界面；逐轮执行去看「监听」页。
+// 2.0 长线规划页签（第二十四轮重构；第二十五轮操作条挪位；第三十轮操作条改阶段驱动）：
+// 状态行＋ 参数/材料两个折叠区（生成前展开、过程中收起）＋ 操作条（放两个折叠区下面、卷列表
+// 上面——按钮按书的现状显隐：第一步只有「生成骨架」；之后恒三颗「从零开始/按意见修订X/下一步」，
+// 半拉子批次的「继续具体化/继续切章」只在有卷没跑完时垫在最后、跑完自动消失）＋ 卷列表（每卷
+// 折叠，展开后三页签切换：骨架 / 卷文本 / 章与节点——同一附属区里切着看，不往下摞长页）＋
+// 执行区（当前章＋接续）。「按意见修订」下沉到每一步：骨架整书 / 卷文本整书（逐卷）/ 章整书
+// （逐卷重切）/ 单卷骨架 / 单卷卷文本 / 单卷带意见重切，与手动编辑并存。状态与编排全在
+// js/longform.js，本文件只管界面；逐轮执行去看「监听」页。
 // 生成走「单次选用」模型（主连接或供应商方案，不影响正在用的模型）。
 import { settings } from "../../settings.js";
 import { escapeHtml, clamp } from "../../utils.js";
@@ -12,8 +14,8 @@ import { knowledgeLists } from "../../knowledge.js";
 import { resolveLorePicks } from "../../lorebook.js";
 import {
     lfState, persistLf, resetLf, runLfSkeleton, runLfDetailBatch, runLfRevise, runLfSplitBatch,
-    runLfSkeletonRevise, runLfVolSkeletonRevise, runLfVolTextRevise, runLfVolSplit, stashLfRegenBackup,
-    mountChapter, syncLfProgress, lfNextChapter, lfStats, lfMatOverview,
+    runLfSkeletonRevise, runLfVolSkeletonRevise, runLfVolTextRevise, runLfVolSplit, runLfChapterRevise,
+    stashLfRegenBackup, mountChapter, syncLfProgress, lfNextChapter, lfStats, lfMatOverview,
     LF_MIN_CHAPTER_FLOORS, LF_DEFAULT_FLOORS,
 } from "../../longform.js";
 
@@ -26,8 +28,8 @@ export const longformTab = {
 // 模块级瞬态（刷新即失、不动数据）
 let lfBusy = null;   // { kind: 'skeleton'|'detail'|'revise'|'revsk'|'volsk'|'voltext'|'split'|'volsplit', ctl }
 const BUSY_LABEL = {
-    skeleton: '生成骨架中', detail: '具体化各卷中', revise: '按意见修订中', revsk: '按意见修订骨架中',
-    volsk: '修订本卷骨架中', voltext: '修订本卷文本中', split: '再切小中', volsplit: '重切本卷中',
+    skeleton: '生成骨架中', detail: '具体化各卷中', revise: '按意见修订所有卷中', revsk: '按意见修订骨架中',
+    chrev: '按意见修订所有章中', volsk: '修订本卷骨架中', voltext: '修订本卷文本中', split: '生成章节中', volsplit: '重切本卷中',
 };
 let providerId = '';        // 单次选用的模型（会话内记住上次选择；空 = 主连接）
 let confirmReset = false;   // 「作废本长线」两步确认
@@ -38,6 +40,7 @@ const chArm = new Set();       // 「取消」章文本编辑两步确认（`${v
 let lfOpinion = '';            // 整书修订意见草稿（会话内留底）
 const volOpinions = new Map(); // 单卷意见草稿（键 `${vi}:sk|text|split`，会话内留底——攒的意见不算瞬态）
 let revOpen = false;           // 操作条「按意见修订」的意见框展开位
+let revKind = 'sk';            // 意见框当前目标：sk 骨架 / vol 所有卷 / ch 所有章（第三十轮）
 let paramOpen = null, matOpen = null;   // 参数/材料折叠位（null＝首次按阶段自动定：生成前展开、之后收起）
 let busyLast = 0;              // busy 实时字数的节流闸（流式回调很密，150ms 一拍够用）
 let busyT0 = 0, busyTimer = null, busyThink = 0;   // busy 计时与思考计数（第二十四轮：横幅补模型·用时·思考）
@@ -58,7 +61,7 @@ function closeInlineBoxes(ui) {
 const STAGE_LABEL = {
     none: ['① 未开始', '填参数，点「生成骨架」'],
     skeleton: ['② 骨架已定', '可修订/编辑骨架，然后具体化各卷'],
-    detailed: ['③ 卷文本齐全', '可修订/手改，然后再切小'],
+    detailed: ['③ 卷文本齐全', '可修订/手改，然后生成章节'],
     split: ['④ 章/节点就绪', '执行期：按章挂进监听，节点逐轮点亮'],
 };
 
@@ -153,7 +156,6 @@ function renderTab(container) {
     const [stageLabel, stageHint] = STAGE_LABEL[st.stage];
     const stats = lfStats(st);
     const next = lfNextChapter(st);
-    const anyDetail = st.volumes.some(v => v.detailState === 'done');
     const busyLine = lfBusy ? `
         <div class="pp-item pp-lf-busy">
             <b>${BUSY_LABEL[lfBusy.kind] ?? '生成中'}…</b>
@@ -182,7 +184,7 @@ function renderTab(container) {
     ${paramFoldHtml(st)}
     ${materialsHtml(st)}
 
-    ${toolbarHtml(st, anyDetail)}
+    ${toolbarHtml(st)}
 
     ${st.stage !== 'none' ? `
     <div class="pp-section">
@@ -197,36 +199,62 @@ function renderTab(container) {
 }
 
 // ---------------------------------------------------------------------------
-// 操作条（第二十五轮起放在参数/材料折叠区下面、卷列表上面——编辑卷时往上够按钮不用跨过
-// 折叠区）：四步生成按钮常驻（没到的步骤灰置、悬浮说明指路）＋生成模型下拉＋
-// 「按意见修订」点开才带出整书意见框（骨架阶段修订骨架、有卷文本后修订卷文本）
+// 操作条（第三十轮改阶段驱动——按钮按书的现状显隐，不再常驻置灰）：
+//   第一步（没骨架）：只有「生成骨架」＋生成模型下拉；
+//   之后恒三颗：① 从零开始 ② 按意见修订骨架/所有卷（看卷文本是否齐全）③ 下一步
+//   （具体化各卷 → 生成章节 → 按意见修订所有章，看推进到哪）；
+//   「继续具体化（未完成的卷）/继续切章（未完成的卷）」是半拉子批次的恢复位：只在有卷没跑完
+//   时出现在最后，全部跑完自动消失——「报错才出现」在数据上就是「有卷没跑完才出现」（中途失败/
+//   中断才会留下半拉子，跑完即齐）；「按意见修订（X）」点开带出整书意见框，目标随点击的按钮走
 // ---------------------------------------------------------------------------
-function toolbarHtml(st, anyDetail) {
-    const canDetail = st.stage !== 'none';
-    const canRevise = st.stage !== 'none';
-    const canSplit = anyDetail;
-    const revTarget = st.stage === 'skeleton' ? '骨架' : '卷文本';
-    return `
+function toolbarHtml(st) {
+    const none = st.stage === 'none' || !st.volumes.length;
+    const anyDetail = st.volumes.some(v => v.detailState === 'done');
+    const allDetail = st.volumes.length > 0 && st.volumes.every(v => v.detailState === 'done');
+    const anyChapters = st.volumes.some(v => (v.chapters?.length ?? 0) > 0);
+    const splittableLeft = st.volumes.some(v => v.detailState === 'done' && v.splitState !== 'done');
+    if (none) {
+        return `
     <div class="pp-section">
         <div class="pp-lf-toolbar">
-            <span class="menu_button pp-lf-go ${st.stage === 'none' ? '' : 'pp-lf-dim'}" id="pp_lf_skeleton" title="一次调用产出全书卷结构与楼数预算（骨架＋切块合并做；楼数总和由插件校验；楼数按剧情体量分配、不平均）">生成骨架</span>
-            <span class="menu_button ${canDetail ? '' : 'pp-lf-dim'}" id="pp_lf_detail" title="逐卷并行生成卷级详细文本（一次一卷、只补没完成的卷——中途报错已成的卷不丢）；费用＝每卷一次调用">${st.volumes.some(v => v.detailState === 'done') ? '继续具体化（未完成的卷）' : '具体化各卷'}</span>
-            <span class="menu_button ${canRevise ? '' : 'pp-lf-dim'}" id="pp_lf_revise" title="${st.stage === 'skeleton'
-        ? '按意见修订全书骨架（卷名/楼数分配/概要/种子，只改意见涉及处）——单卷修订去各卷「骨架」页签'
-        : '按意见修订全部卷的卷文本（逐卷下发意见、一次只重出一卷全文——没被意见点名的卷会原样带出；改动去各卷「卷文本」页签看）'}">按意见修订（${revTarget}）</span>
-            <span class="menu_button ${canSplit ? '' : 'pp-lf-dim'}" id="pp_lf_split" title="逐卷并行：卷切成章（推进锚是刀口）、章内切节点，一步到位；只切「已具体化且未切章」的卷——单卷带意见重切去各卷「章与节点」页签">${st.volumes.some(v => v.splitState === 'done') ? '继续切章（未完成的卷）' : '再切小'}</span>
-            ${st.stage !== 'none' ? `<span class="menu_button" id="pp_lf_reskel" title="回到参数表单从头再来（参数与想法留着；旧书自动备份——新骨架生成失败会自动恢复）">重新生成骨架</span>` : ''}
-            <label class="pp-lf-prov" title="生成调用走哪个连接：主连接或供应商方案（单次选用，不影响正在使用的模型）——四步共用这一个选择">生成模型
+            <span class="menu_button pp-lf-go" id="pp_lf_skeleton" title="一次调用产出全书卷结构与楼数预算（骨架＋切块合并做；楼数总和由插件校验；楼数按剧情体量分配、不平均）">生成骨架</span>
+            <label class="pp-lf-prov" title="生成调用走哪个连接：主连接或供应商方案（单次选用，不影响正在使用的模型）——各步共用这一个选择">生成模型
                 <select id="pp_lf_prov" class="text_pole">${providerOptions(providerId)}</select>
             </label>
         </div>
-        ${revOpen && canRevise ? `
+    </div>`;
+    }
+    const REV = {
+        sk: ['按意见修订骨架', '按意见修订全书骨架（卷名/楼数分配/概要/种子，只改意见涉及处）——单卷修订去各卷「骨架」页签'],
+        vol: ['按意见修订所有卷', '按意见修订全部卷的卷文本（逐卷下发意见、一次只重出一卷全文——没被意见点名的卷会原样带出；改动去各卷「卷文本」页签看）'],
+        ch: ['按意见修订所有章', '按意见重切全部已切章的卷（逐卷执行：章怎么切、节点怎么排照意见；卷文本不动、旧章点亮进度按位置沿用）——单卷重切去各卷「章与节点」页签'],
+    };
+    if (revOpen && !(revKind === 'ch' ? anyChapters : revKind === 'vol' ? allDetail : true)) revOpen = false;
+    const rev = allDetail ? REV.vol : REV.sk;
+    const btn = (id, label, title) => `<span class="menu_button" id="${id}" title="${escapeHtml(title)}">${label}</span>`;
+    return `
+    <div class="pp-section">
+        <div class="pp-lf-toolbar">
+            ${btn('pp_lf_reskel', '从零开始', '回到参数表单从零再来一本（参数与想法留着；旧书自动备份——新骨架生成失败会自动恢复）')}
+            ${btn('pp_lf_revise', rev[0], rev[1])}
+            ${!anyDetail
+        ? btn('pp_lf_detail', '具体化各卷', '逐卷并行生成卷级详细文本（一次一卷、只补没完成的卷——中途报错已成的卷不丢）；费用＝每卷一次调用')
+        : anyChapters
+            ? btn('pp_lf_chrev', REV.ch[0], REV.ch[1])
+            : btn('pp_lf_split', '生成章节', '逐卷并行：卷切成章（推进锚是刀口）、章内切节点，一步到位；只切「已具体化且未切章」的卷——单卷带意见重切去各卷「章与节点」页签')}
+            ${anyDetail && !allDetail ? btn('pp_lf_detail', '继续具体化（未完成的卷）', '上回具体化有卷没跑完——只补没完成的卷（一次一卷；中途报错已成的卷不丢）；费用＝每卷一次调用') : ''}
+            ${anyChapters && splittableLeft ? btn('pp_lf_split', '继续切章（未完成的卷）', '上回切章有卷没跑完或失败——只补「已具体化且未切章」的卷；单卷带意见重切去各卷「章与节点」页签') : ''}
+            <label class="pp-lf-prov" title="生成调用走哪个连接：主连接或供应商方案（单次选用，不影响正在使用的模型）——各步共用这一个选择">生成模型
+                <select id="pp_lf_prov" class="text_pole">${providerOptions(providerId)}</select>
+            </label>
+        </div>
+        ${revOpen ? `
         <div class="pp-lf-form" style="margin-top:8px">
-            <label class="pp-lf-grow" title="写给大模型的修订意见——只改意见涉及处；意见为空的「换一版」走「重新生成骨架」">修订意见（全书${revTarget}）
+            <label class="pp-lf-grow" title="写给大模型的修订意见——只改意见涉及处；意见为空的「换一版」走「从零开始」">修订意见（${revKind === 'ch' ? '所有章' : revKind === 'vol' ? '所有卷' : '骨架'}）
                 <textarea id="pp_lf_opinion" class="text_pole textarea_compact" rows="3" placeholder="要改什么（例：第二卷的误会戏太拖，提前收掉；结尾加一场雨中告别）">${escapeHtml(lfOpinion)}</textarea>
             </label>
         </div>
-        <div class="pp-btn-row"><span id="pp_lf_revise_go" class="menu_button">按意见修订全书</span></div>` : ''}
+        <div class="pp-btn-row"><span id="pp_lf_revise_go" class="menu_button">${revKind === 'ch' ? '按意见修订所有章' : revKind === 'vol' ? '按意见修订所有卷' : '按意见修订骨架'}</span></div>` : ''}
     </div>`;
 }
 
@@ -551,7 +579,7 @@ function chTabHtml(v, i, st, budgetStale, splitStale) {
     if (!chs.length) {
         return `
         ${warns}
-        <div class="pp-muted">这一卷还没切章——点上面的「再切小」，或下面的单卷重切</div>
+        <div class="pp-muted">这一卷还没切章——点上面的「生成章节」，或下面的单卷重切</div>
         ${revBox}`;
     }
     return `
@@ -743,7 +771,7 @@ function saveVolSkeleton(container, i) {
     toastr.success(bits.join('；'));
 }
 
-// 删除本卷（两步确认）：挂载中拒绝、只剩一卷拒绝（要重来走「重新生成骨架」）；删前卷后挂载索引顺移
+// 删除本卷（两步确认）：挂载中拒绝、只剩一卷拒绝（要重来走「从零开始」）；删前卷后挂载索引顺移
 function delVolume(container, i, btn) {
     const s = lfState();
     if (!delArmVol.has(i)) {
@@ -758,7 +786,7 @@ function delVolume(container, i, btn) {
     }
     delArmVol.delete(i);
     if (!s.volumes[i]) return;
-    if (s.volumes.length <= 1) return toastr.warning('只剩这一卷——要重来走「重新生成骨架」');
+    if (s.volumes.length <= 1) return toastr.warning('只剩这一卷——要重来走「从零开始」');
     if (s.mount && s.mount.vol === i) return toastr.warning('这一卷里有正在执行的章——先到「监听」页卸下单位再删');
     s.volumes.splice(i, 1);
     if (s.mount && s.mount.vol > i) s.mount.vol -= 1;
@@ -854,7 +882,7 @@ function bindTab(container, st) {
     container.querySelector('#pp_lf_skeleton')?.addEventListener('click', async function () {
         if (lfBusy) return toastr.warning('有长线生成还在跑（先中断或等它完成）');
         const s = lfState();
-        if (s.stage !== 'none') return toastr.info('要从头重来先点「重新生成骨架」回参数');
+        if (s.stage !== 'none') return toastr.info('要从头重来先点「从零开始」');
         const u = usageCollector();
         startBusy('skeleton');
         renderTab(container);
@@ -889,23 +917,31 @@ function bindTab(container, st) {
         runBatch(container, 'detail');
     });
     container.querySelector('#pp_lf_split')?.addEventListener('click', function () {
-        if (!lfState().volumes.some(v => v.detailState === 'done')) return toastr.info('先「具体化各卷」出卷文本，才能切章');
+        if (!lfState().volumes.some(v => v.detailState === 'done')) return toastr.info('先「具体化各卷」出卷文本，才能生成章节');
         runBatch(container, 'split');
     });
 
     container.querySelector('#pp_lf_reskel')?.addEventListener('click', () => backToParams(container));
 
     container.querySelector('#pp_lf_revise')?.addEventListener('click', function () {
-        if (lfState().stage === 'none') return toastr.info('先生成骨架——骨架和卷文本都能按意见修订');
-        revOpen = !revOpen;
+        if (lfState().stage === 'none') return toastr.info('先生成骨架——骨架、卷文本和章都能按意见修订');
+        const target = lfState().volumes.every(v => v.detailState === 'done') ? 'vol' : 'sk';
+        revOpen = !(revOpen && revKind === target);   // 再点同一颗＝收起；意见框开着点另一颗＝切目标
+        revKind = target;
+        renderTab(container);
+    });
+
+    container.querySelector('#pp_lf_chrev')?.addEventListener('click', function () {
+        if (lfState().stage === 'none') return toastr.info('先生成骨架、生成章节切出章——才能按意见修订所有章');
+        revOpen = !(revOpen && revKind === 'ch');
+        revKind = 'ch';
         renderTab(container);
     });
 
     container.querySelector('#pp_lf_revise_go')?.addEventListener('click', async function () {
         if (lfBusy) return toastr.warning('有长线生成还在跑（先中断或等它完成）');
-        const s = lfState();
         const opinion = String(container.querySelector('#pp_lf_opinion')?.value ?? '').trim();
-        if (!opinion) return toastr.warning('先写修改意见——要换方向走「重新生成骨架」');
+        if (!opinion) return toastr.warning('先写修改意见——要换方向走「从零开始」');
         const u = usageCollector();
         const common = {
             provider: providerFromId(providerId),
@@ -914,7 +950,7 @@ function bindTab(container, st) {
             onDelta: len => setBusyNote(`已收 ${len.toLocaleString()} 字`),
             onReasoning: t => { busyThink = t.length; busyFeedAt = Date.now(); },
         };
-        if (s.stage === 'skeleton') {
+        if (revKind === 'sk') {
             startBusy('revsk');
             common.signal = lfBusy.ctl.signal;
             renderTab(container);
@@ -922,6 +958,40 @@ function bindTab(container, st) {
                 const r = await runLfSkeletonRevise({ opinion, ...common });
                 if (!r.updated) toastr.warning(`一处都没改成——全部卷原样带回；重试或把意见写具体些；${u.line()}`);
                 else toastr.success(`已按意见改了 ${r.updated} 卷骨架${r.unchanged ? `、${r.unchanged} 卷未动` : ''}（楼数改过的卷记得去「章与节点」页签重切）；${u.line()}`);
+            } catch (err) {
+                if (err?.name !== 'AbortError') toastr.error(`修订失败：${err?.message ?? err}`);
+                markErr(err);
+            } finally {
+                endBusy();
+                renderTab(container);
+            }
+            return;
+        }
+        if (revKind === 'ch') {
+            // 章层整书修订（第三十轮）：逐卷带意见重切已切章的卷——实时进度与整书卷文本修订同款
+            startBusy('chrev');
+            common.signal = lfBusy.ctl.signal;
+            renderTab(container);
+            const lens = new Map();
+            let settledN = 0, totalN = 0;
+            const chars = () => { let n = 0; for (const x of lens.values()) n += x; return n; };
+            const note = () => `已完成 ${settledN}/${totalN} 卷 · 已收 ${chars().toLocaleString()} 字`;
+            common.onDelta = (vi, len) => { lens.set(vi, Math.max(lens.get(vi) ?? 0, len)); setBusyNote(note()); };
+            common.onProgress = p => { settledN = p.settled; totalN = p.total; rerenderVols(container); setBusyNote(note()); };
+            try {
+                const r = await runLfChapterRevise({ opinion, ...common });
+                if (!r.updated) {
+                    toastr.warning(`一卷都没重切成：${r.failed?.length ? `${r.failed.length} 卷失败（${r.failed.map(f => `第 ${f.vol + 1} 卷：${clamp(f.reason, 60)}`).join('；')}）` : '没有可修订的卷'}——旧章都原样保留；重试一次，或去各卷「章与节点」页签单卷重切；${u.line()}`);
+                } else {
+                    const bits = [`已按意见重切 ${r.updated} 卷（卷文本不动；旧章点亮进度按位置沿用）`];
+                    if (r.failed?.length) bits.push(`${r.failed.length} 卷失败（${r.failed.map(f => `第 ${f.vol + 1} 卷：${clamp(f.reason, 60)}`).join('；')}，旧章原样保留——重试或单卷重切）`);
+                    toastr.success(`${bits.join('；')}；${u.line()}`);
+                }
+                if (r.failed?.length) {   // 部分失败留页顶痕（与整书卷文本修订同口径；下一次开工时清）
+                    const s = lfState();
+                    s.error = r.failed.map(f => `第 ${f.vol + 1} 卷章修订失败：${clamp(f.reason, 80)}`).join('；');
+                    persistLf();
+                }
             } catch (err) {
                 if (err?.name !== 'AbortError') toastr.error(`修订失败：${err?.message ?? err}`);
                 markErr(err);
@@ -1178,7 +1248,7 @@ function rerenderVols(container) {
     wireExec(container);
 }
 
-// 批量步（具体化 / 再切小）共用：并发跑、单卷失败不拖垮其余、逐卷留下失败原因；
+// 批量步（具体化 / 生成章节）共用：并发跑、单卷失败不拖垮其余、逐卷留下失败原因；
 // 流式字数逐卷累计＋每卷落定重刷卷卡徽章（第二十轮：生成中不再是黑盒）
 async function runBatch(container, kind) {
     if (lfBusy) return toastr.warning('有长线生成还在跑（先中断或等它完成）');
@@ -1271,7 +1341,7 @@ function markErr(err) {
     persistLf();
 }
 
-// 重新生成骨架＝回参数表单（参数与想法已留底，改完直接再点「生成骨架」）；
+// 「从零开始」＝回参数表单（原「重新生成骨架」，第三十轮改名；参数与想法已留底，改完直接再点「生成骨架」）；
 // 旧书整份备份（第二十四轮）——新骨架生成失败/被中断自动恢复，不再一按就丢
 function backToParams(container) {
     stashLfRegenBackup();
