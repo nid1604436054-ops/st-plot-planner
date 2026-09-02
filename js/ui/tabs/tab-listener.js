@@ -11,14 +11,16 @@ import {
     listenerState, listenerCfg, listenerProvider, listenerModeLabel, persistListener,
     runListenerRound, resumeListener, setListenerEnabled, manualLitCurrentNode,
     opUnmountUnit, opRecallSidelined, opDiscardSidelined, lastListenerPrompt,
+    clearListenerHalt, haltHintText,
 } from "../../listener.js";
 import { outfitState, outfitRemaining, setOutfitMode, setOutfitFloors, withdrawOutfit } from "../../outfit.js";
 
 let traceWinOpen = false;   // 留痕悬浮窗开着（跨页签会话记忆）
 
 const SOURCE_BADGE = { manual: '手动导入', plan10: '剧情规划导入', longform: '长线章' };
-// 留痕来源标签（2026-09-02 三来源）：换装记录来自 outfit.js；判定轮的标签在 listener.js 落账时写
-const TRACE_SRC_LABEL = { plan: '普通剧情规划', longform: '长线剧情', outfit: '换装' };
+// 留痕来源标签（2026-09-02 三来源；同日混合重编入池）：换装记录来自 outfit.js、混合重编来自 mix.js；
+// 判定轮的标签在 listener.js 落账时写
+const TRACE_SRC_LABEL = { plan: '普通剧情规划', longform: '长线剧情', outfit: '换装', mix: '混合重编' };
 
 // 回归判定的偏离三档（第三十三轮）：措辞给用户看，不照搬模型内部词
 const DEV_LABEL = { on_track: '没偏——剧情仍在规划轨迹上', minor: '偏了，但能自然拉回', major: '⚠ 偏大了——继续演会损坏后续章节的安排' };
@@ -47,11 +49,11 @@ function fmtTime(at) {
     return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// 最新一条判定留痕记录（指导区与问题区都从它读）——换装记录（mode=outfit）不是判定轮，
-// 指导区不该拿它当「本轮」显示，跳过取第一条判定记录
+// 最新一条判定留痕记录（指导区与问题区都从它读）——换装（mode=outfit）与混合重编（mode=mix）
+// 不是判定轮，指导区不该拿它们当「本轮」显示，跳过取第一条判定记录
 function lastTrace(state) {
     if (!Array.isArray(state.trace)) return null;
-    return state.trace.find(r => r?.mode !== 'outfit') ?? null;
+    return state.trace.find(r => r?.mode !== 'outfit' && r?.mode !== 'mix') ?? null;
 }
 
 // 三项小结一行（页内静默轮/留痕共用口径）：无发现的项亮「无」、有发现的写实际发现
@@ -65,6 +67,9 @@ function lightChecksLine(f = {}) {
 function traceSummary(rec) {
     if (!rec) return '';
     if (!rec.ok) return `失败：${clamp(rec.error, 60)}`;
+    if (rec.mode === 'mix') {
+        return `混合重编 · ${clamp(rec.mix?.idea ?? '', 40)}${rec.mix?.remount === 'rejected' ? ' · 挂载被拒' : ''}`;
+    }
     if (rec.mode === 'reentry') {
         const d = { on_track: '没偏', minor: '偏了可拉回', major: '偏大了⚠' }[rec.reentry?.deviation] ?? '';
         return `回归判定 · ${d} · 到第 ${rec.reentry?.applied ?? 0}/${rec.reentry?.nodesTotal ?? '?'} 节点`;
@@ -200,6 +205,9 @@ function renderTab(container) {
         ${rec.reentry?.window ? `<div class="pp-muted">对照窗口：${escapeHtml(rec.reentry.window)}</div>` : ''}
         ${rec.reentry?.summary ? `<div class="pp-ls-reentry-summary">${escapeHtml(rec.reentry.summary)}</div>` : ''}
         ${(rec.reentry?.evidence ?? []).slice(0, 4).map(e => `<div class="pp-ls-ev">${e.floor != null ? `<b>[楼层${e.floor}]</b> ` : ''}「${escapeHtml(clamp(e.quote, 120))}」<span class="pp-muted">${escapeHtml(clamp(e.note, 80))}</span></div>`).join('')}
+        ${rec.reentry?.deviation === 'major' ? `
+        <div class="pp-ls-dev pp-ls-dev-major" style="margin-top:4px">偏大挂起中：判定与进度账照跑、指导暂停注入、停进提示在岗（独立注入槽）。</div>
+        <div class="pp-muted">处置出口：① 剧情指导页第 1 步「打碎混合」就地重写本章并重新挂上（重挂即解除挂起）；② 卸下后去长线页「按意见修订所有卷/所有章」或单卷重切——记忆表格默认随行，改完重新挂载、回归判定重跑；③ 本页「标记达成」手动点亮跳过（同步解除挂起）。等你处理，不自动动。</div>` : ''}
         ${rec.tokens ? `<span class="pp-muted">${rec.tokens.promptTokens.toLocaleString()}/${rec.tokens.completionTokens.toLocaleString()} tok</span>` : ''}
     </div>` : `
     <div class="pp-section pp-ls-reentry">
@@ -220,6 +228,20 @@ function renderTab(container) {
         <div class="pp-muted">本轮静默：${escapeHtml(rec.noGuidanceReason || '未给原因')}</div>` : `
         <div class="pp-muted">${rec ? '最近一轮失败，注入槽已清空（绝不复用过期指导）' : '还没有判定记录'}</div>`}
     </div>
+
+    ${/* 停进提示区（2026-09-02 暂停收尾）：撤下长线章（paused）或回归判定偏大挂起（suspended）时
+        写进独立注入槽的剧情口径——别再推进这条线。与监听总开关无关；挂载/接回/打碎混合重挂自动撤，
+        这里也可手动撤 */ ''}
+    ${state.halt ? `
+    <div class="pp-section" id="pp_ls_haltzone">
+        <b title="停进提示：写给扮演模型的剧情口径（独立隐身注入槽，深度与指导槽相同）。手动「卸下」长线章时自动发（防止模型继续推进已暂停的剧情线走歪）；回归判定偏大挂起时也发（别硬拉回规划）。挂载/接回/剧情指导页「打碎混合」重挂都会自动撤下；与监听总开关无关">${state.halt.kind === 'paused' ? '停进提示（长线已暂停）' : '停进提示（长线偏离挂起）'}</b>
+        <div class="pp-ls-guidance">${escapeHtml(haltHintText(state.halt))}</div>
+        ${state.halt.note ? `<div class="pp-muted" title="挂起来源的备注">${escapeHtml(clamp(state.halt.note, 200))}</div>` : ''}
+        <div class="pp-btn-row">
+            <span id="pp_ls_halt_clear" class="menu_button" title="手动撤下停进提示（注入槽清空）。撤下后监听照常：没挂单位＝轻量检查；偏离挂起的解除靠重挂后回归判定没偏，或点「标记达成」">撤下停进提示</span>
+            ${state.halt.kind === 'suspended' ? `<span class="pp-muted">处置出口见上方回归判定卡的指路行；判定与进度账照跑、只有指导暂停注入</span>` : `<span class="pp-muted">恢复去长线页该章点「挂载」（或剧情指导页「打碎混合」重写后自动挂上）</span>`}
+        </div>
+    </div>` : ''}
 
     ${/* 装扮注入区（2026-09-02）：当前装扮的注入设置——两框互斥联动（勾一个灰另一个）、层数随角色楼
         自动递减可直接改数、走完自动清框停注（两框都灰＝停注）；「撤下」进留痕。与监听总开关无关 */ ''}
@@ -350,6 +372,13 @@ function bindTab(container) {
         const r = opDiscardSidelined();
         if (r.ok) { syncLfProgress(); renderTab(container); toastr.success('退位单位已删除'); }
         else toastr.warning(r.reason);
+    });
+
+    container.querySelector('#pp_ls_halt_clear')?.addEventListener('click', () => {
+        if (clearListenerHalt()) {
+            renderTab(container);
+            toastr.success('停进提示已撤下（注入槽清空）');
+        }
     });
 
     const bindSel = (id, key, map) => {
@@ -745,6 +774,8 @@ function refreshTraceWindow() {
         : '';
     const head = rec.mode === 'outfit'
         ? `<b>换装</b> · ${fmtTime(rec.at)} · 「${escapeHtml(rec.outfit?.title ?? '')}」${escapeHtml(rec.outfit?.setting ?? '')}${rec.outfit?.end ? ` · 已${escapeHtml(rec.outfit.end.status)}` : ' · 注入中'}`
+        : rec.mode === 'mix'
+        ? `<b>混合重编</b> · ${fmtTime(rec.at)} · 「${escapeHtml(rec.mix?.title ?? '')}」`
         : `<b>#${rec.round}</b> ${rec.mode === 'unit' ? '单位' : rec.mode === 'reentry' ? '回归' : '轻量'} · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}`;
     return `
     <details class="pp-fold pp-ls-trace-item">
@@ -758,8 +789,15 @@ function refreshTraceWindow() {
             <div>开始注入：${escapeHtml(rec.outfit?.setting ?? '')}${rec.outfit?.end ? ` · 结束：${escapeHtml(rec.outfit.end.status)}（${fmtTime(rec.outfit.end.at)}）` : ' · 注入中'}</div>
             <div class="pp-ls-guidance" title="这套装扮的全文快照（开始注入那一刻记的；到期/被覆盖/撤下时在这一条上补结束状态）">${escapeHtml(rec.outfit?.text ?? '')}</div>
         ` : ''}
+        ${rec.mode === 'mix' && rec.ok ? `
+            <div>${rec.mix?.remount === 'inplace' ? '在岗章就地换新' : rec.mix?.remount === 'rejected' ? '挂载被拒——章已重写，处理完退位槽后去长线页手动挂载' : '重新挂载'}${rec.mix?.floorsRec ? ` · 楼层推荐 ${rec.mix.floorsRec} 层（本章预算不变）` : ''}；点亮进度不动、旧版在该章「混合历史」（长线页章卡可看）</div>
+            ${rec.mix?.idea ? `<div class="pp-muted">想法：${escapeHtml(clamp(rec.mix.idea, 200))}</div>` : ''}
+            ${rec.mix?.remountReason ? `<div class="pp-ls-err">${escapeHtml(rec.mix.remountReason)}</div>` : ''}
+            ${rec.mix?.changesNote ? `<div class="pp-ls-reentry-summary">${escapeHtml(rec.mix.changesNote)}</div>` : ''}
+        ` : ''}
         ${rec.mode === 'unit' && rec.ok ? `
             <div>判定：<b>${escapeHtml(rec.judgment)}</b>${rec.litNode ? ` · 点亮节点：${escapeHtml(rec.litNode)}` : ''}</div>
+            ${rec.suspended ? '<div class="pp-muted">挂起轮：判定与进度账照跑、指导未注入（偏大挂起中）</div>' : ''}
             ${rec.progressNote ? `<div class="pp-muted">${escapeHtml(rec.progressNote)}</div>` : ''}
             ${(rec.evidence ?? []).map(e => `<div class="pp-ls-ev">${e.floor != null ? `<b>[楼层${e.floor}]</b> ` : ''}「${escapeHtml(clamp(e.quote, 120))}」<span class="pp-muted">${escapeHtml(clamp(e.note, 80))}</span></div>`).join('')}
             ${(rec.watch && (rec.watch.ooc || rec.watch.slowBurn || rec.watch.fakeCompletion || rec.watch.notes)) ? `<div class="pp-muted">watch：${[rec.watch.ooc ? 'OOC元对话' : '', rec.watch.slowBurn ? '慢热' : '', rec.watch.fakeCompletion ? '疑似假装完成' : '', rec.watch.notes ? escapeHtml(clamp(rec.watch.notes, 80)) : ''].filter(Boolean).join('｜')}</div>` : ''}

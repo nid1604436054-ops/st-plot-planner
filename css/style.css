@@ -1937,6 +1937,7 @@
 .pp-ls-float .pp-ls-srclabel-longform { color: #7fa8d9; }
 .pp-ls-float .pp-ls-srclabel-outfit { color: #c79ad6; }
 .pp-ls-float .pp-ls-srclabel-plan { color: #9bb8a4; }
+.pp-ls-float .pp-ls-srclabel-mix { color: #d9a97f; }   /* 混合重编（2026-09-02 第四来源） */
 
 /* 装扮面板（.pp-viewer 悬浮查看器里）的角色行容器 */
 .pp-viewer .pp-ot-rowbox {

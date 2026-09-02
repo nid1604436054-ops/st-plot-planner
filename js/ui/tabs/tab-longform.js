@@ -18,6 +18,7 @@ import {
     stashLfRegenBackup, mountChapter, syncLfProgress, lfNextChapter, lfStats, lfMatOverview,
     LF_MIN_CHAPTER_FLOORS, LF_DEFAULT_FLOORS,
 } from "../../longform.js";
+import { listenerState } from "../../listener.js";   // 执行区的停进提示/挂起标注（暂停收尾，2026-09-02）
 
 export const longformTab = {
     id: 'longform',
@@ -27,6 +28,14 @@ export const longformTab = {
 
 // 模块级瞬态（刷新即失、不动数据）
 let lfBusy = null;   // { kind: 'skeleton'|'detail'|'revise'|'revsk'|'volsk'|'voltext'|'split'|'volsplit', ctl }
+
+// 混合历史条目的时间戳（与监听页留痕同款格式）
+function fmtTime(at) {
+    const d = new Date(Number(at) || 0);
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 const BUSY_LABEL = {
     skeleton: '生成骨架中', detail: '具体化各卷中', revise: '按意见修订所有卷中', revsk: '按意见修订骨架中',
     chrev: '按意见修订所有章中', volsk: '修订本卷骨架中', voltext: '修订本卷文本中', split: '生成章节中', volsplit: '重切本卷中',
@@ -613,6 +622,24 @@ function chapterCardHtml(c, vi, ci, st) {
             <span class="menu_button" data-chsave="${vi}:${ci}" title="保存并收起编辑框">保存章文本</span>
             <span class="menu_button ${chArm.has(armKey) ? 'pp-danger-arm' : ''}" data-chcancel="${vi}:${ci}" title="不保存、收起编辑框${chArm.has(armKey) ? '——再点一下确认放弃改动' : '；改过内容的话会先问一句'}">${chArm.has(armKey) ? '确认放弃？' : '取消'}</span>
         </div>` : (open ? `<div class="pp-lf-text">${escapeHtml(c.text)}</div>` : '')}
+        ${(c.mixLog ?? []).length ? `
+        <details class="pp-fold" data-mixlog="${vi}-${ci}">
+            <summary title="这一章被「打碎混合」（剧情指导页第 1 步）重写过的历次记录：每次的想法、七字段说明与重写前的旧版全文——点亮进度在重写间不动">混合历史（${c.mixLog.length} 版）</summary>
+            ${c.mixLog.map(m => `
+            <details class="pp-fold">
+                <summary>${fmtTime(m.at)} · ${escapeHtml(clamp(m.idea || '（无想法）', 40))}${m.floorsRec ? ` · 当时建议 ${m.floorsRec} 层` : ''}</summary>
+                ${m.changesNote ? `<div class="pp-muted">变更说明：${escapeHtml(clamp(m.changesNote, 300))}</div>` : ''}
+                ${m.calibNote ? `<div class="pp-muted">校准备注：${escapeHtml(clamp(m.calibNote, 300))}</div>` : ''}
+                ${m.materialsNote ? `<div class="pp-muted">材料消化：${escapeHtml(clamp(m.materialsNote, 300))}</div>` : ''}
+                ${m.foreshadowNote ? `<div class="pp-muted">伏笔处理：${escapeHtml(clamp(m.foreshadowNote, 300))}</div>` : ''}
+                <details class="pp-fold">
+                    <summary>重写前的旧版（${m.prevNodes.length} 节点 · ${m.prevText.length.toLocaleString()} 字）</summary>
+                    <div class="pp-muted">${m.prevNodes.map((n, k) => `${k + 1}. ${escapeHtml(n.title)}`).join('、')}</div>
+                    <div class="pp-lf-text">${escapeHtml(m.prevText)}</div>
+                </details>
+            </details>
+            `).join('')}
+        </details>` : ''}
     </div>`;
 }
 
@@ -797,11 +824,16 @@ function delVolume(container, i, btn) {
     renderTab(container);
 }
 
-// 执行区（第二十四轮瘦身）：只留当前挂载章＋接续按钮＋一行总进度；章卡在各卷「章与节点」页签
+// 执行区（第二十四轮瘦身；2026-09-02 暂停收尾补「已暂停」档）：当前挂载章＋接续按钮＋一行总进度；
+// 章卡在各卷「章与节点」页签。没挂载但书序下一章有进度＝已暂停（挂载恢复——暂停状态跟长线账本走，
+// 不绑监听退位槽）；停进提示在不在岗看监听侧 halt
 function execHtml(st, stats, next) {
     const mount = st.mount;
     const curCh = mount ? st.volumes[mount.vol]?.chapters?.[mount.ch] : null;
     const curDone = curCh ? curCh.done || curCh.lit >= curCh.nodes.length : false;
+    const pausedCh = !mount && next ? st.volumes[next.vol]?.chapters?.[next.ch] : null;
+    const paused = Boolean(pausedCh && pausedCh.lit > 0);
+    const halt = listenerState().halt;
     return `
     <div class="pp-section" id="pp_lf_exec">
         <div class="pp-gd-layhead"><b>执行</b><span class="pp-muted">章 ${stats.done}/${stats.chapters} · 节点 ${stats.lit}/${stats.nodes}</span></div>
@@ -810,10 +842,19 @@ function execHtml(st, stats, next) {
         <div class="pp-item">
             <div class="pp-item-main">
                 <b>执行中：第 ${mount.vol + 1} 卷 · ${escapeHtml(curCh.title)}</b>
-                <span class="pp-muted">${curCh.lit}/${curCh.nodes.length} 节点点亮${curDone ? ' · 已演完' : ''}</span>
+                <span class="pp-muted">${curCh.lit}/${curCh.nodes.length} 节点点亮${curDone ? ' · 已演完' : ''}${halt?.kind === 'suspended' ? ' · ⚠偏离挂起中（判定照跑、指导暂停注入——处置见监听页）' : ''}</span>
             </div>
             <div class="pp-item-ops">
                 ${next ? `<span id="pp_lf_next" class="menu_button" title="${curDone ? `接全书顺序的下一章：第 ${next.vol + 1} 卷「${st.volumes[next.vol].chapters[next.ch].title}」` : '当前章还有没点亮的节点——先演完，或到「监听」页「标记达成」手动点亮'}">${curDone ? '接续下一章' : '当前章未演完'}</span>` : `<span class="pp-muted">全书章已演完——作废重来或开新一本</span>`}
+            </div>
+        </div>` : paused ? `
+        <div class="pp-item">
+            <div class="pp-item-main">
+                <b>已暂停：第 ${next.vol + 1} 卷 · ${escapeHtml(pausedCh.title)}（可挂载恢复）</b>
+                <span class="pp-muted">${pausedCh.lit}/${pausedCh.nodes.length} 节点点亮${halt?.kind === 'paused' ? ' · 停进提示在岗（监听页可撤下）' : ''}</span>
+            </div>
+            <div class="pp-item-ops">
+                <span class="menu_button" data-chmount="${next.vol}:${next.ch}" title="把这一章重新挂进监听继续执行（点亮进度保留；有进度的章重挂会自动跑一次回归判定「走到哪、偏没偏」）。也可以去剧情指导页第 1 步「打碎混合」重写后再挂">挂载恢复</span>
             </div>
         </div>` : `<div class="pp-muted">还没挂载章——去各卷「章与节点」页签点某一章的「挂载」开始执行（挂进监听单位槽；扮演模型看不到章文本）。</div>`}
     </div>`;

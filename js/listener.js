@@ -17,6 +17,9 @@ import { buildMemoryContext, memoryState } from "./memoryTable.js";
 const POSITION_IN_PROMPT = extension_prompt_types?.IN_PROMPT ?? 0;
 const ROLE_SYSTEM = extension_prompt_roles?.SYSTEM ?? 0;
 const SLOT_KEY = 'pp:listener';
+const HALT_KEY = 'pp:halt';   // 停进提示槽（2026-09-02 暂停收尾）：独立于指导槽——指导槽每轮滚动覆写，
+                             // 停进提示要在「没有指导的轮次」里也活着，只能自己一个键。与监听总开关无关
+                             // （它是一条给扮演模型的剧情口径说明，同装扮槽的待遇）
 
 // 每次调用超时与排队闸硬上限（提案值）：闸的等待受「超时＋一次重试」约束，
 // 硬上限兜底防扣住发送挂死——超界即按失败放行，迟到的结果照写注入槽（下一轮用）
@@ -108,10 +111,14 @@ export function listenerState() {
         matReentry: null,    // 重挂对账材料单（第三十七轮）同形状另加 picks——重挂那一刻的一次性回归判定用
         dot: false,          // 红点旗标（有问题未看；打开监听页签即清除）
         dotReason: '',       // 红点问题的一句话描述
+        halt: null,          // 停进提示（2026-09-02 暂停收尾）：{ kind:'paused' 手动卸下长线章 |
+                             // 'suspended' 回归判定偏大挂起, title, note, unitId, at }；null＝无。
+                             // 出口：挂载/接回/mix 重挂（打碎混合）/手动撤下/偏大后重挂没偏自动解除
     }));
     state.unit = normalizeUnit(state.unit);
     state.sidelined = normalizeUnit(state.sidelined);
     if (!Array.isArray(state.trace)) state.trace = [];
+    state.halt = normalizeHalt(state.halt);
     if (!Array.isArray(state.lorePicks)) state.lorePicks = [];   // 旧聊天块没有该字段（第三十四轮新增）
     // 双材料单（第三十七轮，用户拍板「两套页面、范围相同、各自手动选」）：按聊天存、互不影响。
     // 旧全局开关只在第一次见到这个聊天块时播种一次——第一个迁移的聊天带走旧值，全局键随即
@@ -154,6 +161,24 @@ function normalizeMatCfg(r, seed) {
 
 export function persistListener() {
     saveChatData('listener', listenerState());
+}
+
+// 停进提示的形状收敛（就地修补同款规矩）
+function normalizeHalt(h) {
+    if (!h || typeof h !== 'object' || !['paused', 'suspended'].includes(h.kind)) return null;
+    return {
+        kind: h.kind,
+        title: String(h.title ?? '').slice(0, 120),
+        note: String(h.note ?? '').slice(0, 300),
+        unitId: String(h.unitId ?? ''),
+        at: Number(h.at) || 0,
+    };
+}
+
+// 挂起是否对当前单位生效（判定照跑、指导暂停注入的开关）：只有 suspended 一种会拦指导
+export function haltSuspendActive(state, unit) {
+    const h = state?.halt;
+    return Boolean(h && h.kind === 'suspended' && unit && h.unitId && h.unitId === unit.id);
 }
 
 // 存档读回清洗：形状不对的 unit 整体作废（null 化），字段收敛到合法类型
@@ -690,6 +715,7 @@ export function applyUnitOutcome(state, report, meta) {
         watch: report.watch,
         guidance: meta.guidance,
         noGuidanceReason: report.goal ? '' : report.noGuidanceReason,
+        suspended: Boolean(meta.suspended),   // 偏大挂起轮（2026-09-02）：判定与进度账照跑、指导没注入
         retried: Boolean(meta.retried),
         ...(meta.tokens ? { tokens: meta.tokens } : {}),
         ...(meta.materials ? { materials: meta.materials } : {}),
@@ -773,6 +799,18 @@ export function applyReentryOutcome(state, report, meta) {
     if (report.deviationLevel === 'major') {
         state.dot = true;
         state.dotReason = `回归判定：剧情偏大了——${report.deviationNote.slice(0, 120)}`;
+        // 偏大挂起（2026-09-02 用户拍板「偏大了以后就等我来处理，挂在那里不要动」）：
+        // 判定与进度账照跑，指导暂停注入（挂起轮写空串）、停进提示进独立槽拦着别硬拉回。
+        // 处置出口：打碎混合（mix 重挂）/ 手动标记达成 / 卸下；重挂后没偏或能拉回自动解除
+        state.halt = {
+            kind: 'suspended',
+            title: state.unit?.title ?? '',
+            note: String(report.deviationNote ?? '').slice(0, 300),
+            unitId: state.unit?.id ?? '',
+            at: Date.now(),
+        };
+    } else if (state.halt?.kind === 'suspended') {
+        state.halt = null;   // 没偏／能自然拉回：挂起自动解除（停进提示同步撤，见调用方 syncHaltSlot）
     }
     return rec;
 }
@@ -888,6 +926,54 @@ function writeSlot(text) {
 
 export function clearListenerSlot() {
     setExtensionPrompt(SLOT_KEY, '', POSITION_IN_PROMPT, 2, false, ROLE_SYSTEM);
+}
+
+// ---------------------------------------------------------------------------
+// 停进提示（2026-09-02 暂停收尾，用户拍板「撤下长线剧情时给模型发一段提示词、
+// 让它不要继续推进当前剧情防止走歪」）：独立注入槽，深度与指导槽相同。两种来源——
+// 手动卸下长线章（paused：章进了退位槽、剧情口径上「这条线暂停了」）与回归判定偏大
+// （suspended：章还挂着，但指导暂停注入、口径上「别硬拉回规划」）。出口统一走 clearListenerHalt：
+// 挂载/接回/mix 重挂（打碎混合是偏离处置出口）、面板手动撤下、偏大后重挂没偏自动解除
+// ---------------------------------------------------------------------------
+
+export function haltHintText(h) {
+    if (!h) return '';
+    return h.kind === 'paused'
+        ? `此前挂载的长线剧情「${h.title}」已暂停。后续回复不要再推进该剧情线既定安排的内容：不要主动推进其中尚未发生的关键事件、不要替它收尾、也不要直接跳到后续阶段；已发生的部分照常有效。当前没有这条线的新指导——按对话现状自然回应，等待新的安排。`
+        : `当前长线剧情「${h.title}」与实际走向的偏离较大，规划已挂起等待用户处理。后续回复不要强行把剧情拉回该章的既定安排、也不要刻意推进其后续节点；按对话现状自然演绎即可。`;
+}
+
+function haltSlotText(h) {
+    return `[长线${h?.kind === 'paused' ? '暂停' : '偏离挂起'}｜后台提示] ${haltHintText(h)}`;
+}
+
+function haltDepth() {
+    const d = Number(listenerCfg().depth);
+    return Number.isFinite(d) && d >= 0 ? Math.floor(d) : 2;
+}
+
+export function syncHaltSlot() {
+    const h = listenerState().halt;
+    if (h) setExtensionPrompt(HALT_KEY, haltSlotText(h), POSITION_IN_PROMPT, haltDepth(), false, ROLE_SYSTEM);
+    else setExtensionPrompt(HALT_KEY, '', POSITION_IN_PROMPT, 2, false, ROLE_SYSTEM);
+}
+
+// 内部写点：直接改 state.halt（纯逻辑区）＋由调用方负责 persist 与 syncHaltSlot
+function setHalt(kind, { title = '', note = '', unitId = '' } = {}) {
+    const state = listenerState();
+    state.halt = { kind, title: String(title ?? '').slice(0, 120), note: String(note ?? '').slice(0, 300), unitId: String(unitId ?? ''), at: Date.now() };
+    return state;
+}
+
+// 面板「撤下停进提示」按钮的出口（也是一切手动清提示的公共出口）
+export function clearListenerHalt() {
+    const state = listenerState();
+    if (!state.halt) return false;
+    state.halt = null;
+    persistListener();
+    syncHaltSlot();
+    notifyPanel();
+    return true;
 }
 
 function modeOf(state) {
@@ -1048,9 +1134,18 @@ export async function runListenerRound({ manual = false } = {}) {
 
         if (mode === 'unit') {
             const report = normalizeUnitJudgment(parsed.result);
-            const text = guidanceText(report.goal, report.actionHint);
+            // 偏大挂起轮（2026-09-02）：判定与进度账照跑（applyUnitOutcome 里点亮照旧），
+            // 唯独指导不进注入槽——挂起期间槽保持空、停进提示在独立槽拦着别硬拉回规划
+            const suspended = haltSuspendActive(state, state.unit);
+            let text = guidanceText(report.goal, report.actionHint);
+            if (suspended) {
+                text = '';
+                report.goal = '';   // 照轻量介入闸先例：拦下的指导按静默轮落账，留痕里才看得到挂起原因
+                report.actionHint = '';
+                report.noGuidanceReason = '长线偏离挂起中：判定与进度账照跑，指导暂停注入（处置出口见监听页挂起卡的指路行）';
+            }
             writeSlot(text);   // 滚动覆写：静默轮写空串（旧指导不留到下一轮）
-            applyUnitOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, guidance: text, retried: parsed.retried, tokens, materials });
+            applyUnitOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, guidance: text, suspended, retried: parsed.retried, tokens, materials });
         } else {
             const report = normalizeLightReport(parsed.result);
             const intervene = lightShouldIntervene(report, cfg.intervene) && report.goal;
@@ -1171,6 +1266,7 @@ export async function runReentryRound({ window: win, unitId } = {}) {
         const capped = Math.max(1, Math.floor(Number(cfg.traceRounds) || 50));
         if (state.trace.length > capped) state.trace.length = capped;
         persistListener();
+        syncHaltSlot();   // 偏大→挂起提示进槽／没偏→挂起解除清槽（applyReentryOutcome 只改 state）
         updateWandDot(state);
         notifyPanel();
         return { ok: true, mode: 'reentry' };
@@ -1267,6 +1363,7 @@ export function initListener() {
         const st = listenerState();
         voidGuidance(st, '切换聊天');
         persistListener();
+        syncHaltSlot();   // 停进提示按新聊天的 halt 块重放/清空（每聊天各管各的）
         clearTimeout(analyzeTimer);
         updateWandDot(st);
         notifyPanel();
@@ -1307,26 +1404,32 @@ export function setListenerEnabled(on) {
     notifyPanel();
 }
 
-// 手动点亮当前节点（两本账：用户的显式操作可改进度账——卡死拍板的出路之一）
+// 手动点亮当前节点（两本账：用户的显式操作可改进度账——卡死拍板的出路之一）；
+// 偏大挂起中的手动标记达成同时解除挂起（2026-09-02：用户接管＝处置完成）
 export function manualLitCurrentNode() {
     const state = listenerState();
     if (!state.unit || state.unit.nodeIdx >= state.unit.nodes.length) return false;
     state.unit.nodeIdx += 1;
+    if (state.halt?.kind === 'suspended') state.halt = null;
     state.dot = false;
     state.dotReason = '';
     persistListener();
+    syncHaltSlot();
     notifyPanel();
     return true;
 }
 
 // 挂载/卸下/接回/丢弃的操作出口（面板调用；带持久化与失败提示）。
-// 换主人的三个操作（挂/卸/接回）同步清注入槽：旧指导是给旧主人写的，不清就会注入进下一轮生成
+// 换主人的三个操作（挂/卸/接回）同步清注入槽：旧指导是给旧主人写的，不清就会注入进下一轮生成。
+// 停进提示随行（2026-09-02）：挂载/接回＝撤（新剧情接管或恢复推进）；卸下长线章＝发（暂停收尾）
 export function opMountUnit(unit) {
     const state = listenerState();
     const r = mountUnit(state, unit);
     if (r.ok) {
         clearListenerSlot();
+        state.halt = null;   // 挂载（手动/确认采用顶掉/mix 重挂）＝这条线有人管了，停进提示撤下
         persistListener();
+        syncHaltSlot();
         flushChatData();
     }
     return r;
@@ -1334,10 +1437,15 @@ export function opMountUnit(unit) {
 
 export function opUnmountUnit() {
     const state = listenerState();
+    const wasLf = state.unit?.source === 'longform';
+    const title = state.unit?.title ?? '';
+    const unitId = state.unit?.id ?? '';
     const r = unmountUnit(state);
     if (r.ok) {
         clearListenerSlot();
+        if (wasLf) setHalt('paused', { title, unitId });   // 只有手动「卸下」发停进提示；确认采用顶掉不发（新规划接管）
         persistListener();
+        syncHaltSlot();
     }
     return r;
 }
@@ -1347,7 +1455,9 @@ export function opRecallSidelined() {
     const r = recallSidelined(state);
     if (r.ok) {
         clearListenerSlot();
+        state.halt = null;   // 接回＝恢复推进
         persistListener();
+        syncHaltSlot();
     }
     return r;
 }

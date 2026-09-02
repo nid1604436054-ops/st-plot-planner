@@ -3,7 +3,8 @@
 // 管线：①骨架（含②切块，一次调用出卷＋楼数，插件校验总和、楼数算术插件说了算）→
 // ③分块具体化（逐卷并行一次一卷，卷级文本内嵌推进锚）→ ④拼接（纯展示）→
 // ⑤审阅改（按意见整书修订 / 卷文本就地手改）→ ⑥再切小（逐卷并行：卷→章→节点）→ 挂载执行。
-// 混合重编 / 暂停恢复 / 归档 / 场景元素卡 / 动作指导卡不在本期（§6.8 后续块）。
+// 暂停收尾（停进提示/已暂停显示）与混合重编见 listener.js / mix.js（2026-09-02 落地）；
+// 归档不做（2026-09-02 用户复盘拍板：冷却机制够用）。
 import { settings, newId } from "./settings.js";
 import { loadChatData, saveChatData, flushChatData } from "./chatdata.js";
 import { chatCompletion, parseModelJson } from "./api.js";
@@ -18,6 +19,7 @@ export const LF_MIN_ANCHORS = 2;          // 推进锚每卷下限（2026-09-01 
 export const LF_MIN_CHAPTER_FLOORS = 20;  // 一章至少 20 层楼、不设上限（原 10-20 区间作废）
 export const LF_MIN_NODES = 3;            // 每章节点下限
 export const LF_DEFAULT_FLOORS = 120;     // 楼层总数缺省兜底（助手默认；§6.3「用户不填用默认值兜底」）
+export const LF_MIX_LOG_KEEP = 5;         // 每章「混合历史」保留版数上限（mix.js 混合重编的旧版快照；可驳默认）
 
 // ---------------------------------------------------------------------------
 // 数据层：chatdata 的 longform 块（按聊天走，§6.6「长线数据按聊天分开存」）
@@ -123,6 +125,24 @@ function normChapter(c) {
     const nodes = (Array.isArray(o.nodes) ? o.nodes : [])
         .filter(n => n && typeof n === 'object')
         .map(n => ({ title: String(n.title ?? '').slice(0, 120) || '未命名节点', criterion: String(n.criterion ?? '') }));
+    // 混合历史（mix.js 混合重编的旧版快照，2026-09-02）：整份保留重写前的文本与节点表＋七字段说明
+    const mixLog = (Array.isArray(o.mixLog) ? o.mixLog : [])
+        .filter(m => m && typeof m === 'object')
+        .map(m => ({
+            at: Number(m.at) || 0,
+            idea: String(m.idea ?? ''),
+            windowFloors: Math.max(0, Math.round(Number(m.windowFloors) || 0)),
+            floorsRec: Math.max(0, Math.round(Number(m.floorsRec) || 0)),
+            materialsNote: String(m.materialsNote ?? ''),
+            changesNote: String(m.changesNote ?? ''),
+            foreshadowNote: String(m.foreshadowNote ?? ''),
+            calibNote: String(m.calibNote ?? ''),
+            prevText: String(m.prevText ?? ''),
+            prevNodes: (Array.isArray(m.prevNodes) ? m.prevNodes : [])
+                .filter(n => n && typeof n === 'object')
+                .map(n => ({ title: String(n.title ?? '').slice(0, 120) || '未命名节点', criterion: String(n.criterion ?? '') })),
+        }))
+        .slice(0, LF_MIX_LOG_KEEP);
     return {
         title: String(o.title ?? '').slice(0, 120) || '未命名章',
         floors: posInt(o.floors) ?? LF_MIN_CHAPTER_FLOORS,
@@ -131,6 +151,7 @@ function normChapter(c) {
         lit: Math.min(Math.max(0, Math.round(Number(o.lit) || 0)), nodes.length),   // 进度账：已点亮节点数
         done: o.done === true || (nodes.length > 0 && (Number(o.lit) || 0) >= nodes.length),
         unitId: String(o.unitId ?? ''),
+        mixLog,
     };
 }
 

@@ -19,7 +19,7 @@
 // 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列（条目库管理 + AI 玩法咨询都在该区——
 // 生成类功能不进向导运行区），生效条目由第 1 步勾选随分析发送，检查报告（runStoryReview）自动附带当前生效条目；
 // 「生效中的隐身注入」折叠区（tab-events.js）也在该容器末尾——注入管理与注入相关工具同住底部工具区
-import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, startResearchPrefetch, guidanceResearchInputs } from "../../planner.js";
+import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, startResearchPrefetch, guidanceResearchInputs, materialSections } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
 import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
@@ -31,13 +31,14 @@ import { storageItemsInEffect } from "../../store.js";
 import { memoryState } from "../../memoryTable.js";
 import { getTavernContext } from "../../context.js";
 import { loadChatData, saveChatData } from "../../chatdata.js";
-import { escapeHtml, estimateTokens, scanUserScripting } from "../../utils.js";
+import { escapeHtml, estimateTokens, scanUserScripting, clamp } from "../../utils.js";
 import { searchToolReady, withGlobalPresets } from "../../api.js";
-import { knowledgeLists, payloadFromIds, grabFromList, entryText, settleCooldown, knowledgeCfg, kbSendPayload, knowledgeUsedLabels } from "../../knowledge.js";
+import { knowledgeLists, payloadFromIds, grabFromList, entryText, settleCooldown, knowledgeCfg, kbSendPayload, knowledgeUsedLabels, knowledgeSection } from "../../knowledge.js";
 import { resolveLorePicks } from "../../lorebook.js";
 import { unitsState, persistUnits, newEventUnit, newReactionUnit, newOutfitUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, eventOriginText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
 import { opMountUnit, makeUnitFromStory, listenerCfg } from "../../listener.js";
 import { syncLfProgress } from "../../longform.js";
+import { runMixChapter, mixTarget, mixTargetStatus, mixDraft, persistMixDraft } from "../../mix.js";
 import { outfitState, outfitDraft, persistOutfit, activateOutfit, drawForRow, rowCandidates, drawRowText, runOutfitSelect, providerForList } from "../../outfit.js";
 import { outfitListsForChat, findList as kbFindList } from "../../knowledge.js";
 import { resolveLorePicks as resolveLorePicksForOutfit } from "../../lorebook.js";
@@ -1147,6 +1148,7 @@ function renderCollect(container, main) {
             <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内生成——掷骰 / 大模型随机 / 按意见生成三键与意见二选一（意见框有字时只剩「按意见生成」能点），生成先出草稿、点草稿上的「立为单元」入池，暂存最多 3 个。大模型随机无条件把事件库已有条目作为防复刻清单随行（不做勾选）。生成材料自动带本页上方同一批，也可勾选导入路人反应的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的；生成的事件必须与它咬合：顺着它描述的世界状态发展、不复写同一件事；仅随机两键生效；已生效注入不自动带，防双算；导入产物正文自带前因，删掉原始单元也不丢）。入池单元在本页下方「插入单元」区点开查看、勾选随分析发送、转隐身注入；采纳规划后暂存不清空，清空键在「插入单元」区">随机事件</span>
             <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见（可选）、点「生成反应卡」出草稿、点草稿上「立为单元」入池（材料自动带本页上方同一批，也可导入随机事件的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的）——导入的事件按将要且一定会发生对待，反应卡围绕它出；导入产物正文自带前因，删掉原始单元也不丢；模型会顺带给浓缩短标题作单元名）。入池单元在本页下方「插入单元」区点开查看与操作——勾选随分析发送 / 转隐身注入（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径，两路互斥）；产物最多暂存 3 个，清空键在「插入单元」区">路人反应</span>
             <span id="pp_gd_ot_panel" class="menu_button" title="装扮（换装）悬浮面板：给本聊天的角色挑/生成当前装扮。知识库清单打「装扮」标记后在这里可用（标记与绑定⇄衣库开关在「知识库」页签）；两种成稿——「纯抽取」零模型调用（勾选条目原文拼成正文）、「模型生成」每角色一次轻量选择小调用（候选一小把＋绑定的世界书对照＋最近对话，模型挑中并写状态句，智力不衰减）。确认立卡＝装扮单元（可勾选随规划分析发送）且自动成为当前装扮开始持续注入——注入设置（持续/注入几层楼、撤下进留痕）在「监听」页的装扮注入区，与监听总开关无关；新装扮确认时旧的自动进监听留痕">装扮</span>
+            <span id="pp_gd_mix_panel" class="menu_button" title="打碎混合（混合重编）悬浮面板：把长线当前执行位的章整章重写——规划与实际已演出的剧情对齐、融进新材料与本次想法（本次想法最高优先级）。基底＝本聊天长线的当前执行位章（监听里在岗的章，或书序第一个未演完的章——暂停/未开演都行）；材料自动带本页上方同一批（记忆表格/玩法/世界书自选/知识库/随机事件·路人反应单元——装扮单元不参与）；旧版整份存进该章「混合历史」（长线页章卡可回看）、点亮进度不动；重写完自动重新挂上监听（在岗就地换新、暂停的重新挂载；退位槽被占会拒绝并指路）。偏大挂起时的处置出口之一。没有长线剧情时面板会指路去长线页">打碎混合</span>
             <span id="pp_gd_kb_panel" class="menu_button" title="知识库抓取（悬浮面板，与随机事件/路人反应同款交互）：抽样清单各按轮换抓一小把（条数在「设置 → 知识库」，默认 5；轮换制＝整张清单洗牌按序发，全部条目各发一次之前不重复、发完一轮自动重洗；不按语境过滤；冷却中的条目本轮跳过），抓到的条目在面板里看得见——采用方式每张抽样清单各自二选一：「全部采用」＝整把发给规划模型让它自己挑（默认），「自选」＝你勾哪条发哪条（各清单独立，一张自选不影响其他清单）；单条可踢、每张清单可整把换新。全量清单不抓取——整表可用条目全部随行（模型从中挑、挑中的进冷却；冷却中跳过；单条可踢可还原）。发送的随材料进第 2 步确认页（按清单点名、0 条发送的清单标 ⚠ 点名）。清单与条目在「知识库」页签管理">知识库抓取</span>
             <span id="pp_gd_lore_panel" class="menu_button" title="世界书自选（悬浮面板，与知识库抓取同款交互）：按书分组勾条目，勾中的整条原文随分析进材料——「照着写」的材料（性知识/世界观口径这类，每次都该在场），与知识库「选着用」（候选素材、挑中进冷却）分工。不看关键词/常驻/书与条目的启用状态（勾选是唯一口径，禁用的照样能勾）；与检索命中自动去重（自选优先）；勾选随对话记忆保存，无冷却">世界书自选</span>
         </div>
@@ -1359,6 +1361,7 @@ function renderCollect(container, main) {
     evBtnEl.addEventListener('click', () => openEvPanel(onPanelChange));
     rxBtnEl.addEventListener('click', () => openRxPanel(onPanelChange));
     otBtnEl.addEventListener('click', () => openOtPanel(onPanelChange));
+    main.querySelector('#pp_gd_mix_panel')?.addEventListener('click', () => openMixPanel(onPanelChange));
     kbBtnEl.addEventListener('click', () => openKbPanel(onPanelChange));
     loreBtnEl.addEventListener('click', () => openLorePanel(onPanelChange));
 
@@ -2227,6 +2230,118 @@ function openOtPanel(onChange) {
             activateOutfit(unit);
             status(`已立卡并开始持续注入：「${unit.title}」——注入设置与撤下在「监听」页的装扮注入区`);
             onChange();
+        });
+    };
+
+    render();
+    onChange();
+}
+
+// ---------------------------------------------------------------------------
+// 打碎混合（混合重编）悬浮面板（2026-09-02 设计对齐轮定稿）：基底＝长线当前执行位章，
+// 面板只管三样——基底展示＋本次想法（最高优先级）＋校准窗口层数；材料自动带本页上方同一批
+// （mixMaterialParts：装扮单元不参与——服装/场景类材料不进混合重编）。产物就地改写该章＋
+// 重新挂上监听（细节在 mix.js）。偏大挂起的处置出口之一（重挂即解除挂起与停进提示）
+// ---------------------------------------------------------------------------
+
+// 混合重编的材料小节：与规划分析同一批选择（记忆表格档位/标签/最新行、玩法勾选、世界书自选、
+// 知识库抓取与全量、随机事件·路人反应单元），去掉「最近对话记录」——对话走 mix 自己的
+// 校准窗口块（带楼层号、层数面板可控），不双发；装扮单元小节不带（设计拍板：服装/场景类不参与）
+function mixMaterialParts() {
+    const mats = wizardMaterials();
+    const ut = wizardUnitTexts();
+    const { parts } = materialSections({
+        memoryTags: mats.memoryTags,
+        memoryModes: mats.memoryModes,
+        memoryRecent: mats.memoryRecent,
+        storageItems: mats.storageItems,
+        activePlan: activeStory()?.planText ?? '',
+        historySummaries: historySummaries(),
+        reactionText: ut.reactionText,
+        lorePicks: run.lorePicks ?? [],
+    });
+    const ev = String(ut.eventText ?? '').trim();
+    if (ev) {
+        const rIdx = parts.findIndex(p => p.startsWith('## 路人反应'));
+        const at = rIdx !== -1 ? rIdx : parts.findIndex(p => p.startsWith('## 检索命中的世界书条目'));
+        parts.splice(at === -1 ? parts.length : at, 0,
+            '## 随机事件（已确定的既定事件——重写按它咬合：顺着它描述的世界状态发展、不复写同一件事）',
+            ev);
+    }
+    const kbSection = knowledgeSection(wizardKnowledgePayload());
+    if (kbSection) {
+        const idx = parts.findIndex(p => p.startsWith('## 检索命中的世界书条目'));
+        parts.splice(idx === -1 ? parts.length : idx, 0, ...kbSection);
+    }
+    const chatIdx = parts.findIndex(p => p.startsWith('## 最近对话记录'));
+    if (chatIdx !== -1) parts.splice(chatIdx, 2);   // 标题＋正文成对去掉：对话由校准窗口顶上
+    return parts;
+}
+
+let mixBusy = false;
+function openMixPanel(onChange) {
+    const body = openViewer('打碎混合').querySelector('.pp-viewer-body');
+    const draft = mixDraft();
+
+    const render = () => {
+        const t = mixTarget();
+        if (!t) {
+            body.innerHTML = '<div class="pp-muted">本聊天还没有可重写的长线章（或章节还没切出来）——先去「长线剧情」页把骨架→卷文本→生成章节跑出来，再回来打碎混合</div>';
+            return;
+        }
+        const mixN = (t.ch.mixLog ?? []).length;
+        body.innerHTML = `
+        <div class="pp-kb-toolrow" title="重写目标只有一个：监听里在岗的长线章；没挂时按书序取第一个未演完的章（暂停中或未开演）。要混别的章先去把它挂上或在长线页演到那">
+            <b>基底：第 ${t.vi + 1} 卷《${escapeHtml(t.vol.title)}》· 第 ${t.ci + 1} 章《${escapeHtml(t.ch.title)}》</b>
+            <span class="pp-muted">${escapeHtml(mixTargetStatus(t))} · ${t.ch.floors} 层预算 · 节点 ${t.ch.lit}/${t.ch.nodes.length}${mixN ? ` · 混合历史 ${mixN} 版` : ''}</span>
+        </div>
+        <label class="pp-label" title="本次重写的最高优先级输入：点名的数量、地点、人物、走向等逐条落实，不得打折">本次想法（要混进什么、改成什么样）</label>
+        <textarea id="pp_gd_mix_idea" class="text_pole textarea_compact" rows="3" placeholder="例：把第二章整章重写——实际演出里两人已经和解，把这层关系混进后续安排；点名：后续加一场雨夜追逐">${escapeHtml(draft.idea)}</textarea>
+        <div class="pp-kb-toolrow">
+            <label title="重写以最近 N 层实际演出为校准依据（N 层角色楼＋其间用户消息，楼层号与监听同口径）；0＝当前聊天全部未隐藏楼层。窗口外的旧楼层不进这次重写">校准窗口 <input type="number" class="text_pole" id="pp_gd_mix_win" min="0" step="5" value="${draft.windowFloors}" style="width:5em" /> 层（0＝全部）</label>
+            <span id="pp_gd_mix_run" class="menu_button" title="一次模型调用（走主连接、输出上限 ×3）：全书骨架＋本卷整份卷文本＋各章一览＋当前章全文与节点表＋校准窗口＋第 1 步材料＋本次想法进去，回来七字段——新章文本/节点表/楼层推荐/材料消化/变更说明/伏笔处理/校准备注。旧版整份进「混合历史」、点亮进度不动、自动重新挂上监听">打碎重写本章</span>
+        </div>
+        <div class="pp-muted" title="材料选择在本页上方：记忆表格档位/玩法/世界书自选/知识库/随机事件·路人反应单元">材料自动带本页上方同一批——装扮单元不参与（服装/场景类不进混合重编）。</div>
+        <div id="pp_gd_mix_status" class="pp-muted"></div>
+        <div id="pp_gd_mix_result"></div>`;
+
+        const status = text => { const el = body.querySelector('#pp_gd_mix_status'); if (el) el.textContent = text; };
+        body.querySelector('#pp_gd_mix_idea')?.addEventListener('input', el => { draft.idea = el.target.value; persistMixDraft(); });
+        body.querySelector('#pp_gd_mix_win')?.addEventListener('change', el => {
+            draft.windowFloors = Math.max(0, Math.round(Number(el.target.value) || 0));
+            el.target.value = String(draft.windowFloors);
+            persistMixDraft();
+        });
+        body.querySelector('#pp_gd_mix_run')?.addEventListener('click', async function () {
+            if (mixBusy) return;
+            if (!String(draft.idea ?? '').trim()) { toastr.warning('本次想法是空的——写一句这次要把剧情混成什么样'); return; }
+            mixBusy = true;
+            this.classList.add('disabled');
+            try {
+                const r = await runMixChapter({
+                    idea: draft.idea,
+                    windowFloors: draft.windowFloors,
+                    materials: mixMaterialParts().join('\n\n'),
+                    onDelta: n => status(`重写中…… 已收 ${n} 字`),
+                });
+                status(`已重写并${r.remount === 'inplace' ? '就地换新挂上' : '重新挂上'}——节点 ${Math.min(r.wasLit, r.nodes.length)}/${r.nodes.length}（进度账不动）；旧版在长线页该章「混合历史」里`);
+                body.querySelector('#pp_gd_mix_result').innerHTML = `
+                <div class="pp-gd-stat">楼层推荐：${r.floorsRec ? `${r.floorsRec} 层（仅供参考——本章 ${t.ch.floors} 层预算不变）` : '（模型没给）'}</div>
+                ${r.changesNote ? `<div class="pp-gd-stat" title="相对旧章改了什么、为什么">变更说明：${escapeHtml(r.changesNote)}</div>` : ''}
+                ${r.calibNote ? `<div class="pp-gd-stat" title="新章从校准窗口哪一处衔接、吸收了哪些实际演出">校准备注：${escapeHtml(r.calibNote)}</div>` : ''}
+                ${r.materialsNote ? `<div class="pp-gd-stat" title="本次重写消化了哪些材料内容">材料消化：${escapeHtml(r.materialsNote)}</div>` : ''}
+                ${r.foreshadowNote ? `<div class="pp-gd-stat" title="旧章伏笔的去向逐条交代">伏笔处理：${escapeHtml(r.foreshadowNote)}</div>` : ''}
+                <details class="pp-fold"><summary>新节点表（${r.nodes.length} 个）</summary>${r.nodes.map((n, i) => `<div class="pp-ls-ev"><b>${i + 1}. ${escapeHtml(n.title)}</b> <span class="pp-muted">${escapeHtml(clamp(n.criterion, 80))}</span></div>`).join('')}</details>
+                <details class="pp-fold"><summary>新章全文</summary><div class="pp-ls-guidance">${escapeHtml(r.text)}</div></details>`;
+                toastr.success('混合重编完成：章已换新、监听已挂上（进度账不动）');
+                onChange();
+            } catch (err) {
+                status('');
+                toastr.error(`混合重编失败：${String(err.message ?? err).slice(0, 200)}`);
+            } finally {
+                mixBusy = false;
+                this.classList.remove('disabled');
+            }
         });
     };
 
