@@ -278,6 +278,20 @@
 
 .pp-seg-opt.on[data-state="always"] { color: #7fd18a; }
 
+/* 监听页「世界书条目」窗的三档状态（第四十三轮）：停用灰、关键词淡蓝、常驻绿——与库页旧配色同源 */
+.pp-seg-opt.on[data-lstate="off"] { color: #b0907f; }
+
+.pp-seg-opt.on[data-lstate="key"] { color: #7fb3ff; }
+
+.pp-seg-opt.on[data-lstate="always"] { color: #7fd18a; }
+
+/* 向导「世界书自选」面板的「常驻」按钮按下态（挂 body 的查看器，作用域 .pp-viewer） */
+.pp-viewer .pp-gd-lore-pin-on {
+    color: #7fd18a;
+    border-color: #7fd18a;
+    font-weight: bold;
+}
+
 .pp-entry-keys {
     flex: 1 1 200px;
     min-width: 120px;

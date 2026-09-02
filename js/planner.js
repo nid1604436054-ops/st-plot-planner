@@ -1,14 +1,15 @@
 // M2 剧情指导：检查（OOC/剧情重复/文风重复/进度）+ 剧情规划（隐藏剧本）+ 检查报告
-// 与 M3 共用「上下文收集 + 世界书检索 + 独立 API」管线，全程不碰主对话连接
+// 与 M3 共用「上下文收集 + 独立 API」管线，全程不碰主对话连接；第四十三轮起世界书只带
+// 勾选条目（自动检索归监听），「上下文收集 + 世界书检索」的老管线里检索一半已撤
 import { chatCompletion, searchWeb, searchToolReady, parseModelJson } from "./api.js";
 import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
-import { buildLoreContext } from "./lorebook.js";
+import { resolveLorePicks } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
 import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
 import { knowledgeSection } from "./knowledge.js";
-import { materialSections as baseMaterialSections, gameplaySection, memorySectionHeader } from "./materials.js";
+import { materialSections as baseMaterialSections, gameplaySection, memorySectionHeader, currentLorePicks } from "./materials.js";
 import { extractJson, fingerprint } from "./utils.js";
 
 // 输出 schema 两套变体：存在进行中剧情时才要求 progress（推进到哪个阶段 + 约百分比）。
@@ -353,14 +354,13 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
     }
 }
 
-// 本地检索统计（向导第 1 步展示用；纯本地，不调模型）
-// memoryTags / memoryModes / memoryRecent 语义与 buildGuidanceMessages 相同：
-// 标签数组（只作用于「标签」档的表）、每表档位 {uid:'off'|'tags'|'always'}、标签档表尾最新窗口行数
-// memorySheets：null = 全部（开了召回的表）；数组 = 只算勾选的表（空数组 = 一张都不带）
+// 本地材料统计（「查看完整提示词」弹窗摘要行展示用；纯本地，不调模型）。
+// 第四十三轮起不再统计世界书命中——自动检索撤出后没有「命中」这个数了
+// memoryTags / memoryModes / memoryRecent / memorySheets 语义与 buildGuidanceMessages 相同
 export function collectStats({ memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0 } = {}) {
-    const { chatList, hits } = collectPlanningContext();
+    const { chatList } = collectPlanningContext();
     const memChars = memoryTags === false ? 0 : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets, sheetModes: memoryModes, latestPerSheet: memoryRecent }).length;
-    return { layers: chatList.length, hits: hits.length, memChars };
+    return { layers: chatList.length, memChars };
 }
 
 // 记忆表格 / 游戏玩法小节的构建在 materials.js（与路人反应校准共用同一批口径）
@@ -410,29 +410,28 @@ function reactionSection(header, extraText = '') {
 // opts.reactionText = 第 1 步「插入单元」勾选的未注入反应单元正文（与生效注入合并成一节）。
 // 注入模板序固定：剧情 → 事件 → 反应——反应小节插在进行中剧情之后（事件小节由
 // buildGuidanceMessages 再插在两者中间），不给排顺序的旋钮
-// 第十三轮插入锚点：剧情类插入小节统一锚在「历史剧情摘要」之前（无摘要时退到检索命中/
-// 最近对话之前）——材料重排后这三节是「开头会变」的垫底小节，插在它们之前才留在稳定区、
-// 不破跨调用缓存。剧情→事件→反应相邻序保持：反应锚稳定区头、事件锚反应之前
+// 第十三轮插入锚点：剧情类插入小节统一锚在「历史剧情摘要」之前（无摘要时退到最近对话之前）——
+// 材料重排后这两节是「开头会变」的垫底小节，插在它们之前才留在稳定区、不破跨调用缓存。
+// 剧情→事件→反应相邻序保持：反应锚稳定区头、事件锚反应之前
+// （第四十三轮「检索命中」小节撤除，锚点里不再有它）
 const stableTailIdx = parts => parts.findIndex(p => p.startsWith('## 历史剧情摘要')
-    || p.startsWith('## 检索命中的世界书条目')
     || p.startsWith('## 最近对话记录'));
 
 export function materialSections(opts = {}) {
-    const { parts, hits, picks } = baseMaterialSections(opts);
+    const { parts, picks } = baseMaterialSections(opts);
     const at = stableTailIdx(parts);
     parts.splice(at === -1 ? parts.length : at, 0,
         ...reactionSection('## 路人反应（世界对引人注目之事的回应口径，后续剧情安排与其余波、收束口径一致）', opts.reactionText));
-    return { parts, hits, picks };
+    return { parts, picks };
 }
 
-// 动作参考掺入段（2026-09-02 动作指导书路线，只进剧情规划向导）：材料里出自「动作指导书」的
-// 世界书条目（自选或检索命中）在场时追加这一节——告诉模型这些条目是动作参考、动作写法照它、
-// 关键动作要挂进节点。检查报告/随机事件/路人反应/长线一概不带（用户拍板：长线精度有限，
-// 混外部知识将来走打碎混合加具体规划更准、免得模型注意力乱飞）
-function actionRefSection(picks, hits) {
+// 动作参考掺入段（2026-09-02 动作指导书路线）：材料里出自「动作指导书」的世界书条目在场时
+// 追加这一节——告诉模型这些条目是动作参考、动作写法照它、关键动作要挂进节点。
+// 第四十三轮起只看自选条目（自动检索撤出）；进剧情规划向导与混合重编（外部知识进长线的正门
+// 就是打碎混合），检查报告/随机事件/路人反应/长线管线不带
+export function actionRefSection(picks) {
     const names = new Set();
     for (const p of picks ?? []) if (p?.book?.kind === 'action') names.add(p.book.name);
-    for (const h of hits ?? []) if (h?.action && h?.bookName) names.add(h.bookName);
     if (!names.size) return [];
     return [
         '## 动作指导（动作参考材料的使用口径）',
@@ -442,24 +441,24 @@ function actionRefSection(picks, hits) {
 
 export function buildGuidanceMessages(options = {}) {
     const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', reactionText = '', outfitText = '', knowledgePayload = [], activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [], lorePicks = [], draftSkeletons = [] } = options;
-    const { parts, hits, picks } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries, reactionText, lorePicks });
-    // 动作指导掺入段（2026-09-02）：只在世界书材料里有动作指导书条目时出现，排在稳定区
-    // （玩法小节之后有它、没有则退到检索命中/最近对话之前）——条目本身已在自选/检索小节里
-    const actSec = actionRefSection(picks, hits);
+    const { parts, picks } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries, reactionText, lorePicks });
+    // 动作指导掺入段（2026-09-02）：只在世界书自选材料里有动作指导书条目时出现，排在稳定区
+    // （玩法小节之后有它、没有则退到最近对话之前）——条目本身已在自选小节里
+    const actSec = actionRefSection(picks);
     if (actSec.length) {
         let at = parts.findIndex(p => p.startsWith('## 游戏玩法'));
-        if (at === -1) at = parts.findIndex(p => p.startsWith('## 检索命中的世界书条目') || p.startsWith('## 最近对话记录'));
+        if (at === -1) at = parts.findIndex(p => p.startsWith('## 最近对话记录'));
         parts.splice(at === -1 ? parts.length : at, 0, ...actSec);
     }
     // 知识库材料小节与近期草稿骨架（第七轮防复刻：连 roll 收敛的根因＝放弃的草稿不在任何
-    // 往后看的材料里，对话/记忆/历史摘要都只记正式剧情）同锚插在检索命中之前——第十三轮
-    // 重排：知识库抽样分组每把轮换换新＝「开头会变」的小节，与检索命中/对话一起垫底，别让
+    // 往后看的材料里，对话/记忆/历史摘要都只记正式剧情）同锚插在最近对话之前——第十三轮
+    // 重排：知识库抽样分组每把轮换换新＝「开头会变」的小节，与最近对话一起垫底，别让
     // 它断掉前面稳定小节的缓存；骨架（少变）排在知识库（每把换新）之前。同锚一次插入：
     // 分两次 findIndex 的话先插的一节会让锚点后移、后插的落到它后面去
     const skeletons = (draftSkeletons ?? []).filter(Boolean);
     const kbSection = knowledgeSection(knowledgePayload);
     if (kbSection || skeletons.length) {
-        const idx = parts.findIndex(p => p.startsWith('## 检索命中的世界书条目') || p.startsWith('## 最近对话记录'));
+        const idx = parts.findIndex(p => p.startsWith('## 最近对话记录'));
         parts.splice(idx === -1 ? parts.length : idx, 0,
             ...(skeletons.length ? [
                 '## 近期草稿骨架（防复刻清单：近期被放弃或换掉的规划草稿，各版一句话概括与节点阶段名——新规划的走向与节点安排不得与其中任何一份高度雷同）',
@@ -516,7 +515,6 @@ export function buildGuidanceMessages(options = {}) {
         // 预览侧用同一个函数拼装，保证「看到的」与「发出的」一致
         system: guidanceSystemPrompt(Boolean(String(activePlan ?? '').trim()), Boolean(kbSection), skeletons.length > 0, minBeats),
         user: userContent,
-        hits: hits.length,
         hasKnowledge: Boolean(kbSection),   // 第二遍对齐审校的 schema 要带同款 knowledgeUsed 字段（第十二轮）
         sections,
     };
@@ -646,24 +644,28 @@ async function alignPass(done, messages, { hasKnowledge = false, onDelta, onStag
  * @param {object} [options.memoryModes]   第 1 步的每表档位 { [uid]: 'off'|'tags'|'always' }
  * @param {number} [options.memoryRecent]  「标签」档每表另附的表尾最新行数
  */
-export async function runStoryReview({ planText = '', userNote = '', memoryTags = null, memoryModes = null, memoryRecent = 0, onDelta, onStage, signal, onReasoning } = {}) {
-    const { chatList, hits } = collectPlanningContext();
+export async function runStoryReview({ planText = '', userNote = '', memoryTags = null, memoryModes = null, memoryRecent = 0, lorePicks, onDelta, onStage, signal, onReasoning } = {}) {
+    const { chatList } = collectPlanningContext();
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
     const memoryText = buildMemoryContext({ tagFilter: memoryTags, sheetModes: memoryModes, latestPerSheet: memoryRecent });
+    // 第四十三轮：世界书材料改带向导第 1 步的自选勾选（手动勾选∪常驻按钮），自动检索撤出
+    const picks = resolveLorePicks(Array.isArray(lorePicks) ? lorePicks : currentLorePicks());
 
     // 第十三轮重排（与 buildGuidanceMessages 同款原则）：检查对象/玩法/反应/记忆这些跨次
-    // 调用稳定的小节在前，检索命中（按最近楼层重扫）与最近对话（滑动窗口）垫底
+    // 调用稳定的小节在前，最近对话（滑动窗口）垫底
     const userContent = [
         '## 角色设定摘要',
         characterSummary() || '（无角色卡）',
+        ...(picks.length ? [
+            '## 自选世界书条目（用户点名随行的材料：原文整条——设定与口径以此为准）',
+            picks.map(p => `【${p.book.name} / ${p.entry.comment}】\n${p.entry.content}`).join('\n\n'),
+        ] : []),
         '## 正在执行的剧情规划（检查对象）',
         String(planText || '（空）'),
         ...gameplaySection(storageItemsInEffect(), '## 游戏玩法（当前生效的玩法规则，检查执行情况时对照它）'),
         ...reactionSection('## 路人反应（当前生效的反应卡，检查执行情况时对照它）'),
         ...(memoryText ? [memorySectionHeader(memoryTags, '已有剧情事件记录，用于查重与推新参考', memoryRecent, memoryModes), memoryText] : []),
-        '## 检索命中的世界书条目',
-        buildLoreContext(hits),
         '## 最近对话记录',
         formatChatLog(chatList),
         ...(userNote ? ['## 用户补充说明', userNote] : []),

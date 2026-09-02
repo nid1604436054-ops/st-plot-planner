@@ -19,7 +19,7 @@
 // 游戏玩法（tab-storage.js）追加挂在底部折叠区容器里与它们并列（条目库管理 + AI 玩法咨询都在该区——
 // 生成类功能不进向导运行区），生效条目由第 1 步勾选随分析发送，检查报告（runStoryReview）自动附带当前生效条目；
 // 「生效中的隐身注入」折叠区（tab-events.js）也在该容器末尾——注入管理与注入相关工具同住底部工具区
-import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, startResearchPrefetch, guidanceResearchInputs, materialSections } from "../../planner.js";
+import { runPlotGuidance, runStoryReview, buildGuidanceMessages, collectStats, startResearchPrefetch, guidanceResearchInputs, materialSections, actionRefSection } from "../../planner.js";
 import { generateRandomEvent, generateFreeRandomEvent, generateAiChoiceRandomEvent, rollEventPipeline, commitRolledEvent } from "../../randomEvents.js";
 import { addInjection, updateInjection, removeInjection } from "../../injection.js";
 import { settings, save, newId } from "../../settings.js";
@@ -29,12 +29,12 @@ import { renderEventsTools, renderInjectionTools } from "./tab-events.js";
 import { renderStorageTools } from "./tab-storage.js";
 import { storageItemsInEffect } from "../../store.js";
 import { memoryState } from "../../memoryTable.js";
-import { getTavernContext } from "../../context.js";
+import { getTavernContext, collectRecentChat, formatChatLog } from "../../context.js";
 import { loadChatData, saveChatData } from "../../chatdata.js";
 import { escapeHtml, estimateTokens, scanUserScripting, clamp } from "../../utils.js";
 import { searchToolReady, withGlobalPresets } from "../../api.js";
 import { knowledgeLists, payloadFromIds, grabFromList, entryText, settleCooldown, knowledgeCfg, kbSendPayload, knowledgeUsedLabels, knowledgeSection } from "../../knowledge.js";
-import { resolveLorePicks } from "../../lorebook.js";
+import { resolveLorePicks, scanLorebooks } from "../../lorebook.js";
 import { unitsState, persistUnits, newEventUnit, newReactionUnit, newOutfitUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, eventOriginText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
 import { opMountUnit, makeUnitFromStory, listenerCfg } from "../../listener.js";
 import { syncLfProgress } from "../../longform.js";
@@ -58,7 +58,8 @@ const run = {
     kbKick: [],          // 全量清单里被踢的条目 id（第七轮投喂方式）：踢＝本次不发，整表其余照发；随向导快照留底
     kbSentIds: [],       // 本次分析实际发送的知识条目 id 快照（§6.9 用后账）：冷却结算挪到「确认采用/转隐身注入」时（2026-08-29 真机第五轮）——分析成功只记这份帐，草稿放弃/重写不碰冷却；结算或丢弃后清空
     kbListIds: null,     // 第 1 步勾选的知识库清单 id（按对话记忆存 picks）；null = 未初始化（默认不勾）
-    lorePicks: [],       // 世界书自选勾选键（「bookId:uid」，第七轮 §6.10）：勾中的整条原文随分析进材料；按对话记忆存 picks、随向导快照留底，无冷却
+    lorePicks: [],       // 世界书勾选键（「bookId:uid」）：勾中的整条原文随一次性生成进材料（第四十三轮起＝手动勾选∪常驻按钮，五处生成同源）；按对话记忆存 picks 块、随向导快照留底，无冷却
+    lorePinned: [],      // 世界书「常驻」按钮按下的条目键（第四十三轮三层选择）：常驻 ⊆ 勾选（按下常驻即同时勾上、取消勾选自动撤常驻）——常驻条目不被「按关键词一键选择」的刷新冲掉
     result: null, raw: '', hits: 0, planText: '', reviseNote: '',
     hadActive: false,   // 本次分析发起时是否存在进行中剧情（第 3 步「剧情进度」行只在这种时候显示）
     memModes: null,      // 第 1 步第一层：每张表的召回档位 { [uid]: 'off' 停用 | 'tags' 按标签 | 'always' 常驻全量 }；null = 未动过（全部常驻全量，与旧默认一致）
@@ -151,6 +152,7 @@ function restoreWizard(container) {
         kbSentIds: Array.isArray(r.kbSentIds) ? r.kbSentIds.map(String) : [],
         kbListIds: Array.isArray(r.kbListIds) ? r.kbListIds.map(String) : null,
         lorePicks: Array.isArray(r.lorePicks) ? r.lorePicks.map(String) : [],
+        lorePinned: Array.isArray(r.lorePinned) ? r.lorePinned.map(String) : [],
         result: r.result ?? null,
         raw: r.raw ?? '',
         hits: r.hits ?? 0,
@@ -498,14 +500,17 @@ function wireUnitAreaCard(cardEl, unit, rerender, refreshCounts) {
 // 读的就是这份按对话存的勾选（第 1 步每次变动立即写回，永远与所见一致）
 function readMemPicks() {
     const p = loadChatData('picks', null);
-    if (!p) return { memModes: null, memTags: [], memRecent: 0, gpIds: null, kbListIds: null, lorePicks: [] };
+    // loreV===2 才认世界书勾选（第四十三轮「旧数据不迁移、直接作废」）：旧块的 lorePicks 清零重计，
+    // 常驻键是全新的；记忆/玩法/知识库清单勾选照旧继承
+    if (!p) return { memModes: null, memTags: [], memRecent: 0, gpIds: null, kbListIds: null, lorePicks: [], lorePinned: [] };
     return {
         memModes: normalizeMemModes(p.memModes) ?? memModesFromLegacy(p),
         memTags: Array.isArray(p.memTags) ? p.memTags : [],
         memRecent: Math.max(0, Math.round(Number(p.memRecent) || 0)),
         gpIds: Array.isArray(p.gpIds) ? p.gpIds : null,
         kbListIds: Array.isArray(p.kbListIds) ? p.kbListIds.map(String) : null,
-        lorePicks: Array.isArray(p.lorePicks) ? p.lorePicks.map(String) : [],
+        lorePicks: p.loreV === 2 && Array.isArray(p.lorePicks) ? p.lorePicks.map(String) : [],
+        lorePinned: p.loreV === 2 && Array.isArray(p.lorePinned) ? p.lorePinned.map(String) : [],
     };
 }
 
@@ -517,17 +522,20 @@ function applyPicks() {
     run.gpIds = p.gpIds;
     run.kbListIds = p.kbListIds;
     run.lorePicks = p.lorePicks;
+    run.lorePinned = p.lorePinned;
 }
 
 function savePicks() {
     saveChatData('picks', {
         version: 1,
+        loreV: 2,   // 世界书勾选的第二版（第四十三轮）：loreV<2 的旧 lorePicks 一律视为已作废
         memModes: run.memModes,
         memTags: run.memTags,
         memRecent: run.memRecent,
         gpIds: run.gpIds,
         kbListIds: run.kbListIds ?? [],
         lorePicks: run.lorePicks ?? [],
+        lorePinned: run.lorePinned ?? [],
     });
 }
 
@@ -740,7 +748,7 @@ export function resetGuidance() {
     stopRunTicker();
     runMeta = null;
     Object.assign(run, {
-        note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbModes: {}, kbKick: [], kbSentIds: [], kbListIds: null, lorePicks: [], result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+        note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbModes: {}, kbKick: [], kbSentIds: [], kbListIds: null, lorePicks: [], lorePinned: [], result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
         memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
     });
     evImports.clear();
@@ -1067,6 +1075,7 @@ function wizardMaterials() {
         memoryModes: wizardMemoryModes(),
         memoryRecent: wizardMemoryRecent(),
         storageItems: wizardStorageItems(),
+        lorePicks: run.lorePicks ?? [],   // 世界书勾选（含常驻）随工具生成走（第四十三轮：三工具与向导分析同源）
     };
 }
 
@@ -1150,7 +1159,7 @@ function renderCollect(container, main) {
             <span id="pp_gd_ot_panel" class="menu_button" title="装扮（换装）悬浮面板：给本聊天的角色挑/生成当前装扮。知识库清单打「装扮」标记后在这里可用（标记与绑定⇄衣库开关在「知识库」页签）；两种成稿——「纯抽取」零模型调用（勾选条目原文拼成正文）、「模型生成」每角色一次轻量选择小调用（候选一小把＋绑定的世界书对照＋最近对话，模型挑中并写状态句，智力不衰减）。确认立卡＝装扮单元（可勾选随规划分析发送）且自动成为当前装扮开始持续注入——注入设置（持续/注入几层楼、撤下进留痕）在「监听」页的装扮注入区，与监听总开关无关；新装扮确认时旧的自动进监听留痕">装扮</span>
             <span id="pp_gd_mix_panel" class="menu_button" title="打碎混合（混合重编）悬浮面板：把长线当前执行位的章整章重写——规划与实际已演出的剧情对齐、融进新材料与本次想法（本次想法最高优先级）。基底＝本聊天长线的当前执行位章（监听里在岗的章，或书序第一个未演完的章——暂停/未开演都行）；材料自动带本页上方同一批（记忆表格/玩法/世界书自选/知识库/随机事件·路人反应单元——装扮单元不参与）；旧版整份存进该章「混合历史」（长线页章卡可回看）、点亮进度不动；重写完自动重新挂上监听（在岗就地换新、暂停的重新挂载；退位槽被占会拒绝并指路）。偏大挂起时的处置出口之一。没有长线剧情时面板会指路去长线页">打碎混合</span>
             <span id="pp_gd_kb_panel" class="menu_button" title="知识库抓取（悬浮面板，与随机事件/路人反应同款交互）：抽样清单各按轮换抓一小把（条数在「设置 → 知识库」，默认 5；轮换制＝整张清单洗牌按序发，全部条目各发一次之前不重复、发完一轮自动重洗；不按语境过滤；冷却中的条目本轮跳过），抓到的条目在面板里看得见——采用方式每张抽样清单各自二选一：「全部采用」＝整把发给规划模型让它自己挑（默认），「自选」＝你勾哪条发哪条（各清单独立，一张自选不影响其他清单）；单条可踢、每张清单可整把换新。全量清单不抓取——整表可用条目全部随行（模型从中挑、挑中的进冷却；冷却中跳过；单条可踢可还原）。发送的随材料进第 2 步确认页（按清单点名、0 条发送的清单标 ⚠ 点名）。清单与条目在「知识库」页签管理">知识库抓取</span>
-            <span id="pp_gd_lore_panel" class="menu_button" title="世界书自选（悬浮面板，与知识库抓取同款交互）：按书分组勾条目，勾中的整条原文随分析进材料——「照着写」的材料（性知识/世界观口径这类，每次都该在场），与知识库「选着用」（候选素材、挑中进冷却）分工。不看关键词/常驻/书与条目的启用状态（勾选是唯一口径，禁用的照样能勾）；与检索命中自动去重（自选优先）；勾选随对话记忆保存，无冷却">世界书自选</span>
+            <span id="pp_gd_lore_panel" class="menu_button" title="世界书自选（悬浮面板，与知识库抓取同款交互）：按书分组勾条目，勾中的整条原文随一次性生成进材料——「照着写」的材料（性知识/世界观口径这类，每次都该在场），与知识库「选着用」（候选素材、挑中进冷却）分工。三层选择：手动勾选；「常驻」按钮（命中不了关键词但想一直保留的条目，不被一键刷新冲掉）；「按关键词一键选择」（拿当前聊天全部未隐藏楼层纯关键词重勾一遍，常驻不动、其余清掉重勾）。不看关键词/常驻/书与条目的启用状态（勾选是唯一口径，禁用的照样能勾）；勾选随对话记忆保存，无冷却">世界书自选</span>
         </div>
         <div id="pp_gd_c1_units"></div>
         <label class="pp-label" title="已有的想法、约束或重点（可选，随分析发给模型）">剧情构思方向</label>
@@ -1191,7 +1200,7 @@ function renderCollect(container, main) {
         const otN = us.outfitUnits.filter(u => u.inPlan).length;
         // 单元数常驻显示（0 也显示）：第 2 步确认页与这里同口径，有没有单元一眼可见
         const unitSeg = ` · 单元：随机事件 ${evN} · 路人反应 ${rxN} · 装扮 ${otN}`;
-        return `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}${kbSeg}${loreSeg}${unitSeg}`;
+        return `对话 ${st.layers} 层 · ${memSeg}${gpDesc}${kbSeg}${loreSeg}${unitSeg}`;
     };
     // 标签列下方的即时提示：只在该说话时出现（档位/标签没配对上、或标签档要空手）
     const memTipText = () => {
@@ -1496,13 +1505,13 @@ function renderReady(container, main) {
         : '无';
     main.innerHTML = `
     <div class="pp-section">
-        <div class="pp-gd-stephead" title="记忆表格、对话层数、世界书命中、预设等其余材料清单在第 1 步「查看完整提示词」弹窗开头"><b>第 2 步 · 分析前确认</b></div>
+        <div class="pp-gd-stephead" title="记忆表格、对话层数、预设等其余材料清单在第 1 步「查看完整提示词」弹窗开头"><b>第 2 步 · 分析前确认</b></div>
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的随机事件单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 随机事件：${evNames.length ? escapeHtml(evNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的路人反应单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 路人反应：${rxNames.length ? escapeHtml(rxNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的装扮单元名单，随分析发给模型（装扮小节——规划按它写穿着细节）；当前装扮对扮演模型的注入与此无关，那边在「监听」页的装扮注入区">插入单元 · 装扮：${otNames.length ? escapeHtml(otNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步勾选的游戏玩法条目，作为材料随分析发送，规划按这些规则设计">玩法：${gpNames.length ? escapeHtml(gpNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步「知识库抓取」面板里决定发送的条目（按清单各报一段：抽样清单＝逐条编号点名，「自选」的清单带标记；全量清单＝整表随行只报条数；编号＝清单号-条目号；勾了清单却 0 条发送的标 ⚠ 点名），随材料发送——规划从中选用素材，确认采用时选用的进冷却（放弃草稿不冷却）">知识库：${kbText}</div>
-        <div class="pp-gd-stat" title="第 1 步「世界书自选」面板里勾的条目（原文整条随材料发送——「照着写」的材料，不挑不冷却；与检索命中自动去重、这边优先），按书点名条数">自选世界书：${loreText}</div>
+        <div class="pp-gd-stat" title="第 1 步「世界书自选」面板里勾的条目（含按了「常驻」按钮的；原文整条随材料发送——「照着写」的材料，不挑不冷却），按书点名条数">自选世界书：${loreText}</div>
         <div class="pp-gd-stat" title="联网搜索总开关在「设置」页；开着时分析前先轻量判断是否需要现实信息（或直接检索），纪要附进分析材料">联网搜索：${searchToolActive() ? '开' : '关'}</div>
         ${(run.raw ?? '').trim() ? `
         <details class="pp-viewer-block" style="margin-top:8px">
@@ -1583,6 +1592,7 @@ function openEvPanel(onChange) {
             <span id="pp_gd_ev_note" class="menu_button" title="把上面的意见交给大模型，遵循意见即兴生成事件（意见路径独占材料位：不带掷骰、不带导入单元）；结果先出草稿，点「立为单元」收进暂存">按意见生成</span>
         </div>
         <div id="pp_gd_ev_imp">${importRowHtml('event', evImports)}</div>
+        <div class="pp-muted" title="第四十三轮起随机事件不再自动带检索命中——世界书材料只跟第 1 步「世界书自选」面板的勾选走（含常驻按钮的条目）；一条没勾＝本次不带世界书材料，模型不会报错但看不到这些设定">本次世界书材料：${(() => { const n = resolveLorePicks(run.lorePicks).length; return n ? `自选 ${n} 条` : '未勾选、本次不带世界书材料'; })()}</div>
         <div id="pp_gd_ev_status" class="pp-muted">${full ? `暂存已满 ${MAX_UNITS_PER_TOOL}/${MAX_UNITS_PER_TOOL}，先在第 1 步「插入单元」区删一个再生成` : ''}</div>
         <div id="pp_gd_ev_pool"></div>`;
         const manualEl = body.querySelector('#pp_gd_ev_manual');
@@ -1777,6 +1787,7 @@ function openRxPanel(onChange) {
             <span id="pp_gd_rx_gen" class="menu_button" title="生成一张反应卡先出草稿（材料自动带第 1 步同一批：记忆表格档位与标签、玩法勾选、世界书、进行中剧情，勾选的导入单元（最多一项）作为既定方向随行——反应卡围绕导入的事件出，没勾才从最近对话里找；产物正文自带前因，删掉原始单元也不丢）；点草稿上的「立为单元」入池，模型会顺带给一个浓缩短标题作单元名">生成反应卡</span>
         </div>
         ${importRowHtml('reaction', rxImports)}
+        <div class="pp-muted" title="第四十三轮起路人反应不再自动带检索命中——世界书材料只跟第 1 步「世界书自选」面板的勾选走（含常驻按钮的条目）；一条没勾＝本次不带世界书材料，模型不会报错但看不到这些设定">本次世界书材料：${(() => { const n = resolveLorePicks(run.lorePicks).length; return n ? `自选 ${n} 条` : '未勾选、本次不带世界书材料'; })()}</div>
         <div id="pp_gd_rx_status" class="pp-muted">${full ? `反应暂存已满 ${MAX_UNITS_PER_TOOL}/${MAX_UNITS_PER_TOOL}，先在第 1 步「插入单元」区删一个再生成` : ''}</div>
         <div id="pp_gd_rx_pool"></div>`;
         const noteEl = body.querySelector('#pp_gd_rx_note');
@@ -2244,13 +2255,15 @@ function openOtPanel(onChange) {
 // 重新挂上监听（细节在 mix.js）。偏大挂起的处置出口之一（重挂即解除挂起与停进提示）
 // ---------------------------------------------------------------------------
 
-// 混合重编的材料小节：与规划分析同一批选择（记忆表格档位/标签/最新行、玩法勾选、世界书自选、
-// 知识库抓取与全量、随机事件·路人反应单元），去掉「最近对话记录」——对话走 mix 自己的
-// 校准窗口块（带楼层号、层数面板可控），不双发；装扮单元小节不带（设计拍板：服装/场景类不参与）
+// 混合重编的材料小节：与规划分析同一批选择（记忆表格档位/标签/最新行、玩法勾选、世界书勾选
+// 含常驻、知识库抓取与全量、随机事件·路人反应单元），去掉「最近对话记录」——对话走 mix 自己的
+// 校准窗口块（带楼层号、层数面板可控），不双发；装扮单元小节不带（设计拍板：服装/场景类不参与）。
+// 第四十三轮起世界书自动检索全线撤出（材料只带勾选条目），并补上「动作参考」掺入段——
+// 混合重编是动作指导知识进长线的正门（DESIGN §6.4），此前只进条目不进口径指令的缺漏在这补齐
 function mixMaterialParts() {
     const mats = wizardMaterials();
     const ut = wizardUnitTexts();
-    const { parts } = materialSections({
+    const { parts, picks } = materialSections({
         memoryTags: mats.memoryTags,
         memoryModes: mats.memoryModes,
         memoryRecent: mats.memoryRecent,
@@ -2260,17 +2273,22 @@ function mixMaterialParts() {
         reactionText: ut.reactionText,
         lorePicks: run.lorePicks ?? [],
     });
+    const actSec = actionRefSection(picks);
+    if (actSec.length) {
+        const at = parts.findIndex(p => p.startsWith('## 游戏玩法'));
+        parts.splice(at === -1 ? parts.length : at, 0, ...actSec);
+    }
     const ev = String(ut.eventText ?? '').trim();
     if (ev) {
         const rIdx = parts.findIndex(p => p.startsWith('## 路人反应'));
-        const at = rIdx !== -1 ? rIdx : parts.findIndex(p => p.startsWith('## 检索命中的世界书条目'));
+        const at = rIdx !== -1 ? rIdx : parts.findIndex(p => p.startsWith('## 最近对话记录'));
         parts.splice(at === -1 ? parts.length : at, 0,
             '## 随机事件（已确定的既定事件——重写按它咬合：顺着它描述的世界状态发展、不复写同一件事）',
             ev);
     }
     const kbSection = knowledgeSection(wizardKnowledgePayload());
     if (kbSection) {
-        const idx = parts.findIndex(p => p.startsWith('## 检索命中的世界书条目'));
+        const idx = parts.findIndex(p => p.startsWith('## 最近对话记录'));
         parts.splice(idx === -1 ? parts.length : idx, 0, ...kbSection);
     }
     const chatIdx = parts.findIndex(p => p.startsWith('## 最近对话记录'));
@@ -2350,11 +2368,12 @@ function openMixPanel(onChange) {
 }
 
 // ---------------------------------------------------------------------------
-// 世界书自选悬浮面板（第七轮 §6.10，照知识库抓取面板同款交互）：按书分组勾条目，
-// 勾中的整条原文随分析进材料——「照着写」的材料（性知识/世界观口径这类，每次都该在场），
-// 区别于知识库的「选着用」（候选素材、挑中进冷却）。不看关键词/常驻/书与条目的启用状态
-// （勾选是唯一口径，禁用的照样能勾——三档位管的是自动检索那条路，与本面板无关）；
-// 与检索命中自动去重（自选优先）；勾选随对话记忆保存（picks 块），无冷却。
+// 世界书自选悬浮面板（第七轮 §6.10 起；第四十三轮升三层选择）：按书分组列条目，勾中的
+// 整条原文随一次性生成进材料——「照着写」的材料，区别于知识库的「选着用」。三层：
+// ① 手动勾选；② 「常驻」按钮（命中不了关键词但想一直保留的条目，常驻 ⊆ 勾选）；
+// ③ 「按关键词一键选择」——拿当前聊天全部未隐藏楼层纯关键词重勾（刷新式：常驻不动、
+// 其余清掉重勾，防过期勾选攒着清不掉）。不看停用/常驻/书与条目的启用状态（勾选是唯一
+// 口径——那些归监听页管）；勾选随对话记忆保存（picks 块），无冷却。
 // 材料小节与发送在 materials.js / planner.js（lorePicks 一路传下去），本面板只管勾选
 // ---------------------------------------------------------------------------
 
@@ -2362,6 +2381,7 @@ function openLorePanel(onChange) {
     const body = openViewer('世界书自选').querySelector('.pp-viewer-body');
     let query = '';
     const selSet = () => new Set(run.lorePicks ?? []);
+    const pinSet = () => new Set(run.lorePinned ?? []);
     // 按书折叠（第八轮真机反馈：书一多整页条目摊太长）——默认全部收起，要勾哪本点「展开」；
     // 搜着检索词时命中的书自动展开（找条目方便），显式点过「收起」的仍尊重
     const foldState = new Map();
@@ -2370,8 +2390,9 @@ function openLorePanel(onChange) {
     const render = () => {
         const books = settings.lorebooks ?? [];
         const sel = selSet();
+        const pin = pinSet();
         if (!books.length) {
-            body.innerHTML = '<div class="pp-muted">还没有世界书——在「世界书」页签导入或新建后再来</div>';
+            body.innerHTML = '<div class="pp-muted">还没有世界书——在设置页「世界书库」区导入或新建后再来</div>';
             return;
         }
         const q = query.trim().toLowerCase();
@@ -2387,22 +2408,27 @@ function openLorePanel(onChange) {
             const folded = isFolded(book, searching);
             return `
         <div class="pp-gd-ughead">
-            <label class="pp-label" title="整本书一起勾/一起清（已勾＝全勾；再点＝全清）——性知识这类「整本书照着写」的书一键全选"><input type="checkbox" data-lbook="${escapeHtml(book.id)}" ${allOn ? 'checked' : ''} /> ${escapeHtml(book.name)}（已勾 ${onN}/${entries.length}）</label>
+            <label class="pp-label" title="整本书一起勾/一起清（已勾＝全勾；再点＝全清，清掉的常驻标记一并撤掉）——性知识这类「整本书照着写」的书一键全选"><input type="checkbox" data-lbook="${escapeHtml(book.id)}" ${allOn ? 'checked' : ''} /> ${escapeHtml(book.name)}（已勾 ${onN}/${entries.length}）</label>
             <span class="menu_button" data-lfold="${escapeHtml(book.id)}" title="${folded ? '展开' : '收起'}这本书的条目（默认收起，要勾选时再展开）"><i class="fa-solid fa-chevron-${folded ? 'right' : 'down'}"></i> ${folded ? '展开' : '收起'}</span>
         </div>
         ${folded ? '' : entries.map(e => {
             const key = `${book.id}:${e.uid}`;
             const on = sel.has(key);
+            const pinned = pin.has(key);
             return `
         <div class="pp-kb-erow${on ? '' : ' pp-kb-unsel'}">
-            <label title="勾上＝这条的原文整条随分析进材料（照着写，不是选着用）"><input type="checkbox" data-lore="${escapeHtml(key)}" ${on ? 'checked' : ''} /></label>
+            <label title="勾上＝这条的原文整条随一次性生成进材料（照着写，不是选着用）"><input type="checkbox" data-lore="${escapeHtml(key)}" ${on ? 'checked' : ''} /></label>
             <span class="pp-kb-ebody" title="${escapeHtml(String(e.content ?? ''))}">${escapeHtml(String(e.comment ?? `条目 ${e.uid + 1}`))}</span>
+            <span class="menu_button${pinned ? ' pp-gd-lore-pin-on' : ''}" data-lpin="${escapeHtml(key)}" title="${pinned ? '常驻中：一直在材料里、不被「按关键词一键选择」冲掉；点一下撤掉常驻（勾选保留）' : '设为常驻：一直在材料里、不被「按关键词一键选择」冲掉（给命中不了关键词但想一直保留的条目）；按下的同时会勾上它'}">${pinned ? '★ 常驻' : '常驻'}</span>
         </div>`; }).join('')}`;
         }).join('');
         body.innerHTML = `
         <input type="text" class="text_pole textarea_compact" id="pp_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动勾选；检索时命中的书自动展开…" value="${escapeHtml(query)}" style="width:100%" />
+        <div class="pp-btn-row" style="margin:6px 0">
+            <span id="pp_lore_onekey" class="menu_button" title="拿当前聊天的全部未隐藏楼层当文本，逐条比对条目关键词，命中的自动勾上。刷新式：按了「常驻」的条目不动，其余勾选全部清掉、按当前关键词重勾一遍（隔很久再用，只加不减的话过期勾选永远清不掉）；纯关键词匹配——不看停用/常驻状态、不看任何书单（那些归监听页管）；不设条数上限，勾多了手动删">按关键词一键选择</span>
+        </div>
         ${groupHtml || '<div class="pp-muted">没有命中检索词的条目，清空检索词看全部</div>'}
-        <div class="pp-muted" style="margin-top:6px" title="与「知识库抓取」的分工：知识库清单是候选素材（模型挑着用、挑中的进冷却、礼物这类「选着用」的走那边）；自选世界书是照着写的材料（原文整条随行、每次都在、无冷却）。三档位（停用/关键词/常驻）与对话书单管的是自动检索那条路，与本面板无关">勾上＝整条原文随分析进材料（照着写）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与「检索命中」自动去重（这边优先，同一条不会进材料两次）。勾选随对话记忆保存（本对话下次规划回来还在），无冷却</div>`;
+        <div class="pp-muted" style="margin-top:6px" title="与「知识库抓取」的分工：知识库清单是候选素材（模型挑着用、挑中的进冷却，礼物这类「选着用」的走那边）；自选世界书是照着写的材料（原文整条随行、每次都在、无冷却）。「常驻」按钮与监听页的「常驻」状态同名同意（这条要一直带）——这边管一次性生成的勾选，那边管监听每轮自动带">勾上＝整条原文随材料进一次性生成（照着写）。「常驻」＝一直在材料里、不被一键刷新冲掉；条目行只显示名字，原文悬浮可看全文；不看停用/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾。勾选随对话记忆保存（本对话下次规划回来还在），无冷却</div>`;
 
         // 搜索框就地重画后焦点与光标回位（每轮 render 重新接线，输入不掉链）
         const qEl = body.querySelector('#pp_lore_q');
@@ -2413,24 +2439,49 @@ function openLorePanel(onChange) {
             nq?.focus();
             nq?.setSelectionRange(nq.value.length, nq.value.length);
         });
-        const apply = keys => {
-            run.lorePicks = [...keys];
+        // 落勾选时守住不变量：常驻 ⊆ 勾选（取消勾选自动撤常驻；一键/整书清同样守）
+        const apply = (keys, pins) => {
+            const s = new Set(keys);
+            const p = new Set([...(pins ?? pinSet())].filter(k => s.has(k)));
+            run.lorePicks = [...s];
+            run.lorePinned = [...p];
             savePicks();
             persistWizard();
             render();
             onChange();
         };
+        // 按关键词一键选择（第四十三轮）：全部未隐藏楼层当文本、纯关键词模式扫描（不吃状态
+        // 不吃书单不设上限），命中的与常驻并成新勾选——刷新式，其余旧勾选清掉
+        body.querySelector('#pp_lore_onekey')?.addEventListener('click', () => {
+            const text = formatChatLog(collectRecentChat(0));   // 0 ＝ 全部楼层（collectRecentChat 自带「对 AI 隐藏」过滤）
+            const keys = new Set(pinSet());
+            for (const h of scanLorebooks(text, { pure: true })) keys.add(`${h.bookId}:${h.uid}`);
+            const pins = pinSet();
+            apply(keys, pins);
+            toastr.success(`已按当前聊天的关键词重勾：常驻 ${pins.size} 条不动，现共勾 ${run.lorePicks.length} 条`);
+        });
         body.querySelectorAll('[data-lore]').forEach(cb => cb.addEventListener('change', () => {
             const s = selSet();
             if (cb.checked) s.add(cb.dataset.lore); else s.delete(cb.dataset.lore);
             apply(s);
+        }));
+        body.querySelectorAll('[data-lpin]').forEach(btn => btn.addEventListener('click', () => {
+            const s = selSet();
+            const p = pinSet();
+            if (p.has(btn.dataset.lpin)) {
+                p.delete(btn.dataset.lpin);   // 撤常驻：勾选保留
+            } else {
+                p.add(btn.dataset.lpin);
+                s.add(btn.dataset.lpin);   // 设常驻即同时勾上（不变量）
+            }
+            apply(s, p);
         }));
         body.querySelectorAll('[data-lbook]').forEach(cb => cb.addEventListener('change', () => {
             const s = selSet();
             const book = (settings.lorebooks ?? []).find(b => b.id === cb.dataset.lbook);
             for (const e of book?.entries ?? []) {
                 const key = `${book.id}:${e.uid}`;
-                if (cb.checked) s.add(key); else s.delete(key);
+                if (cb.checked) s.add(key); else s.delete(key);   // 整书清空时该书条目的常驻标记随 apply 的不变量一并撤掉
             }
             apply(s);
         }));
@@ -2629,7 +2680,7 @@ function renderResult(container, main) {
 
     main.innerHTML = `
     <div class="pp-section">
-        <div class="pp-gd-stephead"><b>第 3 步 · 人工二检</b><span class="pp-muted">世界书命中 ${run.hits} 条</span>${runMeta?.state === 'done' && runMeta.kind === 'analysis' ? `<span class="pp-muted" title="本次分析用的模型、用时、思考字数与 token 实报（联网判断/检索与第二遍对齐的调用也计在内）">模型 ${escapeHtml(runMeta.model)} · 用时 ${runDurText()}${thinkMetaText(runMeta)} · ${usageText(runMeta.usage) || '无实报 token'}</span>` : ''}</div>
+        <div class="pp-gd-stephead"><b>第 3 步 · 人工二检</b>${runMeta?.state === 'done' && runMeta.kind === 'analysis' ? `<span class="pp-muted" title="本次分析用的模型、用时、思考字数与 token 实报（联网判断/检索与第二遍对齐的调用也计在内）">模型 ${escapeHtml(runMeta.model)} · 用时 ${runDurText()}${thinkMetaText(runMeta)} · ${usageText(runMeta.usage) || '无实报 token'}</span>` : ''}</div>
         ${checkRow('时间基准', !anchor
             ? '<span class="pp-muted">（旧草稿，无时间基准字段）</span>'
             : anchor.includes('未指明')
@@ -2758,7 +2809,7 @@ function renderResult(container, main) {
         // 第 1 步勾选存在对话记忆里，下一轮进第 1 步自动恢复，这里照常清工作副本。
         // 单元池不随采用清空（DESIGN §2.5）：清理由各工具面板的一键清理键手动执行
         Object.assign(run, {
-            note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbModes: {}, kbKick: [], kbSentIds: [], kbListIds: null, lorePicks: [], result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
+            note: '', gpIds: null, kbIds: [], kbSel: [], kbMode: 'all', kbModes: {}, kbKick: [], kbSentIds: [], kbListIds: null, lorePicks: [], lorePinned: [], result: null, raw: '', hits: 0, planText: '', reviseNote: '', hadActive: false,
             memModes: null, memTags: [], memRecent: 0, readyFrom: 'collect', research: null,
         });
         report = null;

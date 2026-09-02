@@ -4,8 +4,27 @@
 // 反向依赖本模块拿材料，而 planner.js → injection.js → reactions.js 已成链，再回指会成环）。
 // 「路人反应」小节因此不在这里，由 planner.js 在外层插入（见 planner.materialSections）。
 import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
-import { buildLoreContext, resolveLorePicks } from "./lorebook.js";
+import { resolveLorePicks } from "./lorebook.js";
 import { buildMemoryContext, memoryState } from "./memoryTable.js";
+import { loadChatData } from "./chatdata.js";
+
+// 向导第 1 步「世界书自选」的当前勾选（第四十三轮起＝手动勾选 ∪ 常驻按钮，随对话存
+// chatdata 的 picks 块 { lorePicks, lorePinned }）：一次性生成（随机事件/路人反应/AI 玩法创作）
+// 不经向导界面发起，从这里拿同一批勾选——五处生成的世界书材料同源。旧聊天块的 lorePicks
+// 已按「不迁移、直接作废」清零（loreV 标记），lorePinned 是新键
+export function currentLorePicks() {
+    const p = loadChatData('picks', null);
+    if (!p || p.loreV !== 2) return [];
+    const out = [];
+    const seen = new Set();
+    for (const k of [...(Array.isArray(p.lorePinned) ? p.lorePinned : []), ...(Array.isArray(p.lorePicks) ? p.lorePicks : [])]) {
+        const s = String(k ?? '');
+        if (!s || seen.has(s)) continue;
+        seen.add(s);
+        out.push(s);
+    }
+    return out;
+}
 
 // 档位统计（记忆小节标题的口径文字用）：与 buildMemoryContext 同一集合——
 // 镜像表按 sheetModes 数档，没进映射的表算常驻
@@ -57,7 +76,9 @@ export function gameplaySection(items, header) {
 
 /**
  * 组装共用的材料小节（第十三轮排序：稳定在前、开头会变的垫底）：角色摘要 / 自选世界书 /
- * 游戏玩法 / 记忆表格 / 进行中剧情 / 历史剧情摘要 / 检索命中世界书 / 最近对话记录。
+ * 游戏玩法 / 记忆表格 / 进行中剧情 / 历史剧情摘要 / 最近对话记录。
+ * 第四十三轮起没有「检索命中的世界书条目」小节——自动检索从一次性生成里全部撤出，
+ * 世界书材料只带各调用方传进来的自选勾选（向导五处生成传 currentLorePicks()，长线传自己的）。
  * 各小节标题带用途说明；调用方用途不同时可用 headers 覆写对应小节的口径文字。
  * 记忆行行尾自带标签（buildMemoryContext），同标签同类事件的防复刻由规划系统提示词一句话约束，不做专门功能
  * @param {*}      [options.memoryTags]        记忆表格召回方式：null/[]=全量（带 memoryModes 时
@@ -72,23 +93,20 @@ export function gameplaySection(items, header) {
  * @param {Array}  [options.storageItems]      游戏玩法条目（{name, content}）
  * @param {string} [options.activePlan]        进行中剧情全文
  * @param {string[]} [options.historySummaries] 历史剧情摘要（查重用）
- * @param {string[]} [options.lorePicks]       世界书自选勾选键（「bookId:uid」，第七轮 §6.10）：
- *                                             勾中的条目整条原文随行成「自选世界书条目」小节，
- *                                             并从检索命中里让位（自选优先，同一条不进材料两次）；
- *                                             只有规划向导的分析调用传它，其他调用方一概不带
+ * @param {string[]} [options.lorePicks]       世界书自选勾选键（「bookId:uid」；向导侧＝手动勾选∪常驻按钮）：
+ *                                             勾中的条目整条原文随行成「自选世界书条目」小节
  * @param {object} [options.headers]           小节标题覆写：{ memoryPurpose, gameplay, activePlan }
- * @param {string[]} [options.enabledIds]      世界书书单覆盖（缺省 = 本对话启用的书单）
  */
-export function materialSections({ memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [], activePlan = '', historySummaries = [], lorePicks = [], headers = {}, enabledIds } = {}) {
+export function materialSections({ memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [], activePlan = '', historySummaries = [], lorePicks = [], headers = {} } = {}) {
     const picks = resolveLorePicks(lorePicks);
-    const { chatList, hits } = collectPlanningContext({ enabledIds, loreExclude: new Set(picks.map(p => p.key)) });
+    const { chatList } = collectPlanningContext();
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
     const memoryText = memoryTags === false ? '' : buildMemoryContext({ tagFilter: memoryTags, sheetUids: memorySheets, sheetModes: memoryModes, latestPerSheet: memoryRecent });
     const summaries = (historySummaries ?? []).filter(Boolean);
-    // 第十三轮排序：稳定小节在前、「开头会变」的小节（检索命中、最近对话）垫底——前缀缓存
+    // 第十三轮排序：稳定小节在前、「开头会变」的小节（最近对话）垫底——前缀缓存
     // 按请求开头逐字节匹配，第一个变化字节之后全部按未命中计价。对话记录是滑动窗口（取最近
-    // N 层，每轮聊天后窗口头就变）、检索命中按最近楼层重扫，这两节放最后，其余小节跨次调用
-    // 字节不变；记忆表格/历史摘要只追加（旧行不变），放前面同样吃缓存。排列顺序系统提示词里
+    // N 层，每轮聊天后窗口头就变），放最后，其余小节跨次调用字节不变；记忆表格/历史摘要
+    // 只追加（旧行不变），放前面同样吃缓存。排列顺序系统提示词里
     // 已声明不代表时间先后，重排无语义迁移
     const parts = [
         '## 角色设定摘要',
@@ -101,12 +119,10 @@ export function materialSections({ memoryTags = null, memorySheets = null, memor
         ...(memoryText ? [memorySectionHeader(memoryTags, headers.memoryPurpose, memoryRecent, memoryModes), memoryText] : []),
         ...(activePlan ? [headers.activePlan ?? '## 进行中剧情（正在执行的规划，检查进度与重复时对照它）', activePlan] : []),
         ...(summaries.length ? ['## 历史剧情摘要（只用于查重）', summaries.map((s, i) => `${i + 1}. ${s}`).join('\n')] : []),
-        '## 检索命中的世界书条目',
-        buildLoreContext(hits),
         '## 最近对话记录',
         formatChatLog(chatList),
     ];
     // picks（2026-09-02 动作指导书）：把自选条目的解析结果一并带回——规划侧据此判断材料里
-    // 有没有出自「动作指导书」的条目（检索命中自带 action 标记，自选走 book.kind）
-    return { parts, hits, picks };
+    // 有没有出自「动作指导书」的条目（自选走 book.kind），要不要加「动作参考」掺入段
+    return { parts, picks };
 }

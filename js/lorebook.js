@@ -1,6 +1,10 @@
 // M1 世界书：导入（酒馆原生 JSON / 纯文本单条）+ 关键词检索
-// 检索结果只喂给插件自己的规划调用，不影响主对话的提示词（开发方案 §M1）
-// 条目支持「常驻」（对齐酒馆原生 constant）：勾了常驻不看关键词、每次检索恒带出
+// 检索结果只喂给插件自己的调用，不影响主对话的提示词（开发方案 §M1）
+// 第四十三轮（世界书选择机制重构）：库归设置页「世界书库」、只管内容（导入/改名/删/条目正文
+// 与关键词数据/回收站/书类型）；「停用/关键词/常驻」三档状态与书的启用搬到监听页按聊天各存
+// 一份（scanLorebooks 的 statusMap 模式），条目上的 disabled/constant 旧全局标记不再被任何
+// 扫描读到（数据留在库里无害）；向导侧材料只带勾选条目（自选＋常驻按钮＋按关键词一键勾选），
+// 自动检索从一次性生成里全部撤出——监听是唯一还自动带世界书的地方
 import { settings, newId } from "./settings.js";
 
 // 数据结构：
@@ -8,10 +12,10 @@ import { settings, newId } from "./settings.js";
 // LoreEntry { uid, comment, keys[], content, disabled, constant }
 // （tags 字段在历史数据里可能还在，标签筛选功能已下线，不再参与任何检索）
 // kind = 书类型（2026-09-02 动作指导书路线）：缺省/'normal' 普通世界书 | 'action' 动作指导书——
-// 被动标签，条目收录规则完全不变（启用书单＋关键词/常驻照旧）；区别只在条目进剧情规划向导的
-// 材料时，规划提示词额外加「动作参考」段（动作写法照条目、关键动作与节点挂钩）。长线不接。
-// 命中规则：所在书被启用（或在本对话的启用书单里），条目已启用，且
-// （勾了常驻，或任一关键词出现在扫描文本里，大小写不敏感）
+// 被动标签，条目收录规则完全不变；区别只在条目进剧情规划向导的材料时，规划提示词额外加
+// 「动作参考」段（动作写法照条目、关键动作与节点挂钩）。长线不接。
+// enabled（书的全局标记）：第四十三轮起只是「没动过书单的聊天」的种子默认——书单界面在
+// 监听页按聊天存（chatdata 的 books 块），动过一次后以各聊天的书单为准
 
 export function setBookKind(id, kind) {
     const book = settings.lorebooks.find(b => b.id === id);
@@ -128,6 +132,9 @@ export function trashEntry(book, entry) {
 
 // 恢复一条：书按原 id 放回（id 撞车换新 id），条目放回原书（原书没了按书名找，
 // 还没有就恢复失败留在回收站，让用户先恢复那本书）。
+// 第四十三轮：恢复的书一律按「默认未启用」落回（用户拍板「回收站只是备份、简单处理」——
+// 启用归监听页按聊天存，恢复不主动接回任何书单）；已绑定书单的聊天里若恰好还存着这本书的
+// id，那个聊天会重新看到它启用——属既有数据、不去逐聊天清洗
 // 返回 { ok:true, bookId } = 成功（bookId 供界面展开那本书）；{ ok:false, error } = 失败原因
 export function restoreTrashItem(id) {
     const trash = settings.lorebookTrash ?? [];
@@ -136,6 +143,7 @@ export function restoreTrashItem(id) {
     const item = trash[idx];
     if (item.kind === 'book') {
         if (settings.lorebooks.some(b => b.id === item.book.id)) item.book.id = newId('lb-');
+        item.book.enabled = false;
         settings.lorebooks.push(item.book);
         trash.splice(idx, 1);
         return { ok: true, bookId: item.book.id };
@@ -174,29 +182,62 @@ export function parseKeys(text) {
 }
 
 /**
- * 检索：扫描 scanText，返回命中条目。
- * 命中规则：所在书被启用（enabledIds 传入时以该对话书单为准），条目启用、内容非空，
- * 且（勾了常驻，或任一关键词（子串，大小写不敏感）出现在扫描文本里）。
- * 常驻条目恒带出：排在最前、不占 maxEntries 名额（多条常驻不挤掉关键词命中），
- * 但仍与命中条目共用 maxChars 字符预算、优先消耗——常驻是每次都在的底料。
+ * 检索：扫描 scanText，返回命中条目。三种模式：
+ *
+ * ① 默认（库状态）：命中规则＝所在书被启用（enabledIds 传入时以该对话书单为准）、内容非空，
+ * 且（条目勾了常驻，或任一关键词（子串，大小写不敏感）出现在扫描文本里；停用条目不带）。
+ * 常驻条目恒带出：排在最前、不占 maxEntries 名额（多条常驻不挤掉关键词命中），但仍与命中
+ * 条目共用 maxChars 字符预算、优先消耗。第四十三轮起没有调用方走这条（旧全局状态已退役），
+ * 保留作兜底。excludeKeys＝自选让位集（自选优先，同一条不进材料两次）。
+ *
+ * ② statusMap（监听）：条目三档状态按聊天传进来（{ 'bookId:uid': 'off' | 'key' | 'always' }，
+ * 缺省＝'key'）——'off' 不带、'always' 恒带（结果里 constant 标记为 true，调用方据此把常驻档
+ * 拆进提示词稳定段）、'key' 按关键词命中。书的大门仍由 enabledIds（监听页书单）管。
+ *
+ * ③ pure（向导「按关键词一键选择」）：纯关键词匹配——全库所有书所有条目（不看启用书单、
+ * 不看任何状态）、不设条数与字符上限，命中的整条带出，供界面勾选。
+ *
  * maxEntries / maxChars 为 0 表示不限制（命中多少带多少 / 不截断）。
- * excludeKeys（第七轮世界书自选）：「bookId:uid」键集合——自选勾中的条目不再出现在
- * 检索结果里（同一条两边都有时只走自选小节，自选优先），防同一条目进材料两次。
  */
-export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds, excludeKeys } = {}) {
+export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds, excludeKeys, statusMap, pure } = {}) {
+    const haystack = String(scanText ?? '').toLowerCase();
+    if (pure) {
+        const out = [];
+        for (const book of settings.lorebooks) {
+            for (const entry of book.entries) {
+                if (!entry.content) continue;
+                const keys = Array.isArray(entry.keys) ? entry.keys : [];
+                if (keys.some(k => haystack.includes(String(k).toLowerCase()))) {
+                    out.push({ bookName: book.name, comment: entry.comment, content: entry.content, constant: false, bookId: book.id, uid: entry.uid, action: book.kind === 'action' });
+                }
+            }
+        }
+        return out;
+    }
     const opts = settings.retrieval;
     const maxE = maxEntries ?? opts.maxEntries;
     const maxC = maxChars ?? opts.maxChars;
-    const haystack = String(scanText ?? '').toLowerCase();
     const excluded = excludeKeys instanceof Set ? excludeKeys : null;
+    const statusOf = statusMap && typeof statusMap === 'object' && !Array.isArray(statusMap)
+        ? key => (statusMap[key] ?? 'key') : null;
     const constants = [];
     const keyed = [];
 
     for (const book of enabledBooks(enabledIds)) {
         for (const entry of book.entries) {
-            if (entry.disabled || !entry.content) continue;
-            if (excluded?.has(`${book.id}:${entry.uid}`)) continue;
-            if (entry.constant) {
+            if (!entry.content) continue;
+            const key = `${book.id}:${entry.uid}`;
+            if (excluded?.has(key)) continue;
+            let isConst;
+            if (statusOf) {
+                const st = statusOf(key);
+                if (st === 'off') continue;
+                isConst = st === 'always';
+            } else {
+                if (entry.disabled) continue;
+                isConst = Boolean(entry.constant);
+            }
+            if (isConst) {
                 constants.push({ book, entry });
                 continue;
             }
@@ -213,7 +254,7 @@ export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds, excl
 
     let used = 0;
     const included = [];
-    const push = ({ book, entry }) => {
+    const push = ({ book, entry }, isConst) => {
         let content = entry.content;
         if (maxC > 0) {
             const budget = maxC - used;
@@ -221,16 +262,18 @@ export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds, excl
             if (content.length > budget) content = `${content.slice(0, budget)}…`;
             used += content.length;
         }
-        // bookId/action（2026-09-02 动作指导书）：命中对象带上出处书与类型标记——拼装文本
-        // （buildLoreContext）不读它们，规划侧据此决定要不要加「动作参考」段
-        included.push({ bookName: book.name, comment: entry.comment, content, constant: Boolean(entry.constant), bookId: book.id, action: book.kind === 'action' });
+        // bookId/action（2026-09-02 动作指导书）＋constant：命中对象带上出处书、类型标记与
+        // 常驻旗——拼装文本（buildLoreContext）不读它们；规划侧据此决定要不要加「动作参考」段，
+        // 监听侧据此把常驻档拆进提示词稳定段。constant 用本次判定出的档位（statusMap 的
+        // 'always' 或库里的 constant），不直接读库标记——两种模式各自算好传进来
+        included.push({ bookName: book.name, comment: entry.comment, content, constant: isConst, bookId: book.id, action: book.kind === 'action' });
         return true;
     };
     for (const h of constants) {
-        if (!push(h)) break;
+        if (!push(h, true)) break;
     }
     for (const h of (maxE > 0 ? keyed.slice(0, maxE) : keyed)) {
-        if (!push(h)) break;
+        if (!push(h, false)) break;
     }
     return included;
 }

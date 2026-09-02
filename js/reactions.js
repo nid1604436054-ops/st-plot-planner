@@ -5,10 +5,11 @@
 // user 消息不计，到期自动撤下）。旧版按楼层分段的「扩散链」卡片还存在旧注入里，
 // composeReactionText 走兼容分支继续逐层换段——3~4 层根本扩散不开，新卡不再产扩散链。
 // 材料与剧情规划第 1 步共用同一批（调用方传入 materials/activePlan，即向导的记忆表格档位/
-// 标签/玩法勾选与进行中剧情）——旧版反应区自己那套「材料勾选」（chatdata 的 reaction 块）已退役。
-// 长线剧情里角色的身世、名声在世界书与记忆里，不带就没法校准路人认知。预设已全局化，由 chatCompletion 出口自动附带
+// 标签/玩法勾选/世界书勾选〔第四十三轮起含常驻、不再自动检索〕与进行中剧情）——旧版反应区自己那套
+// 「材料勾选」（chatdata 的 reaction 块）已退役。长线剧情里角色的身世、名声在世界书与记忆里，不带就没法
+// 校准路人认知。预设已全局化，由 chatCompletion 出口自动附带
 import { chatCompletion, parseModelJson } from "./api.js";
-import { materialSections } from "./materials.js";
+import { materialSections, currentLorePicks } from "./materials.js";
 
 const DEFAULT_BOUNDARY = '不得导致感情实质破裂、主要角色受异性实质侵犯、user 无法逆转的损失；危机可以重，出口必须存在。';
 
@@ -50,6 +51,9 @@ export async function generateReactionCard({ note = '', materials = {}, activePl
         memoryRecent: materials.memoryRecent ?? 0,
         storageItems: materials.storageItems ?? [],
         activePlan: String(activePlan ?? '').trim(),
+        // 第四十三轮：世界书只带向导第 1 步的勾选（含常驻），自动检索撤出——向导传 materials.lorePicks，
+        // 其他入口兜底读当前聊天的同一批（currentLorePicks）
+        lorePicks: Array.isArray(materials.lorePicks) ? materials.lorePicks : currentLorePicks(),
         headers: {
             memoryPurpose: '既往剧情事件记录，是路人与世界已有认知的背景',
             gameplay: '## 游戏玩法（当前生效的玩法规则，路人与世界的反应须遵守其约束）',

@@ -175,7 +175,7 @@ function outfitCfgHtml(list) {
 // 绑定的世界书条目勾选（照监听页世界书自选的行样式，内联不另开窗）：按书折叠勾条目
 function outfitWbPickHtml(list) {
     const books = settings.lorebooks ?? [];
-    if (!books.length) return '<div class="pp-muted">还没有世界书——在「世界书」页签导入后再来勾</div>';
+    if (!books.length) return '<div class="pp-muted">还没有世界书——在设置页「世界书库」区导入后再来勾</div>';
     const sel = new Set(list.bind?.picks ?? []);
     return books.map(book => {
         const onN = book.entries.filter(e => sel.has(`${book.id}:${e.uid}`)).length;

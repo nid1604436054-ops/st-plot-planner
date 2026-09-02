@@ -6,7 +6,7 @@
 import { chatCompletion, parseModelJson } from "./api.js";
 import { collectRecentChat, formatChatLog, currentFloor } from "./context.js";
 import { settings, save, newId } from "./settings.js";
-import { materialSections } from "./materials.js";
+import { materialSections, currentLorePicks } from "./materials.js";
 import { storyState, activeStory } from "./story.js";
 
 const EVENT_SYSTEM_PROMPT = '你是文字角色扮演的随机遭遇生成器。基于当前情境与给定的事件方向，'
@@ -131,7 +131,7 @@ export function recentEventTitles(limit = 8) {
 }
 
 // 三类生成调用共享的上下文小节。材料与向导第 1 步完全同一批（materialSections）：
-// 角色摘要 / 对话 / 世界书命中 / 记忆表格 / 游戏玩法 / 进行中剧情 / 历史摘要，
+// 角色摘要 / 对话 / 世界书自选（向导勾选，第四十三轮起不再自动检索）/ 记忆表格 / 游戏玩法 / 进行中剧情 / 历史摘要，
 // 再追加事件专属小节（最近事件防重复 + 底线）。materials 由向导传入（记忆表范围/标签、
 // 玩法勾选用第 1 步的本次选择）；预设已全局化，由 chatCompletion 出口自动附带。
 // 单元制口径：已生效注入不自动进工具生成（防双算）——想让路人反应的单元影响本次事件，
@@ -148,6 +148,9 @@ function contextSections(materials = {}) {
         storageItems: materials.storageItems ?? [],
         activePlan: activeStory()?.planText ?? '',
         historySummaries: s.history.filter(h => h.id !== s.activeId).map(h => h.summary),
+        // 第四十三轮：世界书只带向导第 1 步的勾选（含常驻），自动检索撤出——向导传 materials.lorePicks，
+        // 其他入口兜底读当前聊天的同一批（currentLorePicks）
+        lorePicks: Array.isArray(materials.lorePicks) ? materials.lorePicks : currentLorePicks(),
     });
     const imported = (materials.importedUnits ?? [])
         .map(u => String(u?.text ?? '').trim()).filter(Boolean);

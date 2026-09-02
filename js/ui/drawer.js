@@ -1,11 +1,12 @@
-// 主面板：顶部下拉抽屉 + 功能页签（世界书/知识库/记忆表格/剧情指导（含随机事件与游戏玩法）/监听/长线规划 + 设置）
+// 主面板：顶部下拉抽屉 + 功能页签（知识库/记忆表格/剧情指导（含随机事件与游戏玩法）/监听/长线规划 + 设置）
 // 高度只在「打开抽屉 / 切换页签」时按内容适配一次，封顶在聊天输入框上沿；
 // 页签内的勾选、输入、展开收起不再改变面板高度，内容超出在面板内部滚动。
 // 右下角手柄可手动拉——条目很多时可拉下去盖住输入框一次看更多；
 // 用户手动拉过后（本次打开期间）不再自动适配，关掉重开恢复自适应。
 // 点到酒馆顶栏/魔法棒菜单的原生按钮时自动收起本抽屉。
 // 页签间跳转用全局事件 pp-switch-tab，避免页签模块反向依赖本文件
-import { worldbookTab } from "./tabs/tab-worldbook.js";
+// 第四十三轮：「世界书」页签撤除——内容库搬进设置页「世界书库」区（tab-settings.js），
+// 启用/三档状态/检索测试搬监听页；本文件不再引 tab-worldbook
 import { knowledgeTab } from "./tabs/tab-knowledge.js";
 import { memoryTab } from "./tabs/tab-memory.js";
 import { guidanceTab } from "./tabs/tab-guidance.js";
@@ -15,7 +16,7 @@ import { settingsTab } from "./tabs/tab-settings.js";
 import { flushChatData } from "../chatdata.js";
 import { settings, save } from "../settings.js";
 
-const TABS = [worldbookTab, knowledgeTab, memoryTab, guidanceTab, listenerTab, longformTab, settingsTab];
+const TABS = [knowledgeTab, memoryTab, guidanceTab, listenerTab, longformTab, settingsTab];
 let activeId = TABS[0].id;
 
 // 上次自动适配写入的高度；当前内联高度与它不一致 = 用户拖过，停止自动适配

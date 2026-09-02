@@ -9,13 +9,14 @@ import { activeStory } from "../../story.js";
 import { chatDataKey, resetChatDataCache } from "../../chatdata.js";
 import { listenerCfg, setListenerEnabled } from "../../listener.js";
 import { escapeHtml, clamp, readFileAsText } from "../../utils.js";
+import { renderWorldbookLibrary } from "./tab-worldbook.js";
 
 // 拉取过的模型列表缓存：页签每次激活都会重渲染，缓存避免切换后下拉列表丢失
 let modelIds = [];
 // true = 手动填模型名（拉取的列表里没有时用），false = 下拉选择
 let manualModel = false;
 // 大区块折叠状态（页签会话内保留）：大模型连接默认展开，其余默认收起
-const secFolds = { conn: true, search: false, listener: false, kb: false, advanced: false, backup: false };
+const secFolds = { conn: true, search: false, listener: false, wb: false, kb: false, advanced: false, backup: false };
 
 // 重建模型下拉框；当前已保存的模型若不在列表里，作为「当前自定义」置顶保留
 function rebuildModelSelect(container) {
@@ -155,6 +156,12 @@ export const settingsTab = {
             </details>
         </div>
         <div class="pp-section">
+            <details class="pp-fold" data-secfold="wb" ${secFolds.wb ? 'open' : ''}>
+                <summary title="世界书的内容库（第四十三轮从主面板页签搬来）：导入（酒馆原生 JSON／纯文本）、书改名/删除、条目编辑（标题/关键词数据/内容）、书的类型（普通/动作指导书）、回收站。书的启用与条目三档状态（停用/关键词/常驻）在监听页「世界书条目」窗里按聊天编辑；检索测试也在监听页"><i class="fa-solid fa-book-bookmark"></i> 世界书库</summary>
+                <div id="pp_set_wb_body"></div>
+            </details>
+        </div>
+        <div class="pp-section">
             <details class="pp-fold" data-secfold="kb" ${secFolds.kb ? 'open' : ''}>
                 <summary title="知识库（自建素材清单，§6.9）的抓取与冷却参数；清单与条目在「知识库」页签管理"><i class="fa-solid fa-lightbulb"></i> 知识库</summary>
                 <div class="pp-grid2">
@@ -187,19 +194,20 @@ export const settingsTab = {
                 </div>
             </div>
             <hr class="pp-hr" />
-            <div class="pp-label pp-group-title">世界书检索</div>
-            <label class="pp-label" title="在世界书里找条目时，拿最近几层对话文本去匹配关键词；范围越大越不容易漏，但越费 token；0 = 不限（扫全部对话）">用最近几层对话找关键词（0 = 不限）</label>
-            <input id="pp_set_scan" class="text_pole textarea_compact" type="number" min="0" max="100" />
+            <div class="pp-label pp-group-title" title="第四十三轮重构后这两个上限只管监听的世界书检索（例行判定按关键词档重扫时，最多带几条、总字数封顶多少）；剧情规划侧已无自动检索">世界书检索（监听）</div>
             <div class="pp-grid2">
                 <div>
-                    <label class="pp-label" title="单次检索最多带出的世界书条目数；0 = 不限（命中多少带多少）">最多带出条目（0 = 不限）</label>
+                    <label class="pp-label" title="监听每轮按关键词重扫世界书时，单次最多带出的条目数；0 = 不限（命中多少带多少）。「常驻」档条目不占这个名额">最多带出条目（0 = 不限）</label>
                     <input id="pp_set_maxent" class="text_pole textarea_compact" type="number" min="0" max="50" />
                 </div>
                 <div>
-                    <label class="pp-label" title="命中的条目内容拼在一起的总字数上限，防止撑爆请求；0 = 不截断">结果字数上限（0 = 不限）</label>
+                    <label class="pp-label" title="监听命中的条目内容拼在一起的总字数上限，防止撑爆每轮请求；0 = 不截断">结果字数上限（0 = 不限）</label>
                     <input id="pp_set_maxch" class="text_pole textarea_compact" type="number" min="0" step="500" />
                 </div>
             </div>
+            <hr class="pp-hr" />
+            <label class="pp-label" title="随机事件的掷骰管线决定「事件库里哪些条目这轮够格出场」时，拿最近几层对话文本匹配事件条目的触发关键词；范围越大越不容易漏，但越容易翻出老事件；0 = 不限（扫全部对话）。第四十三轮世界书检索不再用它（世界书侧：向导一键看全部楼层、监听有自己的「关键词扫描层数」）">事件关键词扫描层数（0 = 不限）</label>
+            <input id="pp_set_scan" class="text_pole textarea_compact" type="number" min="0" max="100" />
             <hr class="pp-hr" />
             <label class="pp-label" title="记忆表格召回结果拼进提示词的字符上限；0 = 不限。全量召回表格很大时注意 token 消耗">记忆表格召回字数上限（0 = 不限）</label>
             <input id="pp_set_memch" class="text_pole textarea_compact" type="number" min="0" step="500" />
@@ -456,6 +464,9 @@ export const settingsTab = {
         });
 
         renderPreset(container);
+        // 世界书库区（第四十三轮整页搬来设置页）：内容渲染独立成函数（聊天切换时 resetWorldbook 直刷）
+        const wbBody = container.querySelector('#pp_set_wb_body');
+        if (wbBody) renderWorldbookLibrary(wbBody);
         renderBackup(container);
         // 折叠状态记忆（toggle 事件不冒泡，逐个绑定；备份区在 renderBackup 里渲染，放它后面）
         container.querySelectorAll('details[data-secfold]').forEach(el =>

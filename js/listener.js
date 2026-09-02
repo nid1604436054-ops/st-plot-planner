@@ -10,7 +10,7 @@ import { eventSource, event_types, setExtensionPrompt, extension_prompt_types, e
 import { settings, save, newId } from "./settings.js";
 import { chatCompletion, parseModelJson } from "./api.js";
 import { loadChatData, saveChatData, flushChatData } from "./chatdata.js";
-import { getTavernContext } from "./context.js";
+import { getTavernContext, chatEnabledBookIds } from "./context.js";
 import { scanLorebooks, buildLoreContext, resolveLorePicks } from "./lorebook.js";
 import { buildMemoryContext, memoryState } from "./memoryTable.js";
 
@@ -101,14 +101,15 @@ export function listenerState() {
         lastGuidance: '',    // 上一轮指导全文（防复读输入线 + 面板显示）
         guideVoidReason: '', // 非空＝上一轮指导已作废（卸下/换挂/接回/关总开关/切聊天）——注入槽已清、面板改显示作废行；下一轮落账清零
         lastFloorSig: '',    // 最后一轮已分析过的楼层签名（去重：滑动/重生成内容没变不重跑）
-        lorePicks: [],       // 世界书自选勾选键（「bookId:uid」，第三十四轮）：勾中的整条原文固定进每轮判定材料，
-                             // 不设上限、不看关键词/常驻/启用状态；与检索命中自动去重（自选优先）。存监听自己的
-                             // 聊天块——与向导第 1 步 / 长线页的勾选各管各的（先例：长线勾选存 longform 块）。
-                             // 第三十七轮起它属于「日常监听」材料单；重挂对账单有自己的 picks（matReentry.picks）
+        loreStatus: {},      // 世界书条目三档状态（第四十三轮，按聊天存）：{ 'bookId:uid': 'off' 停用 |
+                             // 'key' 关键词 | 'always' 常驻 }，缺省＝'key'。书的启用也在本聊天（chatdata
+                             // 的 books 块）——两样都在监听页「世界书条目」窗里就地编辑。旧的 lorePicks
+                             // 自选勾选已按「不迁移、直接作废」退役（常驻档顶替它的职责）
         matRoutine: null,    // 日常监听材料单（第三十七轮）{ scan, floors, scanFloors, memModes, memTags, memRecent }——
                              // 每轮例行判定（单位轮＋轻量轮）用；null 由下面的迁移播种补。
                              // scanFloors（第三十八轮）＝「世界书检索」按关键词激活的回看窗口，与正文楼层数分开
-        matReentry: null,    // 重挂对账材料单（第三十七轮）同形状另加 picks——重挂那一刻的一次性回归判定用
+        matReentry: null,    // 重挂对账材料单（第三十七轮）——第四十三轮起只剩 { floors, memModes, memTags,
+                             // memRecent, picks }：世界书＝纯手选（重挂单不上三按钮机制），自动检索整块撤掉
         dot: false,          // 红点旗标（有问题未看；打开监听页签即清除）
         dotReason: '',       // 红点问题的一句话描述
         halt: null,          // 停进提示（2026-09-02 暂停收尾）：{ kind:'paused' 手动卸下长线章 |
@@ -119,7 +120,10 @@ export function listenerState() {
     state.sidelined = normalizeUnit(state.sidelined);
     if (!Array.isArray(state.trace)) state.trace = [];
     state.halt = normalizeHalt(state.halt);
-    if (!Array.isArray(state.lorePicks)) state.lorePicks = [];   // 旧聊天块没有该字段（第三十四轮新增）
+    if (!state.loreStatus || typeof state.loreStatus !== 'object' || Array.isArray(state.loreStatus)) state.loreStatus = {};
+    else for (const k of Object.keys(state.loreStatus)) {
+        if (!['off', 'key', 'always'].includes(state.loreStatus[k])) delete state.loreStatus[k];   // 三档之外的全剔（旧聊天块的 lorePicks 是数组、不是这里的账）
+    }
     // 双材料单（第三十七轮，用户拍板「两套页面、范围相同、各自手动选」）：按聊天存、互不影响。
     // 旧全局开关只在第一次见到这个聊天块时播种一次——第一个迁移的聊天带走旧值，全局键随即
     // 删除（E14 残键纪律）；此后聊天的聊天块一落地就带这两份材料单，不再看全局
@@ -139,23 +143,25 @@ export function listenerState() {
         delete raw.withLorebook; delete raw.withMemory; delete raw.floorLimit;
         try { save(); } catch { /* 设置存不进不阻断判定 */ }
     }
-    if (!state.matReentry) state.matReentry = { scan: true, floors: 0, scanFloors: 0, memModes: null, memTags: [], memRecent: 0, picks: [] };
+    if (!state.matReentry) state.matReentry = { floors: 0, memModes: null, memTags: [], memRecent: 0, picks: [] };
     normalizeMatCfg(state.matRoutine, { scan: true, floors: 0, scanFloors: 0, memModes: null });
-    normalizeMatCfg(state.matReentry, { scan: true, floors: 0, scanFloors: 0, memModes: null });
+    normalizeMatCfg(state.matReentry, { floors: 0, memModes: null });
+    delete state.matReentry.scan; delete state.matReentry.scanFloors;   // 第四十三轮：重挂单的检索开关与扫描窗口退役（残键纪律，旧数据作废）
     return state;
 }
 
-// 材料单形状收敛（第三十七轮）：就地修补不换对象——面板与引擎共用同一引用，就地改＋persist 才不丢
+// 材料单形状收敛（第三十七轮）：就地修补不换对象——面板与引擎共用同一引用，就地改＋persist 才不丢。
+// routine 版带 scan/scanFloors（世界书检索开关与关键词激活窗口），reentry 版不带（检索已撤）
 const MEM_MODES = new Set(['off', 'tags', 'always']);
 function normalizeMatCfg(r, seed) {
-    if (typeof r.scan !== 'boolean') r.scan = seed.scan;
+    if ('scan' in r) r.scan = typeof r.scan === 'boolean' ? r.scan : (seed.scan ?? true);
+    if ('scanFloors' in r || seed.scanFloors !== undefined) r.scanFloors = Number.isFinite(Number(r.scanFloors)) && Number(r.scanFloors) > 0 ? Math.floor(Number(r.scanFloors)) : 0;   // 第三十八轮：关键词激活的回看窗口（0＝全聊天）
     r.floors = Number.isFinite(Number(r.floors)) && Number(r.floors) > 0 ? Math.floor(Number(r.floors)) : 0;
-    r.scanFloors = Number.isFinite(Number(r.scanFloors)) && Number(r.scanFloors) > 0 ? Math.floor(Number(r.scanFloors)) : 0;   // 第三十八轮：关键词激活的回看窗口（0＝全聊天）
     if (!r.memModes || typeof r.memModes !== 'object' || Array.isArray(r.memModes)) r.memModes = seed.memModes;
     else for (const k of Object.keys(r.memModes)) if (!MEM_MODES.has(r.memModes[k])) delete r.memModes[k];
     if (!Array.isArray(r.memTags)) r.memTags = [];
     r.memRecent = Number.isFinite(Number(r.memRecent)) && Number(r.memRecent) > 0 ? Math.floor(Number(r.memRecent)) : 0;
-    if ('picks' in r && !Array.isArray(r.picks)) r.picks = [];   // 只有重挂单带 picks；日常单的自选在 state.lorePicks
+    if ('picks' in r && !Array.isArray(r.picks)) r.picks = [];   // 只有重挂单带 picks（世界书纯手选）
     return r;
 }
 
@@ -369,8 +375,9 @@ export function floorsSignature(chat) {
 // 的老分类两头都不成立：体量可以很大、变化只随记忆更新不随轮次；排在楼层后面会让它每轮跟着
 // 丢缓存、整块按全价重算）。若把楼层挪到指导/检索后面绝对垫底，同样整段楼层每轮重算——
 // 缓存吃满的最优解＝大块材料全部在前、其后只留真正的小块。
-// 世界书拆两半发（第三十四轮）：自选条目跟勾选走、整条不截断、进稳定段；检索命中按最近楼层
-// 重扫逐轮变，照旧垫底——同一条两边都有时自选优先，检索里让位
+// 世界书拆两半发（第三十四轮立、第四十三轮改口径）：**常驻档**（监听页三按钮设为「常驻」的
+// 条目）整条不截断、进稳定段；**关键词档**按最近楼层重扫逐轮变，照旧垫底——两档来自同一次
+// statusMap 扫描、天然不重复（常驻档在扫描结果里 constant 标记为 true）
 export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsNote, memoryText = '', loreHits = '', lastGuidance }) {
     const strict = STRICTNESS_LEVELS[cfg.strictness] ?? STRICTNESS_LEVELS.standard;
     const inter = INTERVENE_UNIT[cfg.intervene] ?? INTERVENE_UNIT.medium;
@@ -390,9 +397,9 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             String(unit.text ?? ''),
             '</当前剧情单位全文>',
             '',
-            '<世界书自选条目（用户点名常驻材料；整条原文、不截断）>',
-            picksText || '（未勾选——角色设定等对照材料以本块勾选为准，没有就按单位全文与楼层判定）',
-            '</世界书自选条目>',
+            '<世界书常驻条目（用户在监听页设为「常驻」的条目；整条原文、不截断）>',
+            picksText || '（未设常驻——角色设定等对照材料以监听页「世界书条目」窗里设为常驻的为准，没有就按单位全文与楼层判定）',
+            '</世界书常驻条目>',
             '',
             '<记忆表格（既有事件记录；判定推进与重复时参考）>',
             memoryText || '（无）',
@@ -448,7 +455,7 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             last,
             '</上一轮指导>',
             '',
-            '<世界书检索命中（按最近楼层重扫，逐轮可能变化；与上方自选条目自动去重）>',
+            '<世界书检索命中（「关键词」档条目按最近楼层重扫，逐轮可能变化；「常驻」档条目在上方材料块、不在这里）>',
             loreHits || '（无）',
             '</世界书检索命中>',
         ].join('\n') },
@@ -489,9 +496,9 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
             '说明：字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
             '',
             '【材料】',
-            '<世界书自选条目（用户点名常驻材料；整条原文、不截断）>',
-            picksText || '（未勾选——没有点名材料就按楼层原文直接检查）',
-            '</世界书自选条目>',
+            '<世界书常驻条目（用户在监听页设为「常驻」的条目；整条原文、不截断）>',
+            picksText || '（未设常驻——没有点名材料就按楼层原文直接检查）',
+            '</世界书常驻条目>',
             '',
             '<记忆表格（既有事件记录；检查剧情重复时参考）>',
             memoryText || '（无）',
@@ -505,7 +512,7 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
             last,
             '</上一轮修正指导>',
             '',
-            '<世界书检索命中（按最近楼层重扫，逐轮可能变化；与上方自选条目自动去重）>',
+            '<世界书检索命中（「关键词」档条目按最近楼层重扫，逐轮可能变化；「常驻」档条目在上方材料块、不在这里）>',
             loreHits || '（无）',
             '</世界书检索命中>',
         ].join('\n') },
@@ -516,10 +523,11 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
 // 纯逻辑：回归判定（第三十三轮）——重挂有进度的长线章时补一次对账报告
 // ---------------------------------------------------------------------------
 
-// 材料与例行判定同一套（全/限楼层＋世界书自选＋检索命中＋记忆表），窗口＝五章规划轨迹。
+// 材料与例行判定同一套基底（全/限楼层＋世界书手选＋记忆表），窗口＝五章规划轨迹。
+// 第四十三轮：重挂单撤自动检索（用户拍板「手动够用」）——世界书只带重挂单手选的条目。
 // 只出报告不出指导：后两章的规划在窗口里，任何「指导」都可能把后续剧情漏进扮演模型——回归判定
 // 的产物给用户看，注入槽一概不碰（旧作废标记也留着，等下一轮例行判定重新生成指导）
-export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, picksText = '', floorsNote, memoryText = '', loreHits = '' }) {
+export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, picksText = '', floorsNote, memoryText = '' }) {
     const lit = unit.nodeIdx;
     return [
         { role: 'system', content: '你是剧情监听器，在一场正在进行的长篇角色扮演里执勤。这一次是「回归判定」：当前这章规划此前执行到一半被卸下、期间剧情继续演了；现在它重新挂载，你对照规划补一份判定报告，回答两件事——剧情走到哪了、偏没偏。你不与任何人对话，你的全部输出是一个 JSON 对象。' },
@@ -533,9 +541,9 @@ export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, 
             windowText,
             '</五章规划窗口>',
             '',
-            '<世界书自选条目（用户点名常驻材料；整条原文、不截断）>',
+            '<世界书条目（用户在重挂单手选随行的材料；整条原文、不截断）>',
             picksText || '（未勾选——没有点名材料就按窗口与楼层判定）',
-            '</世界书自选条目>',
+            '</世界书条目>',
             '',
             '<记忆表格（既有事件记录；判定走到哪与偏没偏时参考）>',
             memoryText || '（无）',
@@ -567,10 +575,6 @@ export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, 
             `<剧情上下文（${floorsNote ?? '当前聊天全部未隐藏楼层'}，带楼层号）>`,
             floorsText,
             '</剧情上下文>',
-            '',
-            '<世界书检索命中（按最近楼层重扫；与上方自选条目自动去重）>',
-            loreHits || '（无）',
-            '</世界书检索命中>',
         ].join('\n') },
     ];
 }
@@ -981,24 +985,34 @@ function modeOf(state) {
     return 'light';   // 无单位，或单位已演完等手动接续
 }
 
-// 世界书自选（第三十四轮用户拍板：角色资料都在世界书里、撤掉角色卡摘要这条独立材料线）：
-// 复用第七轮 §6.10 的 resolveLorePicks——勾选即点名，不看关键词/常驻/启用状态，整条原文不截断
-// （十人卡体量两万字级，任何上限都是卡边）。稳定材料排进提示词前部吃前缀缓存；返回 keys 给
-// 检索让位用（自选优先，同一条不进材料两次）。第三十七轮起两套材料单各喂各的勾选键：
-// 例行轮吃 state.lorePicks（日常监听单）、回归判定吃 state.matReentry.picks（重挂对账单）
+// 世界书手选（重挂单专用，第四十三轮收窄——例行轮的自选已被三按钮常驻档顶替）：复用第七轮
+// §6.10 的 resolveLorePicks——勾选即点名，不看关键词/常驻/启用状态，整条原文不截断
 function assembleLorePicks(picksArr) {
     const picks = resolveLorePicks(Array.isArray(picksArr) ? picksArr : []);
-    if (!picks.length) return { text: '', count: 0, chars: 0, keys: null };
-    const text = picks.map(p => `【${p.book.name} / ${p.entry.comment ?? `条目 ${p.entry.uid + 1}`}】\n${p.entry.content}`).join('\n\n');
-    return { text, count: picks.length, chars: text.length, keys: new Set(picks.map(p => p.key)) };
+    if (!picks.length) return { text: '', count: 0, chars: 0 };
+    const text = picks.map(p => `【${p.book.name} / ${p.entry.comment}】\n${p.entry.content}`).join('\n\n');
+    return { text, count: picks.length, chars: text.length };
 }
 
-// 世界书命中拆成 {text, count}：text 进提示词、count 进材料清单（第三十三轮材料透明化）；
-// excludeKeys＝自选条目键集，命中里让位防同一条进材料两次（第三十四轮）
-function assembleLore(floorsText, excludeKeys = null, scan = true) {
-    if (scan === false) return { text: '', count: null };   // 本页材料单关了检索（第三十七轮：开关随材料单按聊天存）
-    const hits = scanLorebooks(floorsText, excludeKeys ? { excludeKeys } : undefined);
-    return { text: buildLoreContext(hits), count: hits.length };
+// 例行轮的世界书材料（第四十三轮重构；「监听没接按聊天书单」那个 bug 的结构性修复就在这行
+// enabledIds——此前 scanLorebooks 没传书单、落回全局启用）：一次 statusMap 扫描拆两档——
+// **常驻档**（三按钮设为「常驻」）整条原文进稳定段；**关键词档**命中进每轮重扫的垫底块
+// （buildLoreContext 拼装）。书的大门＝本聊天的书单；条目状态按聊天存（state.loreStatus，
+// 缺省＝'key'）。「世界书检索」开关只管关键词档——关掉＝常驻照带、关键词命中整块不带
+// （常驻跟状态走不受开关管，同旧自选语义）
+function assembleLoreRoutine(state, scanText) {
+    const scan = state.matRoutine.scan !== false;
+    const hits = scanLorebooks(scanText, { enabledIds: chatEnabledBookIds(), statusMap: state.loreStatus });
+    const always = hits.filter(h => h.constant);
+    const keyed = scan ? hits.filter(h => !h.constant) : [];
+    const alwaysText = always.map(h => `【${h.bookName} / ${h.comment}】\n${h.content}`).join('\n\n');
+    return {
+        alwaysText,
+        alwaysCount: always.length,
+        alwaysChars: alwaysText.length,
+        hitsText: keyed.length ? buildLoreContext(keyed) : '',
+        hitsCount: keyed.length,
+    };
 }
 
 // 楼层范围（第三十四轮）：limit > 0 时只带最近 limit 层角色楼——其间夹的用户消息一并保留
@@ -1076,11 +1090,10 @@ export async function runListenerRound({ manual = false } = {}) {
         let messages;
         const floorsText = formatFloors(floors);
         const floorsNote = state.matRoutine.floors > 0 ? `最近 ${state.matRoutine.floors} 层角色楼（楼层号为全聊天绝对号）` : undefined;
-        const picks = assembleLorePicks(state.lorePicks);
         // 关键词激活窗口（第三十八轮，用户拍板「单独一个楼层数、与正文的分开」）：扫描文本与正文窗口
         // 各裁各的——正文楼层数只管「剧情上下文」带几层，「世界书检索」往回看几层归 scanFloors（0＝全聊天）
         const scanText = formatFloors(limitFloors(allFloors, Number(state.matRoutine.scanFloors) || 0));
-        const lore = assembleLore(scanText, picks.keys, state.matRoutine.scan);
+        const lore = assembleLoreRoutine(state, scanText);   // 常驻档进稳定段、关键词档命中进垫底块（第四十三轮）
         const memoryText = assembleMemory(state.matRoutine);
         if (mode === 'unit') {
             messages = buildUnitPrompt({
@@ -1088,9 +1101,9 @@ export async function runListenerRound({ manual = false } = {}) {
                 unit: state.unit,
                 floorsText,
                 floorsNote,
-                picksText: picks.text,
+                picksText: lore.alwaysText,
                 memoryText,
-                loreHits: lore.text,
+                loreHits: lore.hitsText,
                 lastGuidance: state.lastGuidance,
             });
         } else {
@@ -1098,9 +1111,9 @@ export async function runListenerRound({ manual = false } = {}) {
                 cfg,
                 floorsText,
                 floorsNote,
-                picksText: picks.text,
+                picksText: lore.alwaysText,
                 memoryText,
-                loreHits: lore.text,
+                loreHits: lore.hitsText,
                 lastGuidance: state.lastGuidance,
             });
         }
@@ -1111,11 +1124,11 @@ export async function runListenerRound({ manual = false } = {}) {
             ...(state.unit
                 ? { unitChars: String(state.unit.text ?? '').length, nodeIdx: state.unit.nodeIdx, nodesTotal: state.unit.nodes.length }
                 : { light: true }),
-            lorePicks: picks.count,
-            picksChars: picks.chars,
+            loreAlways: lore.alwaysCount,
+            loreAlwaysChars: lore.alwaysChars,
             floors: nums.length ? { first: nums[0], last: nums[nums.length - 1], count: nums.length } : null,
             floorsLimited: state.matRoutine.floors > 0,
-            loreHits: lore.count,
+            loreHits: state.matRoutine.scan === false ? null : lore.hitsCount,   // null＝检索关（面板显「关」），0＝开了但没命中
             memory: memoryText ? memoryText.length : 0,   // 字数（第三十七轮）：全停用＝0；旧留痕是布尔、面板兼容显示
         };
         const raw = await listenerAttempt(messages, provider, onUsage);
@@ -1222,9 +1235,7 @@ export async function runReentryRound({ window: win, unitId } = {}) {
         const floors = limitFloors(allFloors, Number(state.matReentry.floors) || 0);   // 重挂对账材料单（第三十七轮）：与日常单互不影响
         const floorsText = formatFloors(floors);
         const floorsNote = state.matReentry.floors > 0 ? `最近 ${state.matReentry.floors} 层角色楼（楼层号为全聊天绝对号）` : undefined;
-        const picks = assembleLorePicks(state.matReentry.picks);
-        const scanText = formatFloors(limitFloors(allFloors, Number(state.matReentry.scanFloors) || 0));   // 关键词激活窗口与正文楼层数分开（第三十八轮，同例行轮口径）
-        const lore = assembleLore(scanText, picks.keys, state.matReentry.scan);
+        const picks = assembleLorePicks(state.matReentry.picks);   // 重挂单：世界书纯手选（第四十三轮撤自动检索）
         const memoryText = assembleMemory(state.matReentry);
         const messages = buildReentryPrompt({
             unit: state.unit,
@@ -1234,7 +1245,6 @@ export async function runReentryRound({ window: win, unitId } = {}) {
             floorsNote,
             picksText: picks.text,
             memoryText,
-            loreHits: lore.text,
         });
         lastPromptText = messages.map(m => `【${m.role}】\n${m.content}`).join('\n\n');
         const nums = floors.filter(f => f.floor != null).map(f => f.floor);
@@ -1247,7 +1257,6 @@ export async function runReentryRound({ window: win, unitId } = {}) {
             picksChars: picks.chars,
             floors: nums.length ? { first: nums[0], last: nums[nums.length - 1], count: nums.length } : null,
             floorsLimited: state.matReentry.floors > 0,
-            loreHits: lore.count,
             memory: memoryText ? memoryText.length : 0,
         };
         const raw = await listenerAttempt(messages, provider, onUsage);

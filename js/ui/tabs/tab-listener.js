@@ -3,7 +3,8 @@
 // 本页签挂着的时候就地刷新（不在 DOM 里的事件直接丢弃，下次激活重渲染）。
 import { settings, save } from "../../settings.js";
 import { escapeHtml, clamp } from "../../utils.js";
-import { resolveLorePicks } from "../../lorebook.js";
+import { resolveLorePicks, scanLorebooks, buildLoreContext } from "../../lorebook.js";
+import { chatEnabledBookIds, chatBookEnabled, setChatBookEnabled, collectRecentChat, formatChatLog } from "../../context.js";
 import { memoryState } from "../../memoryTable.js";   // 判定材料区的记忆挑选器（第三十七轮）：读镜像表与标签
 // 监听槽一动就对一次长线账本（listener.js 不能反向引 longform.js——longform 已经引了监听，只能在界面层搭桥）
 import { syncLfProgress, scheduleReentryFor } from "../../longform.js";
@@ -11,8 +12,9 @@ import {
     listenerState, listenerCfg, listenerProvider, listenerModeLabel, persistListener,
     runListenerRound, resumeListener, setListenerEnabled, manualLitCurrentNode,
     opUnmountUnit, opRecallSidelined, opDiscardSidelined, lastListenerPrompt,
-    clearListenerHalt, haltHintText,
+    clearListenerHalt, haltHintText, limitFloors, formatFloors,
 } from "../../listener.js";
+import { collectFloorsFromChat } from "../../listener.js";
 import { outfitState, outfitRemaining, setOutfitMode, setOutfitFloors, withdrawOutfit } from "../../outfit.js";
 
 let traceWinOpen = false;   // 留痕悬浮窗开着（跨页签会话记忆）
@@ -25,17 +27,27 @@ const TRACE_SRC_LABEL = { plan: '普通剧情规划', longform: '长线剧情', 
 // 回归判定的偏离三档（第三十三轮）：措辞给用户看，不照搬模型内部词
 const DEV_LABEL = { on_track: '没偏——剧情仍在规划轨迹上', minor: '偏了，但能自然拉回', major: '⚠ 偏大了——继续演会损坏后续章节的安排' };
 
-// 材料清单一行（第三十三轮透明化、第三十四轮改世界书自选）：留痕里的 materials 小账拼成大白话
+// 材料清单一行（第三十三轮透明化；第四十三轮改口径）：留痕里的 materials 小账拼成大白话。
+// 例行轮的 世界书常驻 X 条（loreAlways）＝监听页三按钮「常驻」档；重挂单的 世界书自选 X 条
+// （lorePicks）＝重挂单手选——两代留痕字段并存，按有啥显啥（旧留痕的 lorePicks 照显不误）
 function materialsLine(m) {
     if (!m) return '';
     const parts = [];
     if (m.window) parts.push(`五章窗口 ${m.window}（${Number(m.windowChars || 0).toLocaleString()} 字）`);
     else parts.push(m.light ? '轻量检查（无单位）' : `单位全文 ${Number(m.unitChars || 0).toLocaleString()} 字`);
     if (!m.light) parts.push(`节点 ${m.nodeIdx ?? 0}/${m.nodesTotal ?? 0}`);
-    parts.push(Number(m.lorePicks) > 0 ? `世界书自选 ${m.lorePicks} 条（${Number(m.picksChars || 0).toLocaleString()} 字）` : '世界书自选 未勾');
+    if (m.loreAlways != null) {
+        parts.push(Number(m.loreAlways) > 0
+            ? `世界书常驻 ${m.loreAlways} 条（${Number(m.loreAlwaysChars || 0).toLocaleString()} 字）`
+            : '世界书常驻 未设');
+    } else {
+        parts.push(Number(m.lorePicks) > 0 ? `世界书自选 ${m.lorePicks} 条（${Number(m.picksChars || 0).toLocaleString()} 字）` : '世界书自选 未勾');
+    }
     if (m.floors) parts.push(`楼层 ${m.floors.first}-${m.floors.last}（${m.floors.count} 层${m.floorsLimited ? ' · 限最近范围' : ''}）`);
     else parts.push('楼层 无');
-    parts.push(m.loreHits == null ? '世界书检索 关' : `世界书命中 ${m.loreHits} 条`);
+    // 检索行只对有这个账的留痕显示（例行轮有；重挂单第四十三轮撤检索、新留痕没有这个键，
+    // 旧留痕的照显；null＝检索关、数字＝开了的命中数）
+    if (m.loreHits !== undefined) parts.push(m.loreHits == null ? '世界书检索 关' : `世界书命中 ${m.loreHits} 条`);
     // 第三十七轮起 memory 记字数（全停用＝0）；旧留痕是布尔，兼容显示
     parts.push(typeof m.memory === 'number'
         ? (m.memory > 0 ? `记忆表 ${m.memory.toLocaleString()} 字` : '记忆表 不带')
@@ -489,7 +501,23 @@ function matStore(kind) {
 }
 
 function matPicksArr(kind) {
-    return kind === 'reentry' ? (listenerState().matReentry.picks ?? []) : listenerState().lorePicks;
+    return kind === 'reentry' ? (listenerState().matReentry.picks ?? []) : [];
+}
+
+// 日常单的世界书三档状态计数（按钮文案用）：只数本聊天启用书里的条目，状态缺省＝关键词
+function loreMgrCounts() {
+    const state = listenerState();
+    const ids = new Set((chatEnabledBookIds() ?? (settings.lorebooks ?? []).filter(b => b.enabled).map(b => String(b.id))).map(String));
+    const c = { off: 0, key: 0, always: 0 };
+    for (const book of settings.lorebooks ?? []) {
+        if (!ids.has(String(book.id))) continue;
+        for (const e of book.entries ?? []) {
+            if (!e.content) continue;
+            const st = state.loreStatus[`${book.id}:${e.uid}`] ?? 'key';
+            c[st] = (c[st] ?? 0) + 1;
+        }
+    }
+    return c;
 }
 
 function matModeOf(mat, uid) {
@@ -520,6 +548,15 @@ function matZoneHtml() {
     const zoneTip = kind === 'routine'
         ? '本页＝日常监听的材料单：挂单位的判定轮与无单位的轻量轮都用这一份，每轮判定都生效'
         : '本页＝重挂对账的材料单：重新挂上有进度的章、你开口对话前自动跑的那一次回归判定用这一份（只那一次；之后的日常轮回到上一页的材料单）';
+    const loreCnt = loreMgrCounts();
+    // 日常单的世界书＝书单＋三档状态（第四十三轮，激活机制的新家）；重挂单＝纯手选勾选（不上三按钮机制）
+    const loreKnob = kind === 'routine'
+        ? `<span id="pp_ls_lore" class="menu_button" title="世界书条目（激活机制的新家）：书的启用＋每条条目的三档状态（停用/关键词/常驻）都按聊天存、就在监听页就地编辑；窗口里还有「检索测试」。常驻＝每轮判定无条件整条带上；关键词＝条目关键词出现在对话里才带（往回看几层归旁边的「关键词扫描层数」管）；停用＝永不带；未启用的书整本不扫">世界书条目（常驻 ${loreCnt.always} · 关键词 ${loreCnt.key}${loreCnt.off ? ` · 停用 ${loreCnt.off}` : ''}）</span>`
+        : `<span id="pp_ls_lore" class="menu_button" title="勾选世界书条目整条原文固定进重挂对账那次判定的材料（不截断）——重挂单不上三按钮机制，纯手选">世界书自选（已勾 ${resolveLorePicks(matPicksArr('reentry')).length} 条）</span>`;
+    // 检索开关与关键词扫描层数只属日常单（重挂单的自动检索第四十三轮整块撤掉）
+    const scanKnobs = kind === 'routine' ? `
+        <label title="按对话里出现的关键词激活世界书「关键词」档条目、命中随每轮判定附带（书单与三档状态在「世界书条目」窗里配；往回看几层由「关键词扫描层数」管）。只管关键词档——「常驻」档条目不受这个开关管、恒带"><input type="checkbox" id="pp_ls_scan" ${mat.scan ? 'checked' : ''} /> 世界书检索</label>
+        <label title="「世界书检索」按关键词激活时往回看多少层角色楼找关键词（窗口内夹的用户消息也算「对话里出现」）：0 = 全聊天（默认——很久前提过的关键词也能激活）；N = 只看最近 N 层，窗外提过的不激活。只管激活范围，不改变判定正文带几层（那个归「楼层数」管）">关键词扫描层数 <input id="pp_ls_scan_floors" class="text_pole" type="number" min="0" step="5" value="${mat.scanFloors}" /></label>` : '';
     const sheetRows = sheets.map(s => `
     <div class="pp-gd-sheetrow">
         <span class="pp-gd-sheetname" title="${escapeHtml(s.name)} · ${s.rows.length} 行">${escapeHtml(s.name)} · ${s.rows.length} 行</span>
@@ -531,16 +568,15 @@ function matZoneHtml() {
     </div>`).join('');
     return `
     <b>判定材料</b>
-    <div class="pp-seg" id="pp_ls_mattab" title="两套材料单都按聊天存、勾选互不影响，选择范围相同（世界书自选 / 记忆表格 / 世界书检索 / 楼层数——正文与关键词扫描两枚，各管各的窗口）">
+    <div class="pp-seg" id="pp_ls_mattab" title="两套材料单都按聊天存、勾选互不影响（日常监听＝每轮例行判定；重挂对账＝重挂有进度的章那一刻的一次性回归判定；世界书两页不同形——日常单是书单＋三档状态，重挂单是纯手选勾选）">
         <span class="pp-seg-opt${kind === 'routine' ? ' on' : ''}" data-mpage="routine">日常监听</span>
         <span class="pp-seg-opt${kind === 'reentry' ? ' on' : ''}" data-mpage="reentry">重挂对账</span>
     </div>
     <span class="pp-muted">${zoneTip}</span>
     <div class="pp-ls-knobs">
-        <span id="pp_ls_lore" class="menu_button" title="勾选世界书条目固定进本页材料单：整条原文、不截断、不看关键词/常驻/启用状态；与本页「世界书检索」自动去重（这边优先）">世界书自选（已勾 ${resolveLorePicks(matPicksArr(kind)).length} 条）</span>
-        <label title="按对话里出现的关键词激活世界书、命中条目随本页判定附带（书与关键词都用「世界书」页里配好的；往回看几层由「关键词扫描层数」管）；与本页「世界书自选」自动去重（自选优先）"><input type="checkbox" id="pp_ls_scan" ${mat.scan ? 'checked' : ''} /> 世界书检索</label>
-        <label title="本页判定携带的楼层原文范围：0 = 全量（默认，判定引证最全）；N = 只带最近 N 层角色楼（其间夹的用户消息保留、楼层号仍是全聊天绝对号）——长对话省钱用，砍太狠可能伤判定准头，自己权衡。只管判定正文带几层；「世界书检索」按关键词往回看几层由「关键词扫描层数」单独管，两者互不影响">楼层数 <input id="pp_ls_floors" class="text_pole" type="number" min="0" step="5" value="${mat.floors}" /></label>
-        <label title="「世界书检索」按关键词激活时往回看多少层角色楼找关键词（窗口内夹的用户消息也算「对话里出现」）：0 = 全聊天（默认——很久前提过的关键词也能激活）；N = 只看最近 N 层，窗外提过的不激活。只管激活范围，不改变判定正文带几层（那个归「楼层数」管）">关键词扫描层数 <input id="pp_ls_scan_floors" class="text_pole" type="number" min="0" step="5" value="${mat.scanFloors}" /></label>
+        ${loreKnob}
+        ${scanKnobs}
+        <label title="本页判定携带的楼层原文范围：0 = 全量（默认，判定引证最全）；N = 只带最近 N 层角色楼（其间夹的用户消息保留、楼层号仍是全聊天绝对号）——长对话省钱用，砍太狠可能伤判定准头，自己权衡。只管判定正文带几层；日常页的「世界书检索」按关键词往回看几层由「关键词扫描层数」单独管，两者互不影响">楼层数 <input id="pp_ls_floors" class="text_pole" type="number" min="0" step="5" value="${mat.floors}" /></label>
     </div>
     ${sheets.length ? `
     <label class="pp-label" title="照向导第 1 步同款（一套机器，在全量版本上做减法）：每张表一个档位、标签过滤、表尾最新行；选择随本页材料单按聊天存，两页互不影响">记忆表格召回</label>
@@ -582,7 +618,10 @@ function bindMatZone(container) {
         e.target.value = String(mat.scanFloors);
         persist();
     });
-    zone.querySelector('#pp_ls_lore')?.addEventListener('click', () => openLorePickWindow(matPage));
+    zone.querySelector('#pp_ls_lore')?.addEventListener('click', () => {
+        if (matPage === 'routine') openLoreMgrWindow();   // 日常单：书单＋三按钮＋检索测试（第四十三轮新家）
+        else openLorePickWindow('reentry');               // 重挂单：纯手选勾选照旧
+    });
 
     const chipsBox = zone.querySelector('#pp_ls_mem_chips');
     const applyTags = () => {
@@ -632,12 +671,14 @@ function bindMatZone(container) {
 }
 
 // ---------------------------------------------------------------------------
-// 世界书自选悬浮窗（第三十四轮；第三十七轮起按材料单分家）：勾选存监听自己的聊天块——
-// 日常单写 state.lorePicks、重挂单写 state.matReentry.picks，与向导第 1 步 / 长线页互不影响。
-// 交互照长线页同款：按书折叠、搜索、整书全勾/全清
+// 重挂单的「世界书自选」悬浮窗（第三十四轮起；第四十三轮收窄到重挂专用）：纯手选勾选——
+// 勾上＝整条原文固定进重挂对账那次判定的材料。存 state.matReentry.picks，与向导第 1 步 /
+// 长线页互不影响。交互照长线页同款：按书折叠、搜索、整书全勾/全清。
+// （第四十三轮顺带修掉一个存量暗 bug：旧窗不分页签一律读日常单的勾选集——重挂页里勾单条
+// 会把日常单的内容误写进重挂单；拆成专用窗后自然消失）
 // ---------------------------------------------------------------------------
 
-function openLorePickWindow(kind = 'routine') {
+function openLorePickWindow() {
     let query = '';
     const foldState = new Map();
     let win = document.getElementById('pp_ls_lorewin');
@@ -649,16 +690,16 @@ function openLorePickWindow(kind = 'routine') {
     const isFolded = (book, searching) => (foldState.has(book.id) ? foldState.get(book.id) : !searching);
     const syncBtn = () => {
         const btn = document.getElementById('pp_ls_lore');
-        if (btn) btn.textContent = `世界书自选（已勾 ${resolveLorePicks(matPicksArr(kind)).length} 条）`;
+        if (btn) btn.textContent = `世界书自选（已勾 ${resolveLorePicks(listenerState().matReentry.picks ?? []).length} 条）`;
     };
 
     const render = () => {
         const books = settings.lorebooks ?? [];
-        const sel = new Set(matPicksArr(kind));
+        const sel = new Set(listenerState().matReentry.picks ?? []);
         if (!books.length) {
             win.innerHTML = `
-            <div class="pp-ls-float-head"><b>世界书自选 · ${kind === 'reentry' ? '重挂对账' : '日常监听'}</b><span id="pp_ls_lore_close" class="menu_button fa-solid fa-xmark" title="关闭"></span></div>
-            <div class="pp-ls-float-body"><div class="pp-muted">还没有世界书——在「世界书」页签导入或新建后再来</div></div>`;
+            <div class="pp-ls-float-head"><b>世界书自选 · 重挂对账</b><span id="pp_ls_lore_close" class="menu_button fa-solid fa-xmark" title="关闭"></span></div>
+            <div class="pp-ls-float-body"><div class="pp-muted">还没有世界书——在设置页「世界书库」区导入或新建后再来</div></div>`;
             win.querySelector('#pp_ls_lore_close').addEventListener('click', () => win.remove());
             return;
         }
@@ -683,21 +724,21 @@ function openLorePickWindow(kind = 'routine') {
             const on = sel.has(key);
             return `
         <div class="pp-kb-erow${on ? '' : ' pp-kb-unsel'}">
-            <label title="勾上＝这条的原文整条固定进${kind === 'reentry' ? '重挂对账那次判定' : '每轮例行判定'}的材料（不截断）"><input type="checkbox" data-lore="${escapeHtml(key)}" ${on ? 'checked' : ''} /></label>
+            <label title="勾上＝这条的原文整条固定进重挂对账那次判定的材料（不截断）"><input type="checkbox" data-lore="${escapeHtml(key)}" ${on ? 'checked' : ''} /></label>
             <span class="pp-kb-ebody" title="${escapeHtml(String(e.content ?? ''))}">${escapeHtml(String(e.comment ?? `条目 ${e.uid + 1}`))}</span>
         </div>`; }).join('')}`;
         }).join('');
 
         win.innerHTML = `
         <div class="pp-ls-float-head">
-            <b>世界书自选 · ${kind === 'reentry' ? '重挂对账' : '日常监听'}</b>
-            <span class="pp-muted">勾上＝整条原文固定进${kind === 'reentry' ? '重挂对账那次判定' : '每轮例行判定'}的材料</span>
+            <b>世界书自选 · 重挂对账</b>
+            <span class="pp-muted">勾上＝整条原文固定进重挂对账那次判定的材料</span>
             <span id="pp_ls_lore_close" class="menu_button fa-solid fa-xmark" title="关闭"></span>
         </div>
         <div class="pp-ls-float-body">
         <input type="text" class="text_pole textarea_compact" id="pp_ls_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动勾选；检索时命中的书自动展开…" value="${escapeHtml(query)}" style="width:100%" />
         ${groupHtml || '<div class="pp-muted">没有命中检索词的条目，清空检索词看全部</div>'}
-        <div class="pp-muted" style="margin-top:6px">勾上＝整条原文固定进${kind === 'reentry' ? '重挂对账那次判定' : '每轮例行判定'}的材料（不截断）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与本页「世界书检索」自动去重（这边优先）。只管监听本页材料单——与「剧情指导」第 1 步、长线页、另一页材料单互不影响；无冷却</div>
+        <div class="pp-muted" style="margin-top:6px">勾上＝整条原文固定进重挂对账那次判定的材料（不截断）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾。重挂单不上三按钮机制（纯手选）——与「剧情指导」第 1 步、长线页、日常单的书单三按钮互不影响；无冷却</div>
         </div>`;
 
         win.querySelector('#pp_ls_lore_close').addEventListener('click', () => win.remove());
@@ -710,20 +751,18 @@ function openLorePickWindow(kind = 'routine') {
             nq?.setSelectionRange(nq.value.length, nq.value.length);
         });
         const apply = keys => {
-            const s = listenerState();
-            if (kind === 'reentry') s.matReentry.picks = [...keys];
-            else s.lorePicks = [...keys];
+            listenerState().matReentry.picks = [...keys];
             persistListener();
             render();
             syncBtn();
         };
         win.querySelectorAll('[data-lore]').forEach(cb => cb.addEventListener('change', () => {
-            const s = new Set(listenerState().lorePicks);
+            const s = new Set(listenerState().matReentry.picks ?? []);
             if (cb.checked) s.add(cb.dataset.lore); else s.delete(cb.dataset.lore);
             apply(s);
         }));
         win.querySelectorAll('[data-lbook]').forEach(cb => cb.addEventListener('change', () => {
-            const s = new Set(listenerState().lorePicks);
+            const s = new Set(listenerState().matReentry.picks ?? []);
             const book = (settings.lorebooks ?? []).find(b => b.id === cb.dataset.lbook);
             if (!book) return;
             for (const e of (book.entries ?? []).filter(e => e.content)) {
@@ -742,6 +781,146 @@ function openLorePickWindow(kind = 'routine') {
         }));
     };
     render();
+}
+
+// ---------------------------------------------------------------------------
+// 日常单的「世界书条目」管理窗（第四十三轮，激活机制的新家）：书的启用（按聊天）＋每条
+// 条目三档状态（停用/关键词/常驻，按聊天）＋检索测试（从世界书页搬来、按监听口径测）。
+// 存储两处：书单＝chatdata 的 books 块（setChatBookEnabled）；条目状态＝监听聊天块的
+// loreStatus（persistListener）。与向导第 1 步勾选、长线页勾选、重挂单手选互不影响
+// ---------------------------------------------------------------------------
+
+function openLoreMgrWindow() {
+    let query = '';
+    const foldState = new Map();
+    let win = document.getElementById('pp_ls_lorewin');
+    if (win) { win.remove(); }
+    win = document.createElement('div');
+    win.id = 'pp_ls_lorewin';
+    win.className = 'pp-ls-float';
+    document.body.appendChild(win);
+    const isFolded = (book, searching) => (foldState.has(book.id) ? foldState.get(book.id) : !searching);
+    const statusOf = key => listenerState().loreStatus[key] ?? 'key';
+    const syncBtn = () => {
+        const btn = document.getElementById('pp_ls_lore');
+        if (!btn) return;
+        const c = loreMgrCounts();
+        btn.textContent = `世界书条目（常驻 ${c.always} · 关键词 ${c.key}${c.off ? ` · 停用 ${c.off}` : ''}）`;
+    };
+
+    const render = () => {
+        const books = settings.lorebooks ?? [];
+        if (!books.length) {
+            win.innerHTML = `
+            <div class="pp-ls-float-head"><b>世界书条目 · 日常监听</b><span id="pp_ls_lore_close" class="menu_button fa-solid fa-xmark" title="关闭"></span></div>
+            <div class="pp-ls-float-body"><div class="pp-muted">还没有世界书——在设置页「世界书库」区导入或新建后再来</div></div>`;
+            win.querySelector('#pp_ls_lore_close').addEventListener('click', () => win.remove());
+            return;
+        }
+        const q = query.trim().toLowerCase();
+        const searching = Boolean(q);
+        const groupHtml = books.map(book => {
+            const entries = (book.entries ?? []).filter(e => !q
+                || String(e.comment ?? '').toLowerCase().includes(q)
+                || String(e.content ?? '').toLowerCase().includes(q)
+                || (Array.isArray(e.keys) ? e.keys : []).some(k => String(k).toLowerCase().includes(q)));
+            if (!entries.length) return '';
+            const enabled = chatBookEnabled(book);
+            const folded = isFolded(book, searching);
+            const st = { off: 0, key: 0, always: 0 };
+            for (const e of entries) st[statusOf(`${book.id}:${e.uid}`)] = (st[statusOf(`${book.id}:${e.uid}`)] ?? 0) + 1;
+            return `
+        <div class="pp-gd-ughead">
+            <label class="pp-label" title="本书是否参加本聊天的监听扫描：勾上＝书里的条目按各自状态参与；不勾＝整本不扫（常驻档也不带）。按聊天存——别的聊天不受影响；没动过书单的聊天沿用书的全局默认（导入时默认启用）"><input type="checkbox" data-lmen="${escapeHtml(book.id)}" ${enabled ? 'checked' : ''} /> ${escapeHtml(book.name)}${enabled ? '' : '（未启用）'}（常驻 ${st.always} · 关键词 ${st.key}${st.off ? ` · 停用 ${st.off}` : ''}）</label>
+            <span class="menu_button" data-lfold="${escapeHtml(book.id)}"><i class="fa-solid fa-chevron-${folded ? 'right' : 'down'}"></i> ${folded ? '展开' : '收起'}</span>
+        </div>
+        ${folded ? '' : entries.map(e => {
+            const key = `${book.id}:${e.uid}`;
+            const cur = statusOf(key);
+            return `
+        <div class="pp-kb-erow">
+            <div class="pp-seg" data-lseg="${escapeHtml(key)}" title="条目状态（按聊天存）：常驻＝每轮判定无条件整条带上（不看关键词）；关键词＝条目关键词出现在「关键词扫描层数」窗口的对话里才带；停用＝永不带。缺省＝关键词">
+                <span class="pp-seg-opt${cur === 'off' ? ' on' : ''}" data-lstate="off">停用</span>
+                <span class="pp-seg-opt${cur === 'key' ? ' on' : ''}" data-lstate="key">关键词</span>
+                <span class="pp-seg-opt${cur === 'always' ? ' on' : ''}" data-lstate="always">常驻</span>
+            </div>
+            <span class="pp-kb-ebody" title="${escapeHtml(String(e.content ?? ''))}${(e.keys ?? []).length ? `\n\n〔关键词：${escapeHtml((e.keys ?? []).join('、'))}〕` : ''}">${escapeHtml(String(e.comment ?? `条目 ${e.uid + 1}`))}</span>
+        </div>`; }).join('')}`;
+        }).join('');
+
+        win.innerHTML = `
+        <div class="pp-ls-float-head">
+            <b>世界书条目 · 日常监听</b>
+            <span class="pp-muted">书的启用＋条目三档状态，按聊天存、就地编辑</span>
+            <span id="pp_ls_lore_close" class="menu_button fa-solid fa-xmark" title="关闭"></span>
+        </div>
+        <div class="pp-ls-float-body">
+        <input type="text" class="text_pole textarea_compact" id="pp_ls_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动状态；检索时命中的书自动展开…" value="${escapeHtml(query)}" style="width:100%" />
+        ${groupHtml || '<div class="pp-muted">没有命中检索词的条目，清空检索词看全部</div>'}
+        <details class="pp-fold" style="margin-top:8px">
+            <summary title="从世界书页搬来的检索测试，改按监听口径测：用本窗的书单＋三档状态跑一次命中预览——「常驻」档无条件在列、「关键词」档按输入文本（留空＝「关键词扫描层数」窗口的最近楼层）匹配、「停用」档与未启用的书不出现">检索测试（按监听口径）</summary>
+            <textarea id="pp_ls_lore_test_text" class="text_pole textarea_compact" rows="3" placeholder="输入一段测试剧情看会命中哪些条目；留空则按「关键词扫描层数」窗口的最近楼层来测"></textarea>
+            <div class="pp-btn-row"><span id="pp_ls_lore_test_run" class="menu_button" title="按本窗书单与三档状态跑一次命中预览">测试命中</span></div>
+            <div id="pp_ls_lore_test_out" class="pp-muted"></div>
+        </details>
+        <div class="pp-muted" style="margin-top:6px">这里管的是每轮例行判定自动带哪些世界书：「常驻」无条件整条带上、「关键词」按对话出现的关键词带（往回几层归判定材料区的「关键词扫描层数」管）、「停用」永不带、书不启用整本不扫。按聊天存——A 聊天的设定 B 聊天可以不同。条目正文与关键词数据在设置页「世界书库」区改。与「剧情指导」第 1 步勾选、长线页勾选、重挂单手选互不影响</div>
+        </div>`;
+
+        win.querySelector('#pp_ls_lore_close').addEventListener('click', () => win.remove());
+        const qEl = win.querySelector('#pp_ls_lore_q');
+        qEl?.addEventListener('input', () => {
+            query = qEl.value;
+            render();
+            const nq = win.querySelector('#pp_ls_lore_q');
+            nq?.focus();
+            nq?.setSelectionRange(nq.value.length, nq.value.length);
+        });
+        win.querySelectorAll('[data-lmen]').forEach(cb => cb.addEventListener('change', () => {
+            setChatBookEnabled(cb.dataset.lmen, cb.checked);
+            render();   // 整窗重画：计数行与未启用标记跟着变
+            syncBtn();
+        }));
+        win.querySelectorAll('[data-lseg] .pp-seg-opt').forEach(opt => opt.addEventListener('click', () => {
+            if (opt.classList.contains('on')) return;
+            const key = opt.closest('.pp-seg').dataset.lseg;
+            const state = listenerState();
+            if (opt.dataset.lstate === 'key') delete state.loreStatus[key];   // 关键词＝缺省档，不占键（残键纪律）
+            else state.loreStatus[key] = opt.dataset.lstate;
+            persistListener();
+            render();
+            syncBtn();
+        }));
+        win.querySelectorAll('[data-lfold]').forEach(el => el.addEventListener('click', () => {
+            const id = el.dataset.lfold;
+            const book = (settings.lorebooks ?? []).find(b => b.id === id);
+            if (!book) return;
+            const q2 = query.trim().toLowerCase();
+            foldState.set(id, !isFolded(book, Boolean(q2)));
+            render();
+        }));
+        win.querySelector('#pp_ls_lore_test_run')?.addEventListener('click', () => {
+            const out = win.querySelector('#pp_ls_lore_test_out');
+            const typed = win.querySelector('#pp_ls_lore_test_text')?.value.trim() ?? '';
+            let text = typed;
+            let note = '输入文本';
+            if (!text) {
+                const chat = SillyTavern.getContext().chat;
+                const all = collectFloorsFromChat(Array.isArray(chat) ? chat : []);
+                text = formatFloors(limitFloors(all, Number(listenerState().matRoutine.scanFloors) || 0));
+                note = `最近楼层（「关键词扫描层数」窗口${Number(listenerState().matRoutine.scanFloors) || 0 ? ` ${listenerState().matRoutine.scanFloors} 层` : '＝全聊天'}）`;
+            }
+            const hits = scanLorebooks(text, { enabledIds: chatEnabledBookIds(), statusMap: listenerState().loreStatus });
+            const always = hits.filter(h => h.constant);
+            const keyed = hits.filter(h => !h.constant);
+            out.innerHTML = `
+            <div class="pp-muted">扫描文本（${note}，夹 ${clamp(text.replace(/\s+/g, ' '), 120)}）</div>
+            ${hits.length ? hits.map(h => `
+            <div class="pp-hit"><b>${escapeHtml(h.bookName)} / ${escapeHtml(h.comment ?? '')}${h.constant ? '（常驻）' : ''}</b><div>${escapeHtml(clamp(h.content, 300))}</div></div>`).join('') : '<div class="pp-muted">未命中任何条目（常驻 ${always.length} · 关键词命中 ${keyed.length}）</div>'}
+            <div class="pp-muted">共 ${hits.length} 条（常驻 ${always.length} · 关键词命中 ${keyed.length}）——这就是下一次例行判定会自动带的世界书</div>`;
+        });
+    };
+    render();
+    syncBtn();
 }
 
 // ---------------------------------------------------------------------------

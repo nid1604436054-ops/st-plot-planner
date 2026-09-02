@@ -8,6 +8,7 @@ import { settings, save, newId } from "../../settings.js";
 import { addItem, removeItem, scanAndApplyStorage, storageItemsInEffect } from "../../store.js";
 import { activeStory } from "../../story.js";
 import { generateGameplayDraft } from "../../gameplayConsult.js";
+import { currentLorePicks } from "../../materials.js";
 import { escapeHtml, clamp, downloadJson, readFileAsText } from "../../utils.js";
 
 let stFold = false;   // 折叠区展开状态（跨重渲染保留）
@@ -49,12 +50,13 @@ export function renderStorageTools(container) {
             <label class="menu_button" for="pp_st_import">导入</label>
             <input id="pp_st_import" type="file" accept=".json,application/json" hidden />
         </div>
-        <label class="pp-label" title="AI 玩法创作：填一句大概思路，花一次模型调用扩写成完整可执行的玩法规则，草案可改，入库后出现在下方条目列表。材料固定带角色摘要、最近对话与世界书命中（本地检索，不花调用），下面两个勾选按需追加——记忆表格那类既往事件流水对玩法设计没用，一律不带；思路与草案随全局设置留底，刷新不丢">AI 玩法创作</label>
+        <label class="pp-label" title="AI 玩法创作：填一句大概思路，花一次模型调用扩写成完整可执行的玩法规则，草案可改，入库后出现在下方条目列表。材料固定带角色摘要、最近对话与世界书自选（第四十三轮起只带「剧情指导」页第 1 步「世界书自选」面板里勾的条目〔含常驻〕，不再自动检索命中），下面两个勾选按需追加——记忆表格那类既往事件流水对玩法设计没用，一律不带；思路与草案随全局设置留底，刷新不丢">AI 玩法创作</label>
         <textarea id="pp_st_c_idea" class="text_pole textarea_compact" rows="2"></textarea>
         <div class="pp-gd-selp">
             <label title="带上进行中剧情全文：生成的玩法贴合当前剧情阶段、不与其走向冲突"><input type="checkbox" id="pp_st_c_plan" /> 附进行中剧情</label>
             <label title="带当前注入生效中的玩法条目：新玩法与现有规则不冲突、能衔接"><input type="checkbox" id="pp_st_c_gp" /> 附生效中的玩法</label>
         </div>
+        <div class="pp-muted" id="pp_st_c_loren" title="第四十三轮起 AI 玩法创作不再自动带检索命中——世界书材料只跟「剧情指导」页第 1 步「世界书自选」面板的勾选走（含常驻）；一条没勾＝本次不带世界书材料，模型不会报错但看不到这些设定"></div>
         <div class="pp-btn-row"><span id="pp_st_c_gen" class="menu_button">生成玩法草案</span></div>
         <div id="pp_st_c_card"></div>
         <label class="pp-label" title="玩法条目的触发词要在最近几层对话里出现过才算命中（常驻条目不受影响）；0 = 不限（扫全部对话）。改动立即保存并按新窗口重扫一次">触发词扫描楼层（0 = 不限）</label>
@@ -153,6 +155,12 @@ export function renderStorageTools(container) {
     // AI 咨询：思路 → 完整玩法草案 → 入库。状态存 settings.storageConsult（随全局设置留底，
     // save 是防抖的，逐字改动不会刷盘风暴）；入库走 addItem，与手动添加的条目同一套注入生命周期
     const consult = settings.storageConsult;
+    // 防呆行（第四十三轮）：自动检索撤出后，「不勾就没有」要看得见——就地报当前自选条数
+    const loreNRow = fold.querySelector('#pp_st_c_loren');
+    if (loreNRow) {
+        const n = currentLorePicks().length;
+        loreNRow.textContent = `本次世界书材料：${n ? `自选 ${n} 条` : '未勾选、本次不带世界书材料'}`;
+    }
     const cIdeaEl = fold.querySelector('#pp_st_c_idea');
     cIdeaEl.value = consult.idea;
     cIdeaEl.addEventListener('input', () => { consult.idea = cIdeaEl.value; save(); });

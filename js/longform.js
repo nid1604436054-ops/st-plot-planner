@@ -308,7 +308,9 @@ function lfKbSection(payload) {
 }
 
 // 与向导共用同一拼法（materials.materialSections，稳定在前/会变的垫底——前缀缓存口径照吃）；
-// 整批并行调用只拼一次、逐卷共享同一份字符串。知识库小节按第十三轮排序原则插在检索命中前
+// 第四十三轮起材料里没有「检索命中」小节（长线纯手选，用户拍板：几百到上千层跨度，自动命中
+// 每次拼材料才扫一次、价值低，一次手选够用）。整批并行调用只拼一次、逐卷共享同一份字符串。
+// 知识库小节按第十三轮排序原则插在最近对话之前
 export function lfMaterialParts() {
     const m = lfState().mats;
     const s = storyState();
@@ -322,18 +324,18 @@ export function lfMaterialParts() {
     const kb = lfKbPayload(m.kbListIds);
     if (!kb.length) return parts;
     const sec = lfKbSection(kb);
-    const idx = parts.findIndex(p => String(p ?? '').startsWith('## 检索命中的世界书条目'));
+    const idx = parts.findIndex(p => String(p ?? '').startsWith('## 最近对话记录'));
     if (idx < 0) return [...parts, ...(sec ?? [])];
     return [...parts.slice(0, idx), ...(sec ?? []), ...parts.slice(idx)];
 }
 
-// 材料分区（第二十七轮）：「检索命中」与其后的「最近对话记录」开头会变（检索按最近楼层重扫、
-// 对话是滑动窗口——每轮聊天后窗口头就变）。把这两节从稳定区拆出来，垫到任务段之后发——
-// 会变的小节放材料中间，前缀会断在它头上、后面跟的骨架与任务段跟着重付；拆出去后跨步前缀
-// 最多断在这两节自己身上
+// 材料分区（第二十七轮立、第四十三轮收窄）：「最近对话记录」开头会变（对话是滑动窗口——
+// 每轮聊天后窗口头就变），把它从稳定区拆出来，垫到任务段之后发——会变的小节放材料中间，
+// 前缀会断在它头上、后面跟的骨架与任务段跟着重付；拆出去后跨步前缀最多断在它自己身上
+// （「检索命中」小节已随第四十三轮撤出，不再是分区界）
 export function lfStableAndVolatile() {
     const parts = lfMaterialParts();
-    const idx = parts.findIndex(p => String(p ?? '').startsWith('## 检索命中的世界书条目'));
+    const idx = parts.findIndex(p => String(p ?? '').startsWith('## 最近对话记录'));
     if (idx < 0) return { stable: parts, live: [] };
     return { stable: parts.slice(0, idx), live: parts.slice(idx) };
 }

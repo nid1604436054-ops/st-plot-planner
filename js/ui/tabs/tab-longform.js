@@ -329,11 +329,11 @@ function materialsHtml(st) {
         }).join('')}
         </div>` : ''}
         <div class="pp-btn-row">
-            <span id="pp_lf_lore" class="menu_button" title="世界书自选（悬浮面板）：按书分组勾条目，勾中的整条原文随长线生成进材料——「照着写」的材料，与知识库「选着用」分工。不看关键词/常驻/书与条目的启用状态（勾选是唯一口径，禁用的照样能勾）；与检索命中自动去重（自选优先）。这里的勾选只管长线、与「剧情指导」第 1 步互不影响；无冷却">世界书自选（已勾 ${loreN} 条）</span>
+            <span id="pp_lf_lore" class="menu_button" title="世界书自选（悬浮面板）：按书分组勾条目，勾中的整条原文随长线生成进材料——「照着写」的材料，与知识库「选着用」分工。不看关键词/常驻/书与条目的启用状态（勾选是唯一口径，禁用的照样能勾）——长线材料只带这里勾的条目（第四十三轮起不再自动带检索命中）。这里的勾选只管长线、与「剧情指导」第 1 步互不影响；无冷却">世界书自选（已勾 ${loreN} 条）</span>
         </div>`;
     return `
     <div class="pp-section" id="pp_lf_mats">
-        <div class="pp-lf-foldhead" id="pp_lf_mfold" title="长线生成用的材料在这里勾——与「剧情指导」第 1 步互不影响；每次生成（骨架/具体化/修订/切章）都按当时的勾选现场拼。另自动随行：角色设定、检索命中的世界书、进行中剧情、历史摘要、最近对话。勾选存在本聊天里，刷新不丢、作废本长线也保留">
+        <div class="pp-lf-foldhead" id="pp_lf_mfold" title="长线生成用的材料在这里勾——与「剧情指导」第 1 步互不影响；每次生成（骨架/具体化/修订/切章）都按当时的勾选现场拼。另自动随行：角色设定、进行中剧情、历史摘要、最近对话（世界书第四十三轮起纯手选——自动检索撤出）。勾选存在本聊天里，刷新不丢、作废本长线也保留">
             <i class="fa-solid fa-chevron-${matOpen ? 'down' : 'right'}"></i>
             <b>材料</b>
             <span class="pp-muted">${escapeHtml(lfMatOverview())}</span>
@@ -392,7 +392,7 @@ function openLfLorePanel() {
         const books = settings.lorebooks ?? [];
         const sel = selSet();
         if (!books.length) {
-            body.innerHTML = '<div class="pp-muted">还没有世界书——在「世界书」页签导入或新建后再来</div>';
+            body.innerHTML = '<div class="pp-muted">还没有世界书——在设置页「世界书库」区导入或新建后再来</div>';
             return;
         }
         const q = query.trim().toLowerCase();
@@ -423,7 +423,7 @@ function openLfLorePanel() {
         body.innerHTML = `
         <input type="text" class="text_pole textarea_compact" id="pp_lf_lore_q" placeholder="搜条目（标题 / 内容 / 关键词）——只筛显示，不动勾选；检索时命中的书自动展开…" value="${escapeHtml(query)}" style="width:100%" />
         ${groupHtml || '<div class="pp-muted">没有命中检索词的条目，清空检索词看全部</div>'}
-        <div class="pp-muted" style="margin-top:6px">勾上＝整条原文随长线生成进材料（照着写）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；与「检索命中」自动去重（这边优先）。这里的勾选只管长线，与「剧情指导」第 1 步互不影响；无冷却</div>`;
+        <div class="pp-muted" style="margin-top:6px">勾上＝整条原文随长线生成进材料（照着写）。条目行只显示名字，原文悬浮可看全文；不看关键词/常驻/书与条目的启用状态——勾选是唯一口径，禁用的书与条目照样能勾；勾选是长线世界书材料的唯一来源（第四十三轮起无自动检索）。这里的勾选只管长线，与「剧情指导」第 1 步互不影响；无冷却</div>`;
 
         const qEl = body.querySelector('#pp_lf_lore_q');
         qEl?.addEventListener('input', () => {
