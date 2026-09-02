@@ -512,7 +512,7 @@ export const knowledgeTab = {
                 const { values, failed } = await structureImport({
                     list,
                     rawText: raw,
-                    provider: prof ? { baseUrl: prof.baseUrl, apiKey: prof.apiKey, model: prof.model } : undefined,
+                    provider: prof ? { baseUrl: prof.baseUrl, apiKey: prof.apiKey, model: prof.model, format: prof.format ?? 'chat' } : undefined,
                     onProgress: (i, n) => { structBtn.textContent = n > 1 ? `结构化中…第 ${i}/${n} 批` : '结构化中……'; },
                 });
                 draft = { listId: list.id, providerId: pid, entries: values.map(v => ({ values: v, keep: true })) };

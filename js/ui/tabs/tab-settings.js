@@ -91,6 +91,11 @@ export const settingsTab = {
                 <div id="pp_set_model_toggle" class="menu_button">手动输入</div>
                 <div id="pp_set_fetch_models" class="menu_button" title="从 API 拉取可用模型列表，之后在下拉框中选择">获取模型列表</div>
             </div>
+            <label class="pp-label" title="接口走哪套请求格式（第四十四轮）：绝大多数接口——DeepSeek、GLM、各中转站——都是「对话补全」，保持默认即可；只有服务商明确给的是 OpenAI 官方新 Responses 接口（模型多为 gpt-5 系）才切第二项。切错了请求会直接报错（404 一类），切回来就好；「保存」成供应商方案时会记住每条各自的格式">API 格式</label>
+            <select id="pp_set_fmt" class="text_pole">
+                <option value="chat">对话补全（/chat/completions，默认）</option>
+                <option value="responses">Responses（/responses，OpenAI 新接口）</option>
+            </select>
             <div class="pp-btn-row">
                 <div id="pp_set_test" class="menu_button">测试连接</div>
             </div>
@@ -244,6 +249,10 @@ export const settingsTab = {
 
         bind('#pp_set_base', () => settings.api.baseUrl, v => settings.api.baseUrl = String(v).trim());
         bind('#pp_set_key', () => settings.api.apiKey, v => settings.api.apiKey = String(v).trim());
+        // 接口格式（第四十四轮）：chat＝对话补全（默认，绝大多数兼容层）；responses＝OpenAI 官方新接口
+        const fmtSel = container.querySelector('#pp_set_fmt');
+        fmtSel.value = settings.api.format === 'responses' ? 'responses' : 'chat';
+        fmtSel.addEventListener('change', () => { settings.api.format = fmtSel.value === 'responses' ? 'responses' : 'chat'; save(); });
         bindNum('#pp_set_temp', () => settings.api.temperature, v => settings.api.temperature = v);
         bindNum('#pp_set_maxtok', () => settings.api.maxTokens, v => settings.api.maxTokens = v);
         bindNum('#pp_set_scan', () => settings.retrieval.scanDepth, v => settings.retrieval.scanDepth = v);
@@ -325,9 +334,11 @@ export const settingsTab = {
             settings.api.baseUrl = p.baseUrl;
             settings.api.apiKey = p.apiKey;
             settings.api.model = String(p.model ?? '');
+            settings.api.format = p.format === 'responses' ? 'responses' : 'chat';   // 格式随方案整套换（第四十四轮）
             save();
             container.querySelector('#pp_set_base').value = p.baseUrl;
             container.querySelector('#pp_set_key').value = p.apiKey;
+            fmtSel.value = settings.api.format;
             modelIds = [];          // 列表是旧供应商拉的，作废待重取
             manualModel = false;
             applyModelMode(container);
@@ -348,9 +359,11 @@ export const settingsTab = {
             settings.api.baseUrl = base;
             settings.api.apiKey = key;
             settings.api.model = model;
+            settings.api.format = fmtSel.value === 'responses' ? 'responses' : 'chat';   // 格式一并入方案（第四十四轮）
             // 第四十轮（用户拍板）：去重键改成 地址+密钥+模型 三件套——同一网站下换个模型再存＝另存
-            // 一条，不再覆盖原来那条；三件套全同＝命中已有，不重复建条
-            const r = upsertApiProfile(base, key, model);
+            // 一条，不再覆盖原来那条；三件套全同＝命中已有，不重复建条。第四十四轮格式入键（同三件套
+            // 不同格式＝端点不同，也算两条）
+            const r = upsertApiProfile(base, key, model, settings.api.format);
             save();
             rebuildProfileSelect(container);
             profSel.value = r.profile.id;   // 保存后直接选中它，接着「改名」一步到位

@@ -83,7 +83,7 @@ function providerOptions(selectedId) {
 function providerFromId(pid) {
     if (!pid) return undefined;
     const p = (settings.api.profiles ?? []).find(x => x.id === pid);
-    return p ? { baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model } : undefined;
+    return p ? { baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model, format: p.format ?? 'chat' } : undefined;
 }
 
 // busy 横幅右侧的模型名（与下拉同源：方案名或主连接模型名）

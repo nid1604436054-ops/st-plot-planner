@@ -12,7 +12,7 @@
 - **分层**（自上而下调用，尽量别跨层）：
   1. **UI 层**：`index.js` ＋ `js/ui/**`（drawer / wandMenu / tabs/*）——只管界面、勾选、按钮；模型调用与数据规则一律下沉业务层。
   2. **业务层**：planner / listener / knowledge / randomEvents / reactions / memoryTable / lorebook / store / injection / units / story / gameplayConsult / materials。
-  3. **通道层**：`api.js`——**全部模型调用与联网搜索的唯一出口**。全局预设注入、思考关闭（含分家）、思考标头掐断重试、坏 JSON 修复重试、400 参数梯子全在这层，任何调用方都自动受益。
+  3. **通道层**：`api.js`——**全部模型调用与联网搜索的唯一出口**。全局预设注入、思考关闭（含分家）、思考标头掐断重试、坏 JSON 修复重试、400 参数梯子、接口格式双轨（第四十四轮：连接 format 字段 chat/responses，差异全收在这层）全在这层，任何调用方都自动受益。
   4. **数据层**：`settings.js`（全局设置单例）/ `chatdata.js`（每聊天数据按聊天身份走）/ `utils.js`（纯函数）/ `context.js`（对 getContext() 的唯一依赖点）。
 - **酒馆全局依赖收口**：`from "/script.js"` 或 `from "/scripts/extensions.js"` 只出现在 5 个文件——`index.js`、`settings.js`、`injection.js`、`store.js`、`listener.js`。宿主升级失联先查这五扇门（与 DESIGN §4 同口径）。
 
@@ -22,8 +22,8 @@
 
 | 文件 | 行数 | 职责 | 关键导出 |
 |---|---|---|---|
-| api.js | ~460 | 模型通道＋联网搜索；预设/思考关闭/标头重试/JSON 修复全在这；报错带原生返回（流式中断带等待秒数/已收字数/底层报错、200 非 JSON 带原文片段——第二十九轮） | chatCompletion、parseModelJson、globalPresetBlock、withGlobalPresets、searchWeb |
-| settings.js | ~190 | 设置单例＋默认值＋老安装迁移（补键都在 ensureDefaults）；供应商方案两纯函数（第四十轮：upsertApiProfile 三件套去重〔同地址多模型各存一条、自动名域名·模型名〕＋renameApiProfile 改名〔空名/重名拒〕） | settings、save、newId、upsertApiProfile、renameApiProfile |
+| api.js | ~530 | 模型通道＋联网搜索；预设/思考关闭/标头重试/JSON 修复/接口格式双轨（第四十四轮 chat↔responses：请求形状、流事件、usage 归一、思考映射）全在这；报错带原生返回（流式中断带等待秒数/已收字数/底层报错、200 非 JSON 带原文片段——第二十九轮） | chatCompletion、parseModelJson、globalPresetBlock、withGlobalPresets、searchWeb |
+| settings.js | ~190 | 设置单例＋默认值＋老安装迁移（补键都在 ensureDefaults）；供应商方案两纯函数（第四十轮起 upsertApiProfile〔同地址多模型各存一条、自动名域名·模型名〕＋renameApiProfile 改名〔空名/重名拒〕；第四十四轮去重键扩成 地址＋密钥＋模型＋格式 四件套） | settings、save、newId、upsertApiProfile、renameApiProfile |
 | chatdata.js | ~140 | 每聊天数据冷热双层（chatMetadata 热层 ↔ settings.chatData 冷层留底） | loadChatData、saveChatData、flushChatData |
 | context.js | ~85 | getContext() 唯一依赖点：聊天记录＋角色卡摘要＋世界书按聊天书单三助手（第四十三轮：chatBookEnabled/setChatBookEnabled/bindNewBookToChat——书单界面在监听页、写入在这）；collectPlanningContext 已撤世界书检索（一次性生成只带勾选） | collectPlanningContext、characterSummary、chatEnabledBookIds、chatBookEnabled、setChatBookEnabled、bindNewBookToChat |
 | utils.js | ~170 | 转义/截断/容错 JSON（extractJson）/指纹/文件读写/token 粗估 | extractJson、escapeHtml |
@@ -96,7 +96,7 @@
 | 监听材料 | listener.js 对应分区＋longform.js 备料 | 例行轮＝章文本全文＋节点状态＋**世界书自选**（监听页勾选器、整条不截断、存监听聊天块）＋**记忆表格**（第三十五轮起排稳定段——大而少变）＋楼层原文（0=全量/N=最近 N 层）＋上一轮指导＋世界书检索命中（与自选去重、自选优先；楼层后只留它与上一轮指导两小块）；回归判定＝五章窗口（longform 备料）替换单位全文、无上一轮指导块；角色卡摘要已撤（第三十四轮——角色资料走世界书自选）；材料清单随每轮留痕落小账（第三十三轮立、三十四改自选口径）；**第三十七轮起两套材料单各自独立、按聊天存**——例行吃 matRoutine、回归吃 matReentry（各有自选勾选/记忆挑选〔照第 1 步同一套参数、全量版本上做减法〕/检索开关/楼层数），旧全局三开关首见聊天块播种带走即删；**第三十八轮起「楼层数」只管正文窗口**——世界书检索的关键词激活回看范围归各单自己的 scanFloors（0=全聊天，默认与正文无关） |
 | 加设置项 | settings.js 的 DEFAULTS＋ensureDefaults＋tab-settings.js | 三处一起动；老安装迁移靠 ensureDefaults 补键 |
 | 注入相关 | injection.js＋index.js 事件 | setExtensionPrompt 只准在 injection.js / store.js / listener.js 三处出现 |
-| 思考关闭/参数方言 | api.js 的 thinkingOffParams＋重试梯子 | 用户环境＝DeepSeek 官方（DESIGN §6.5）；新增方言加在 thinkingOffParams |
+| 思考关闭/参数方言 | api.js 的 thinkingOffParams＋重试梯子 | 用户环境＝DeepSeek 官方（DESIGN §6.5）；新增方言加在 thinkingOffParams；**responses 格式走 thinkingOffParamsResponses（第四十四轮，reasoning.effort minimal）——加 Responses 侧参数改那里、别混进 chat 全家桶** |
 | 向导状态机/快照 | tab-guidance 的快照区＋restoreWizard | 快照是进度留底的权威；改状态机先看令牌作废路径 |
 
 ## 4. 状态放在哪（改前先分清「这份数据属于谁」）

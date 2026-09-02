@@ -13,7 +13,8 @@ const DEFAULTS = {
         temperature: 0.7,
         maxTokens: 1500,
         thinkingOff: false, // 推理模型关闭思考（生成侧总开关；监听恒关不吃它——第十七轮分家）：请求体附加主流关闭参数（GLM 系 thinking / Qwen 系 enable_thinking 等），端点不认时自动去参重试
-        profiles: [],       // 供应商方案库：{id, name, baseUrl, apiKey, model}，设置页存当前连接、下拉一键切换（温度等其余参数全局共用）；
+        format: 'chat',     // 接口格式（第四十四轮）：'chat'＝对话补全 /chat/completions（默认，绝大多数兼容层）；'responses'＝OpenAI 新接口 /responses。方案库里每条方案各存各的格式，切换方案整套跟着换
+        profiles: [],       // 供应商方案库：{id, name, baseUrl, apiKey, model, format}，设置页存当前连接、下拉一键切换（温度等其余参数全局共用）；
                             // 第四十轮起同一地址下不同模型各存一条（名字可改）——存取走 upsertApiProfile/renameApiProfile
     },
     search: {
@@ -103,6 +104,7 @@ function ensureDefaults() {
     delete store.guidance.customPrompt;   // 迁移完清残留旧键（§5：旧值不能留在设置文件里）
     // 顶层 ??= 只对新装用户生效，老安装的嵌套新字段在这里补
     store.api.profiles ??= [];        // 老安装补供应商方案列表
+    store.api.format ??= 'chat';      // 老安装补接口格式（第四十四轮；存量方案一律按 chat 对话补全对待）
     store.retrieval.memChars ??= 4000;
     store.guidance.inject ??= { depth: 4, role: 'system', expires: 'never', layers: 20 };
     store.guidance.minBeats ??= 5;   // 老安装补规划节点下限（第七轮，默认 5）
@@ -155,19 +157,21 @@ export function newId(prefix = '') {
 }
 
 // 供应商方案保存（第四十轮：用户拍板「一个网站下可选不同模型配置分别保存＋自己改名」）。
-// 去重键 = 地址＋密钥＋模型三件套：同地址同密钥换个模型再存＝另存一条（旧逻辑按地址＋密钥去重，
-// 一个网站永远只有一条、换模型就覆盖——本轮按用户要求废掉）；三件套全同＝命中已有不新建。
-// 新条目名字自动取 域名·模型名（地址不规范用原文），重名自动加 -2 -3；名字随时可在设置页改
-export function upsertApiProfile(baseUrl, apiKey, model) {
+// 去重键 = 地址＋密钥＋模型＋接口格式四件套：同地址同密钥换个模型再存＝另存一条（旧逻辑按地址＋密钥
+// 去重，一个网站永远只有一条、换模型就覆盖——第四十轮按用户要求废掉）；四件套全同＝命中已有不新建。
+// 新条目名字自动取 域名·模型名（地址不规范用原文），重名自动加 -2 -3；名字随时可在设置页改。
+// format（第四十四轮）＝接口格式 chat/responses，同三件套不同格式也算两条不同方案——端点都不同
+export function upsertApiProfile(baseUrl, apiKey, model, format = 'chat') {
     const list = settings.api.profiles ??= [];
-    const same = list.find(x => x.baseUrl === baseUrl && x.apiKey === apiKey && x.model === model);
+    const fmt = format === 'responses' ? 'responses' : 'chat';
+    const same = list.find(x => x.baseUrl === baseUrl && x.apiKey === apiKey && x.model === model && (x.format ?? 'chat') === fmt);
     if (same) return { profile: same, created: false };
     let host = baseUrl;
     try { host = new URL(baseUrl).host; } catch { /* 地址不规范就用原文当名字 */ }
     const base = model ? `${host}·${model}` : host;
     let name = base, n = 2;
     while (list.some(x => x.name === name)) name = `${base}-${n++}`;
-    const profile = { id: newId('ap-'), name, baseUrl, apiKey, model };
+    const profile = { id: newId('ap-'), name, baseUrl, apiKey, model, format: fmt };
     list.push(profile);
     return { profile, created: true };
 }

@@ -270,7 +270,7 @@ export function resolveOutfitProvider(providerId) {
     if (id && id !== '__main__') chosen = profs.find(p => p.id === id) ?? null;
     else if (!id) chosen = profs[0] ?? null;
     if (chosen?.baseUrl && chosen?.model) {
-        return { name: `${chosen.name} · ${chosen.model}`, provider: { baseUrl: chosen.baseUrl, apiKey: chosen.apiKey, model: chosen.model } };
+        return { name: `${chosen.name} · ${chosen.model}`, provider: { baseUrl: chosen.baseUrl, apiKey: chosen.apiKey, model: chosen.model, format: chosen.format ?? 'chat' } };
     }
     return { name: settings.api.model ? `主连接 · ${settings.api.model}` : '（未配置）', provider: null };
 }

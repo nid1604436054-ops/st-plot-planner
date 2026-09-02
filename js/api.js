@@ -1,4 +1,7 @@
-// M0 独立大模型通道：OpenAI 兼容 /chat/completions，浏览器直连
+// M0 独立大模型通道：OpenAI 兼容双格式浏览器直连（第四十四轮起）——连接上的 format 字段分家：
+// chat＝对话补全 /chat/completions（默认，DeepSeek/GLM/中转等绝大多数兼容层都是它）；
+// responses＝OpenAI 官方新接口 /responses（gpt-5 系原生走的那个）。请求形状、流事件、
+// usage 字段名两格式各不同，差异全部收在本文件，上层调用方不感知
 // 注意：所选服务商需允许浏览器跨域（CORS）；不支持时优先换支持跨域的服务商/中转/本地网关
 import { settings } from "./settings.js";
 import { extractJson } from "./utils.js";
@@ -34,6 +37,64 @@ function thinkingOffParams(on) {
         reasoning_effort: 'none',
         chat_template_kwargs: { thinking: false },
     } : {};
+}
+
+// Responses 格式的「关闭思考」（第四十四轮）：chat 格式的方言全家桶（thinking/enable_thinking
+// 等）这格式一概不认，官方等价物＝reasoning.effort。OpenAI 不认 none、最低档 minimal
+// （o 系列只认 low 起——被点名报错会走下方报错梯子定向去除）；minimal 即「尽可能少想」，
+// 监听恒关思考在 Responses 格式下就是它
+function thinkingOffParamsResponses(on) {
+    return on ? { reasoning: { effort: 'minimal' } } : {};
+}
+
+// Responses 的 usage 字段名归一成 chat 口径（input/output_tokens → prompt/completion_tokens），
+// 上层账单对账（planner/监听/长线）全部只认 chat 口径、不改；中转若已按 chat 口径报则照单全收
+function normalizeUsage(u) {
+    if (!u || typeof u !== 'object') return null;
+    if (u.prompt_tokens != null || u.completion_tokens != null) return u;
+    if (u.input_tokens == null && u.output_tokens == null) return null;
+    return {
+        prompt_tokens: u.input_tokens ?? 0,
+        completion_tokens: u.output_tokens ?? 0,
+        total_tokens: u.total_tokens ?? (u.input_tokens ?? 0) + (u.output_tokens ?? 0),
+    };
+}
+
+// Responses 返回的正文拼装：output 数组里 type:message 的 output_text 段连起来是正文；
+// type:reasoning 的 summary 段是思考摘要——正文为空时兜底当思考正文用（与 pickContent
+// 的 reasoning_content 兜底同口径）；refusal 段（内容安全拒答）按正文带回，坏输出会经
+// 修复梯子上屏、不静默
+function responsesBodyText(data) {
+    let text = '';
+    let reasoning = '';
+    for (const item of Array.isArray(data?.output) ? data.output : []) {
+        if (item?.type === 'message') {
+            for (const part of Array.isArray(item.content) ? item.content : []) {
+                if (part?.type === 'output_text' && typeof part.text === 'string') text += part.text;
+                else if (part?.type === 'refusal' && typeof part.refusal === 'string') text += part.refusal;
+            }
+        } else if (item?.type === 'reasoning') {
+            for (const s of Array.isArray(item.summary) ? item.summary : []) {
+                if (typeof s?.text === 'string') reasoning += s.text;
+            }
+        }
+    }
+    return { text, reasoning };
+}
+
+// Responses 空正文报错：status/incomplete_details/usage 实报当证据（对应 chat 格式 pickContent
+// 的证据口径）——length 用尽（incomplete + max_output_tokens）与报错字段分开说
+function responsesEmptyError(data, rawText, usage) {
+    const status = data?.status ? String(data.status) : '（无）';
+    const detail = data?.incomplete_details?.reason ? `、incomplete_details=${data.incomplete_details.reason}` : '';
+    const tokens = usage ? `，输入实报 ${usage.prompt_tokens.toLocaleString()} + 输出实报 ${usage.completion_tokens.toLocaleString()} tokens` : '';
+    if (data?.error) {
+        throw new ApiError(`模型返回了空内容（Responses 带 error 字段：${JSON.stringify(data.error).slice(0, 200)}）`);
+    }
+    if (data?.status === 'incomplete' || data?.incomplete_details?.reason) {
+        throw new ApiError(`模型返回了空内容（Responses 返回 status=${status}${detail}${tokens}）。输出长度上限用完且正文一字未落：推理模型的思考计入「单次上限 tokens」——继续调大上限或换非推理模型`);
+    }
+    throw new ApiError(`模型返回了空内容（Responses 返回 status=${status}${detail}${tokens}，output 里没有正文段；返回前 150 字：${rawText.slice(0, 150)}）。把这段报错发维护者即可适配`);
 }
 
 // 取补全的最终文本，兼容三种正文形态：普通字符串 / 分段数组（content:[{type:'text'}]）/
@@ -108,9 +169,10 @@ class ThinkingHeaderError extends Error {
  * @param {(usage:object)=>void} [options.onUsage]     回传服务商实报 usage：非流式必有；
  *        流式时请求带 stream_options.include_usage、服务商在末包附上才回调（不附就不回调）
  * @param {boolean} [options.skipPresets]  true 时跳过全局预设注入（仅连通性测试用）
- * @param {{baseUrl:string,apiKey:string,model:string}} [options.provider]
+ * @param {{baseUrl:string,apiKey:string,model:string,format?:string}} [options.provider]
  *        独立连接覆盖（监听模型固定项用）：提供时地址/密钥/模型走这一套，
- *        不提供走当前主连接；温度等其余参数全局共用
+ *        不提供走当前主连接；温度等其余参数全局共用。format 跟着方案走
+ *        （'responses'＝Responses 接口，缺省 chat 对话补全——第四十四轮）
  * @param {boolean} [options.thinkingOff] 本次调用显式覆盖「关闭思考」（第十七轮分家）：
  *        true＝带关闭思考参数、false＝不带；缺省跟设置页总开关。监听侧恒传 true——
  *        监听每轮都跑、开了思考成本会爆炸；规划等生成侧继续跟总开关（要聪明自己开思考）
@@ -173,8 +235,9 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
     // 「关闭思考」解析（第十七轮分家）：调用方显式给（监听恒 true）优先，否则跟设置页总开关（生成侧）
     const thinkOff = thinkingOff ?? settings.api.thinkingOff;
     const conn = provider ?? settings.api;
+    const responses = conn.format === 'responses';
     requireConfig(conn);
-    const url = `${conn.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    const url = `${conn.baseUrl.replace(/\/+$/, '')}${responses ? '/responses' : '/chat/completions'}`;
     const stream = typeof onDelta === 'function';
     const sent0 = skipPresets ? messages : withGlobalPresets(messages);
 
@@ -186,9 +249,17 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
         },
         body: JSON.stringify({
             model: conn.model,
-            messages: sent0,
+            ...(responses
+                ? {
+                    input: sent0,   // 消息数组原样进 input（Responses 收 {role,content} 消息；system/assistant 都认）
+                    // Responses 的输出上限叫 max_output_tokens 且下限 16（连通性测试的 10 会被官方 400）
+                    max_output_tokens: Math.max(16, maxTokens ?? settings.api.maxTokens),
+                }
+                : {
+                    messages: sent0,
+                    max_tokens: maxTokens ?? settings.api.maxTokens,
+                }),
             temperature: temperature ?? settings.api.temperature,
-            max_tokens: maxTokens ?? settings.api.maxTokens,
             stream,
             ...extra,
         }),
@@ -198,14 +269,15 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
     let res;
     let lastErrText = '';
     try {
-        // 附加参数两来源：关闭思考全家（设置开关）＋流式对账 stream_options。端点不认时按
+        // 附加参数两来源：关闭思考（按格式走各自的方言集）＋流式对账 stream_options（chat 格式专用；
+        // Responses 的 usage 随 response.completed 事件必到、不需要这个参数）。端点不认时按
         // 重试梯子走：全量 → 去掉**报错点名**的参数 → 只留最通用的 thinking 一档 → 全去。
         // 失败的 400/422 请求不产 token，多试几次不花成本；把「只留 thinking」垫在「全去」
         // 之前＝deepseek/GLM 官方口径优先保住，全去是最后手段（那等于放任思考回来）。
         // 上限四发（第九轮放宽自三发）：deepseek 官方端点正是「严格点名陌生参数」型且倾向
         // 一次只点一个名——四家里的三家方言要三轮点名才去完，三发上限会在中途报错断掉
-        const streamOpt = stream && typeof onUsage === 'function' ? { stream_options: { include_usage: true } } : {};
-        let attempt = { ...thinkingOffParams(thinkOff), ...streamOpt };
+        const streamOpt = !responses && stream && typeof onUsage === 'function' ? { stream_options: { include_usage: true } } : {};
+        let attempt = { ...(responses ? thinkingOffParamsResponses(thinkOff) : thinkingOffParams(thinkOff)), ...streamOpt };
         let sent = attempt;
         // 报错点名参数的判定：长名先占位再查短名——报错文案写 enable_thinking 时，
         // 其子串 thinking 不能算 thinking 参数也被点了名（点名错人会误删好的参数）
@@ -236,7 +308,7 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
             }
         }
         if (res.ok && thinkOff
-            && !(sent.thinking || sent.enable_thinking === false || sent.reasoning_effort || sent.chat_template_kwargs)) {
+            && !(sent.thinking || sent.enable_thinking === false || sent.reasoning_effort || sent.chat_template_kwargs || sent.reasoning)) {
             toastr.warning('关闭思考的参数被这个端点拒绝、已全部去掉后重发——本次模型可能照常思考（生成任务在运行页看「思考」计数、可点「中断」止损）');
         }
     } catch (err) {
@@ -258,6 +330,16 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
         try { data = JSON.parse(rawText); } catch {
             throw new ApiError(`API 返回了 200 但内容不是 JSON（前 150 字）：${rawText.slice(0, 150)}`);
         }
+        if (responses) {
+            // Responses 非流式：error 字段直报；正文从 output 数组拼、usage 归一成 chat 口径再回传
+            if (data?.error) throw new ApiError(`API 报错：${JSON.stringify(data.error).slice(0, 300)}`, { status: res.status, body: rawText });
+            const usage = normalizeUsage(data?.usage);
+            if (usage && typeof onUsage === 'function') onUsage(usage);
+            const { text, reasoning } = responsesBodyText(data);
+            if (text.trim()) return text;
+            if (reasoning.trim()) return reasoning;
+            throw responsesEmptyError(data, rawText, usage);
+        }
         const choice = data?.choices?.[0];
         if (!choice?.message) throw new ApiError(`API 返回结构异常（缺少 choices[0].message；返回前 150 字）：${rawText.slice(0, 150)}`);
         if (typeof onUsage === 'function' && data?.usage) onUsage(data.usage);
@@ -274,11 +356,26 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
     let full = '';
     let reasoning = '';
     let usage = null;
+    let respDone = null;   // Responses：完成/未完事件留底（末尾无正文时按它报证据）
     let watchHeader = !tolerateThinkingHeader;   // 思考标头监视：第一发才看，重发的一发放行收完
     const streamT0 = Date.now();
     const finish = () => {
         if (usage && typeof onUsage === 'function') onUsage(usage);
         return full || reasoning;
+    };
+    // 正文增量收口（两格式共用）：累计＋思考标头监视＋onDelta 回调。
+    // 思考标头监视：首行流全即判定，命中就掐断流、抛给外层重试（见 chatCompletion）
+    const pushBody = async text => {
+        full += text;
+        if (watchHeader) {
+            const st = thinkingHeaderPrefixState(full);
+            if (st === 'yes') {
+                await reader.cancel().catch(() => {});
+                throw new ThinkingHeaderError();
+            }
+            if (st === 'no') watchHeader = false;   // 定了不是标头：后续增量不再逐块判定
+        }
+        onDelta(full);
     };
     try {
         while (true) {
@@ -294,36 +391,63 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
                 if (data === '[DONE]') return finish();
                 try {
                     const chunk = JSON.parse(data);
-                    if (chunk?.usage && (chunk.usage.prompt_tokens || chunk.usage.completion_tokens)) usage = chunk.usage;
-                    const delta = chunk?.choices?.[0]?.delta;
-                    if (typeof delta?.content === 'string' && delta.content) {
-                        full += delta.content;
-                        // 思考标头监视：首行流全即判定，命中就掐断流、抛给外层重试（见 chatCompletion）
-                        if (watchHeader) {
-                            const st = thinkingHeaderPrefixState(full);
-                            if (st === 'yes') {
-                                await reader.cancel().catch(() => {});
-                                throw new ThinkingHeaderError();
+                    if (responses) {
+                        // Responses 流事件：SSE 载荷自带 type 字段（event: 行不用看）——
+                        // 正文增量 / 思考摘要增量 / 完成包（usage 必随行）/ 失败与报错
+                        const t = chunk?.type;
+                        if (t === 'response.output_text.delta' && typeof chunk.delta === 'string' && chunk.delta) {
+                            await pushBody(chunk.delta);
+                        } else if (t === 'response.reasoning_summary_text.delta' && typeof chunk.delta === 'string' && chunk.delta) {
+                            reasoning += chunk.delta;
+                            if (typeof onReasoning === 'function') onReasoning(reasoning);
+                        } else if (t === 'response.completed' || t === 'response.incomplete') {
+                            const u = normalizeUsage(chunk?.response?.usage);
+                            if (u) usage = u;
+                            respDone = { type: t, response: chunk?.response };
+                            // 全程没收到正文增量、完成包里却带着正文的兜底（个别中转只发完成包）：拼出来补一次回调
+                            if (!full && !reasoning) {
+                                const b = responsesBodyText(chunk?.response);
+                                if (b.text || b.reasoning) {
+                                    full = b.text;
+                                    reasoning = b.reasoning;
+                                    if (full) onDelta(full);
+                                }
                             }
-                            if (st === 'no') watchHeader = false;   // 定了不是标头：后续增量不再逐块判定
+                        } else if (t === 'response.failed' || t === 'error') {
+                            const errObj = chunk?.response?.error ?? chunk?.error ?? chunk;
+                            throw new ApiError(`Responses 流式${t === 'error' ? '报错' : '失败'}：${JSON.stringify(errObj).slice(0, 300)}`);
                         }
-                        onDelta(full);
-                    } else if (delta && (delta.reasoning_content || delta.reasoning)) {
-                        reasoning += String(delta.reasoning_content ?? delta.reasoning ?? '');
-                        if (typeof onReasoning === 'function') onReasoning(reasoning);
+                    } else {
+                        if (chunk?.usage && (chunk.usage.prompt_tokens || chunk.usage.completion_tokens)) usage = chunk.usage;
+                        const delta = chunk?.choices?.[0]?.delta;
+                        if (typeof delta?.content === 'string' && delta.content) {
+                            await pushBody(delta.content);
+                        } else if (delta && (delta.reasoning_content || delta.reasoning)) {
+                            reasoning += String(delta.reasoning_content ?? delta.reasoning ?? '');
+                            if (typeof onReasoning === 'function') onReasoning(reasoning);
+                        }
                     }
                 } catch (err) {
-                    if (err instanceof ThinkingHeaderError) throw err;   // 心跳行兜底不吃思考标头掐断（2026-08-30 第十一轮测试台抓出的吞错）
+                    // 心跳行兜底不吃三类真错：思考标头掐断与 ApiError 必须往外走
+                    // （2026-08-30 第十一轮测试台抓出的吞错；第四十四轮补 ApiError——
+                    // Responses 的 failed/error 事件也在这个 try 里抛）
+                    if (err instanceof ThinkingHeaderError || err instanceof ApiError) throw err;
                     // 忽略无法解析的心跳/注释行
                 }
             }
         }
     } catch (err) {
-        if (err?.name === 'AbortError' || err instanceof ThinkingHeaderError) throw err;
+        if (err?.name === 'AbortError' || err instanceof ThinkingHeaderError || err instanceof ApiError) throw err;
         const sec = Math.round((Date.now() - streamT0) / 1000);
         throw new ApiError(`流式响应中断：等了 ${sec} 秒、已收 ${full.length} 字时连接被掐断（底层报错：${err?.message ?? err}）——多半是服务商中途断连或网关超时，重试通常可恢复`);
     }
-    return finish();   // 流没等到 [DONE] 就断了：按已收到的内容收尾
+    // 流没等到 [DONE] 就断了：按已收到的内容收尾。Responses 特例：收到「未完成」事件且全程
+    // 无正文＝上限耗尽一类，按证据报错而不是静默空串（chat 格式流式收不到这种信号、只能静默）
+    if (responses && !full && !reasoning && respDone?.type === 'response.incomplete') {
+        if (usage && typeof onUsage === 'function') onUsage(usage);   // 失败一发的实报先入账（与 chat 空正文报错的账单口径一致）
+        throw responsesEmptyError(respDone.response, JSON.stringify(respDone.response ?? {}), usage);
+    }
+    return finish();
 }
 
 // ---------------------------------------------------------------------------
