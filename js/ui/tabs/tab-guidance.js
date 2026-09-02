@@ -8,6 +8,8 @@
 // → ② 分析前确认（逐行核对插入的单元/玩法/联网搜索，点「开始分析」才真正调模型，自动进分析实时输出页）
 // → ③ 人工二检（OOC/剧情重复/文风重复/进度 + 规划文本：重新生成 / 确认采用 / 放弃保存）
 // 确认采用的规划存为「进行中剧情」（story.js，跟聊天数据走）并自动绑定一条剧情注入（换剧情自动换内容，完结自动撤下）；
+// 第三十九轮起确认采用同时把规划挂上监听页逐节点执勤（用户拍板「两边的桥直接打通」）——退位槽被占挂不上时
+// 采用不受影响、历史剧情区可补挂；「转为隐身注入」专职不需要节点判定的材料（随机事件/路人反应这类）。
 // 单元池不随采用清空，清理由各工具面板的一键清理键手动执行。
 // 向导进度留底 + 自由跳转（调试排版用）：进行中的向导状态实时快照存 chatdata 的 wizard 块
 // （按聊天身份走），刷新页面重开本页自动回到离开的那一步——已生成未处理的规划停在第 3 步等操作；
@@ -34,6 +36,8 @@ import { searchToolReady, withGlobalPresets } from "../../api.js";
 import { knowledgeLists, payloadFromIds, grabFromList, entryText, settleCooldown, knowledgeCfg, kbSendPayload, knowledgeUsedLabels } from "../../knowledge.js";
 import { resolveLorePicks } from "../../lorebook.js";
 import { unitsState, persistUnits, newEventUnit, newReactionUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, eventOriginText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
+import { opMountUnit, makeUnitFromStory, listenerCfg } from "../../listener.js";
+import { syncLfProgress } from "../../longform.js";
 
 // 向导状态机：'' 空闲 | collect ① | ready ② 分析前确认 | running 分析实时输出页（不占跳转条步骤）| result ③ | reviewing/report 检查报告
 let step = '';
@@ -801,6 +805,7 @@ function historyHtml(s) {
             <span class="pp-muted">${new Date(h.at).toLocaleString()}${h.event?.title ? ` · 事件：${escapeHtml(h.event.title)}${h.event.choice ? `（${escapeHtml(h.event.choice)}）` : ''}` : ''}${h.reportAt ? ' · 已检查' : ''}</span>
         </div>
         <div class="pp-item-ops">
+            <span class="menu_button" data-hmount="${h.id}" title="把这份规划挂上监听页逐节点执勤（确认采用时本来会自动挂——退位槽被占没挂上、或后来卸下了，从这里补挂/换挂）。当前挂着的单位会进退位槽、进度冻结；规划的各阶段行直接当节点">挂载</span>
             <span class="menu_button" data-hview="${h.id}">${viewHistId === h.id ? '收起' : '查看'}</span>
             ${h.id === s.activeId ? '' : `<span class="menu_button fa-solid fa-trash" data-hdel="${h.id}" title="删除该条归档"></span>`}
         </div>
@@ -822,6 +827,18 @@ function wireHistory(el, container) {
     el.querySelectorAll('[data-hview]').forEach(b => b.addEventListener('click', () => {
         viewHistId = viewHistId === b.dataset.hview ? null : b.dataset.hview;
         renderStoryBar(container);
+    }));
+    // 历史剧情补挂（第三十九轮）：监听页手动挂载区已撤，这里是规划挂监听的唯一手动出口
+    el.querySelectorAll('[data-hmount]').forEach(b => b.addEventListener('click', () => {
+        const entry = (storyState().history ?? []).find(h => h.id === b.dataset.hmount);
+        const unit = entry ? makeUnitFromStory(entry) : null;
+        if (!unit) { toastr.warning('这份规划的文本是空的'); return; }
+        const r = opMountUnit(unit);
+        if (r.ok) {
+            syncLfProgress();
+            toastr.success(`已挂载「${unit.title}」：${unit.nodes.length} 个节点（各阶段直接当节点，完成标准＝该阶段安排实际发生）`);
+        }
+        else toastr.warning(r.reason);
     }));
     el.querySelectorAll('[data-hdel]').forEach(b => b.addEventListener('click', () => {
         deleteStory(b.dataset.hdel);
@@ -2313,9 +2330,9 @@ function renderResult(container, main) {
             <label id="pp_gd_inj_layers_wrap" hidden>层数 <input type="number" class="text_pole" id="pp_gd_inj_layers" min="1" step="1" /></label>
         </div>
         <div class="pp-btn-row">
-            <span id="pp_gd_adopt" class="menu_button">确认采用</span>
+            <span id="pp_gd_adopt" class="menu_button" title="一步做完三件事：存为进行中剧情＋自动注入给扮演模型＋挂上监听页逐节点执勤（规划的各阶段行直接当节点）。原挂着的单位会进退位槽、进度冻结；退位槽也占着时会挂不上——到监听页处理后，在「历史剧情」里点这份规划的「挂载」补挂">确认采用</span>
             <span id="pp_gd_revise" class="menu_button" title="按上面的修改意见把规划重写一版（材料与第 1 步勾选不变）">重新生成</span>
-            <span id="pp_gd_inject" class="menu_button" title="把上面这份规划文本直接注入主对话（模型可见、聊天界面不显示），按上面的深度/角色/过期生效、到期自动撤下。与「确认采用」的区别：采用是把规划存为「进行中剧情」档案——后续规划与检查都以它为基准，并自动绑定剧情注入（完结才撤下）；转注入不进档案，只是把这份文本临时塞给主对话模型">转为隐身注入</span>
+            <span id="pp_gd_inject" class="menu_button" title="把上面这份规划文本直接注入主对话（模型可见、聊天界面不显示），按上面的深度/角色/过期生效、到期自动撤下。与「确认采用」的区别：采用＝存档＋注入＋挂上监听盯节点；转注入不进档案、不挂监听——专门给不需要节点判定的材料用（随机事件、路人反应这类塞给模型就完事的）">转为隐身注入</span>
             <span id="pp_gd_discard" class="menu_button" title="丢弃本次生成（构思与第 1 步材料保留：知识库抓到的条目、勾选、采用方式都在，可直接再次开始分析；冷却只在确认采用时才记，放弃不冷却）">放弃保存</span>
         </div>
     </div>`;
@@ -2378,14 +2395,25 @@ function renderResult(container, main) {
         }
         settleKbCharge();   // 规划正式上场：知识库用后账在这结算（草稿阶段一直没动冷却）
         clearDraftSkeletons();   // 第七轮防复刻：草稿上场成为正式剧情，骨架清单功成身退
-        confirmPlot({
+        const entry = confirmPlot({
             planText: run.planText,
             summary: run.result?.plan?.summary ?? '',
             note: run.note,
             event: adoptedEventMeta(),
         });
         syncStoryInjection(run.planText, run.result?.plan?.summary ?? '');
-        toastr.success('已存为进行中剧情并自动注入（原剧情自动归档，可在历史回看）');
+        // 第三十九轮（用户拍板「两边的桥直接打通」）：确认采用即挂上监听——规划作为单位进监听槽、
+        // 各阶段行直接当节点逐轮判定。挂载规则不放松：退位槽被占会挂不上，此时采用本身不受影响
+        // （存档＋注入照做），提示去监听页处理退位槽后到「历史剧情」补挂
+        const mr = opMountUnit(makeUnitFromStory(entry));
+        if (mr.ok) {
+            syncLfProgress();   // 监听槽一动对一次长线账本（R31 对账制；顶下的若是长线章，执行位跟着对）
+            toastr.success('已存为进行中剧情、自动注入，并挂上监听逐节点执勤（原挂载单位进退位槽、进度冻结；原剧情自动归档，可在历史回看）');
+            if (!listenerCfg().enabled) toastr.info('监听总开关当前是关的：单位已挂上，到监听页（或设置页）开总开关后才开始逐轮判定');
+        }
+        else {
+            toastr.warning(`已存为进行中剧情并注入，但监听没挂上：${mr.reason}——到监听页「接回/丢弃」退位槽里的单位后，在下方「历史剧情」里点这份规划的「挂载」补挂`);
+        }
         step = '';
         // 第 1 步勾选存在对话记忆里，下一轮进第 1 步自动恢复，这里照常清工作副本。
         // 单元池不随采用清空（DESIGN §2.5）：清理由各工具面板的一键清理键手动执行

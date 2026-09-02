@@ -3,7 +3,6 @@
 // 本页签挂着的时候就地刷新（不在 DOM 里的事件直接丢弃，下次激活重渲染）。
 import { settings, save } from "../../settings.js";
 import { escapeHtml, clamp } from "../../utils.js";
-import { storyState } from "../../story.js";
 import { resolveLorePicks } from "../../lorebook.js";
 import { memoryState } from "../../memoryTable.js";   // 判定材料区的记忆挑选器（第三十七轮）：读镜像表与标签
 // 监听槽一动就对一次长线账本（listener.js 不能反向引 longform.js——longform 已经引了监听，只能在界面层搭桥）
@@ -11,8 +10,7 @@ import { syncLfProgress, scheduleReentryFor } from "../../longform.js";
 import {
     listenerState, listenerCfg, listenerProvider, listenerModeLabel, persistListener,
     runListenerRound, resumeListener, setListenerEnabled, manualLitCurrentNode,
-    opMountUnit, opUnmountUnit, opRecallSidelined, opDiscardSidelined,
-    makeUnitFromText, makeUnitFromStory, lastListenerPrompt,
+    opUnmountUnit, opRecallSidelined, opDiscardSidelined, lastListenerPrompt,
 } from "../../listener.js";
 
 let traceWinOpen = false;   // 留痕悬浮窗开着（跨页签会话记忆）
@@ -171,7 +169,7 @@ function renderTab(container) {
         </div>
     </div>` : `
     <div class="pp-section">
-        <div class="pp-muted">当前没有挂载单位——轻量执勤中（OOC / 剧情重复 / 文风重复三项检查）。要按规划逐节点推进，从下面挂载一个单位。</div>
+        <div class="pp-muted">当前没有挂载单位——轻量执勤中（OOC / 剧情重复 / 文风重复三项检查）。要按规划逐节点推进：剧情指导页「确认采用」会自动挂载（历史剧情里也可手动补挂）；长线章在长线页章卡上挂。</div>
     </div>`}
 
     ${/* 退位槽行独立于单位块（第三十一轮）：卸下后没有活动单位时「接回/丢弃」也得够得着，别跟着单位卡一起消失 */ ''}
@@ -249,30 +247,6 @@ function renderTab(container) {
     </div>
 
     <div class="pp-section">
-        <b>挂载单位</b>
-        <div class="pp-ls-mount">
-            <div class="pp-ls-mount-col">
-                <span class="pp-ls-mount-title" title="把一份带完成标准的规划文本挂进单位槽；先做成单节点（整个文本一块判），2.0 管线产物会自带节点表">手动导入</span>
-                <input id="pp_ls_m_title" class="text_pole textarea_compact" type="text" placeholder="单位标题（可留空）" />
-                <textarea id="pp_ls_m_text" class="text_pole textarea_compact" rows="4" placeholder="粘贴单位全文（规划文本／指导材料）"></textarea>
-                <div><span id="pp_ls_mount_manual" class="menu_button">挂载</span></div>
-            </div>
-            <div class="pp-ls-mount-col">
-                <span class="pp-ls-mount-title" title="1.0 剧情规划产物视为同等的最小剧情单位：规划的各阶段行直接当节点（完成标准＝该阶段安排实际发生）；只读取规划，不改 1.0 本身">从 1.0 剧情规划导入</span>
-                ${(() => {
-                    const s = storyState();
-                    const list = s.history ?? [];
-                    if (!list.length) return '<div class="pp-muted">当前聊天还没有剧情档案（在剧情指导页「确认采用」后才有）</div>';
-                    return `<select id="pp_ls_m_story" class="text_pole">
-                        ${list.map(h => `<option value="${escapeHtml(h.id)}">${escapeHtml(clamp(h.summary || h.note || '未命名规划', 40))}${h.id === s.activeId ? '（进行中）' : ''}</option>`).join('')}
-                    </select>
-                    <div><span id="pp_ls_mount_story" class="menu_button">挂载</span></div>`;
-                })()}
-            </div>
-        </div>
-    </div>
-
-    <div class="pp-section">
         <div class="pp-ls-tracebar">
             <span id="pp_ls_trace_btn" class="menu_button" title="滚动查看逐轮判定记录：判定三态、楼层作证、watch 标记、指导或静默原因">留痕记录 <span class="pp-ls-count">${state.trace.length}</span></span>
             <span id="pp_ls_prompt" class="menu_button" title="查看最近一次判定（例行轮或回归判定）实际发给监听模型的提示词全文——只保留最近一次、刷新页面后清空（全文随楼层膨胀，不进聊天存档）">看提示词全文</span>
@@ -342,7 +316,7 @@ function bindTab(container) {
             }
             else toastr.warning(r.reason);
         } else {
-            toastr.info('退位槽是空的：到下方「挂载单位」导入下一个（手动导入 / 1.0 剧情规划导入）');
+            toastr.info('退位槽是空的：新规划在剧情指导页「确认采用」时自动挂载（历史剧情里也可手动补挂）；长线章在长线页章卡上挂');
         }
     });
 
@@ -384,25 +358,6 @@ function bindTab(container) {
     container.querySelector('#pp_ls_stuckw')?.addEventListener('change', e => {
         listenerCfg().stuckWindow = Math.min(20, Math.max(2, Number(e.target.value) || 3));
         save();
-    });
-
-    container.querySelector('#pp_ls_mount_manual')?.addEventListener('click', () => {
-        const title = String(container.querySelector('#pp_ls_m_title')?.value ?? '').trim();
-        const text = String(container.querySelector('#pp_ls_m_text')?.value ?? '').trim();
-        if (!text) { toastr.warning('单位内容为空'); return; }
-        const r = opMountUnit(makeUnitFromText(title, text));
-        if (r.ok) { syncLfProgress(); renderTab(container); toastr.success('单位已挂载（单节点：整个文本一块判）'); }
-        else toastr.warning(r.reason);
-    });
-
-    container.querySelector('#pp_ls_mount_story')?.addEventListener('click', () => {
-        const id = container.querySelector('#pp_ls_m_story')?.value;
-        const entry = (storyState().history ?? []).find(h => h.id === id);
-        const unit = entry ? makeUnitFromStory(entry) : null;
-        if (!unit) { toastr.warning('这份规划是空的'); return; }
-        const r = opMountUnit(unit);
-        if (r.ok) { syncLfProgress(); renderTab(container); toastr.success(`已挂载「${unit.title}」：${unit.nodes.length} 个节点（各阶段直接当节点，完成标准＝该阶段安排实际发生）`); }
-        else toastr.warning(r.reason);
     });
 
     container.querySelector('#pp_ls_trace_btn')?.addEventListener('click', () => {
