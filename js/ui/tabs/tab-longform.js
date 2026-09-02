@@ -298,7 +298,7 @@ function materialsHtml(st) {
     const gpItems = (settings.storageItems ?? []).filter(i => i.enabled);
     const gpSel = new Set(m.gpIds ?? storageItemsInEffect().map(i => i.id));
     const gpHit = new Set(storageItemsInEffect().map(i => i.id));
-    const kbLists = knowledgeLists();
+    const kbLists = knowledgeLists().filter(l => !l.outfit);   // 装扮清单不进长线材料（2026-09-02：只喂装扮面板）
     const loreN = resolveLorePicks(m.lorePicks).length;
     const inner = `
         <label class="pp-label" title="勾上＝全部记忆表格的全部行随材料发送（长线不看标签、不分档位——要的就是全量）；不勾＝记忆表格整节不带">记忆表格</label>

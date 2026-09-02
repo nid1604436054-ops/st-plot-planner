@@ -19,7 +19,9 @@ import { newId } from "./settings.js";
 import { composeReactionText } from "./reactions.js";
 
 export const MAX_UNITS_PER_TOOL = 3;
-const TOOL_IDS = new Set(['event', 'reaction']);
+// 2026-09-02 起「装扮」是第三个工具（outfit）：产物同样是单元（多角色拼成一个），确认立卡后
+// 除入池参与规划外还成为「当前装扮」走独立注入通道（outfit.js）——池与徽章规则与另两工具同机
+const TOOL_IDS = new Set(['event', 'reaction', 'outfit']);
 
 // 存档读回清洗：badges 只认两工具 id、去重、≤2、末位必须是当前工具（乱了重置为出生标）；
 // 其余字段收敛到合法类型。形状不对的条目整体丢弃
@@ -53,6 +55,7 @@ export function unitsState() {
         version: 1,
         eventUnits: [],
         reactionUnits: [],
+        outfitUnits: [],   // 装扮单元池（2026-09-02，与另两工具同机 ≤3）
         eventDraft: null,
         reactionDraft: null,
         eventNote: '',
@@ -62,6 +65,8 @@ export function unitsState() {
         .map(u => stripLegacyPreview(normalizeUnit(u, 'event'))).filter(Boolean).slice(0, MAX_UNITS_PER_TOOL);
     state.reactionUnits = (Array.isArray(state.reactionUnits) ? state.reactionUnits : [])
         .map(u => normalizeUnit(u, 'reaction')).filter(Boolean).slice(0, MAX_UNITS_PER_TOOL);
+    state.outfitUnits = (Array.isArray(state.outfitUnits) ? state.outfitUnits : [])
+        .map(u => normalizeUnit(u, 'outfit')).filter(Boolean).slice(0, MAX_UNITS_PER_TOOL);
     // 两工具的生成草稿（先出草稿，点「立为单元」才入池）；再生成会整体换掉
     state.eventDraft = state.eventDraft && typeof state.eventDraft === 'object'
         ? normalizeUnit(state.eventDraft, 'event') : null;
@@ -188,7 +193,7 @@ export function newReactionUnit(card, sourceUnit = null, inPlan = false) {
 export function addUnit(unit) {
     if (!unit) return false;
     const st = unitsState();
-    const key = unit.tool === 'event' ? 'eventUnits' : 'reactionUnits';
+    const key = unit.tool === 'event' ? 'eventUnits' : unit.tool === 'outfit' ? 'outfitUnits' : 'reactionUnits';
     if (st[key].length >= MAX_UNITS_PER_TOOL) return false;
     st[key].unshift(unit);
     persistUnits();
@@ -199,14 +204,44 @@ export function removeUnit(id) {
     const st = unitsState();
     st.eventUnits = st.eventUnits.filter(u => u.id !== id);
     st.reactionUnits = st.reactionUnits.filter(u => u.id !== id);
+    st.outfitUnits = st.outfitUnits.filter(u => u.id !== id);
     persistUnits();
 }
 
-// 一键清理只清指定工具名下的暂存（另一工具的单元不受影响）
+// 一键清理只清指定工具名下的暂存（其他工具的单元不受影响）
 export function clearUnits(tool) {
     const st = unitsState();
     if (tool === 'event') st.eventUnits = [];
     else if (tool === 'reaction') st.reactionUnits = [];
+    else if (tool === 'outfit') st.outfitUnits = [];
     else return;
     persistUnits();
+}
+
+// 装扮单元出厂（2026-09-02）：characters = [{ name, text }]（每角色一段装扮描写，纯抽取时
+// text＝勾选条目原文拼接、模型生成时＝轻量选择写的状态句）。多角色拼成一个单元（用户拍板）。
+// 立卡后由 outfit.js 设为「当前装扮」开始注入；正文按角色分段、开头带角色名
+export function newOutfitUnit(characters = [], title = '') {
+    const chars = (characters ?? []).filter(c => c && String(c.name ?? '').trim());
+    const names = chars.map(c => String(c.name).trim());
+    const unit = normalizeUnit({
+        id: newId('unit-'),
+        tool: 'outfit',
+        badges: ['outfit'],
+        title: String(title ?? '').slice(0, 60) || (names.length ? `装扮·${names.join('、')}` : '装扮'),
+        text: '',
+        payload: {
+            characters: chars.map(c => ({ name: String(c.name).trim(), text: String(c.text ?? '').trim() })),
+        },
+        at: Date.now(),
+        inPlan: false,
+    }, 'outfit');
+    unit.text = outfitUnitText(unit);
+    return unit;
+}
+
+// 装扮单元材料正文：每角色「角色名：描写」一段；拼给规划（插入单元）与注入（快照）共用
+export function outfitUnitText(u) {
+    const chars = Array.isArray(u?.payload?.characters) ? u.payload.characters : [];
+    return chars.map(c => `【${String(c.name ?? '').trim() || '角色'}】\n${String(c.text ?? '').trim()}`).join('\n\n');
 }

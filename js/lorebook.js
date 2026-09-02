@@ -4,11 +4,20 @@
 import { settings, newId } from "./settings.js";
 
 // 数据结构：
-// Lorebook  { id, name, enabled, source, entries: LoreEntry[] }
+// Lorebook  { id, name, enabled, source, kind, entries: LoreEntry[] }
 // LoreEntry { uid, comment, keys[], content, disabled, constant }
 // （tags 字段在历史数据里可能还在，标签筛选功能已下线，不再参与任何检索）
+// kind = 书类型（2026-09-02 动作指导书路线）：缺省/'normal' 普通世界书 | 'action' 动作指导书——
+// 被动标签，条目收录规则完全不变（启用书单＋关键词/常驻照旧）；区别只在条目进剧情规划向导的
+// 材料时，规划提示词额外加「动作参考」段（动作写法照条目、关键动作与节点挂钩）。长线不接。
 // 命中规则：所在书被启用（或在本对话的启用书单里），条目已启用，且
 // （勾了常驻，或任一关键词出现在扫描文本里，大小写不敏感）
+
+export function setBookKind(id, kind) {
+    const book = settings.lorebooks.find(b => b.id === id);
+    if (!book) return;
+    book.kind = kind === 'action' ? 'action' : 'normal';
+}
 
 export function normalizeEntry(raw = {}, index = 0) {
     return {
@@ -23,7 +32,7 @@ export function normalizeEntry(raw = {}, index = 0) {
 
 // 导入酒馆原生世界书 JSON（entries 为对象或数组均可）。
 // 取标题 / 关键词 / 内容 / 原禁用与常驻状态，次要关键词 / 正则等其余格式信息丢弃
-export function importSillyTavernJson(text, name) {
+export function importSillyTavernJson(text, name, kind = 'normal') {
     const data = JSON.parse(text);
     const rawEntries = data.entries ?? data;
     const entries = Object.values(rawEntries ?? {}).map((e, i) => normalizeEntry(e, i));
@@ -32,20 +41,22 @@ export function importSillyTavernJson(text, name) {
     }
     return {
         id: newId('lb-'),
-        name: name || data.name || '导入的世界书',
+        name: name || '导入的世界书',
         enabled: true,
         source: 'st-json',
+        ...(kind === 'action' ? { kind: 'action' } : {}),
         entries,
     };
 }
 
 // 纯文本：一次粘贴的整块就是一条条目，不做任何切块解析
-export function createTextBook(name, keys = [], content = '') {
+export function createTextBook(name, keys = [], content = '', kind = 'normal') {
     return {
         id: newId('lb-'),
         name: name || '导入的文本世界书',
         enabled: true,
         source: 'plain-text',
+        ...(kind === 'action' ? { kind: 'action' } : {}),
         entries: [{
             uid: 0,
             comment: name || '条目 1',
@@ -210,7 +221,9 @@ export function scanLorebooks(scanText, { maxEntries, maxChars, enabledIds, excl
             if (content.length > budget) content = `${content.slice(0, budget)}…`;
             used += content.length;
         }
-        included.push({ bookName: book.name, comment: entry.comment, content, constant: Boolean(entry.constant) });
+        // bookId/action（2026-09-02 动作指导书）：命中对象带上出处书与类型标记——拼装文本
+        // （buildLoreContext）不读它们，规划侧据此决定要不要加「动作参考」段
+        included.push({ bookName: book.name, comment: entry.comment, content, constant: Boolean(entry.constant), bookId: book.id, action: book.kind === 'action' });
         return true;
     };
     for (const h of constants) {

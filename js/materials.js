@@ -106,5 +106,7 @@ export function materialSections({ memoryTags = null, memorySheets = null, memor
         '## 最近对话记录',
         formatChatLog(chatList),
     ];
-    return { parts, hits };
+    // picks（2026-09-02 动作指导书）：把自选条目的解析结果一并带回——规划侧据此判断材料里
+    // 有没有出自「动作指导书」的条目（检索命中自带 action 标记，自选走 book.kind）
+    return { parts, hits, picks };
 }

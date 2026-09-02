@@ -678,6 +678,9 @@ export function applyUnitOutcome(state, report, meta) {
         at: meta.at,
         round: meta.round,
         mode: 'unit',
+        // 来源标签（2026-09-02 留痕三来源）：挂载的是长线章＝长线剧情；1.0 规划/手动＝普通剧情规划。
+        // 轻量轮（applyLightOutcome）不带标签——没有挂规划时的例行检查不属于三来源
+        src: state.unit?.source === 'longform' ? 'longform' : 'plan',
         floors: meta.floorCount,
         ok: true,
         judgment: report.judgment,
@@ -750,6 +753,7 @@ export function applyReentryOutcome(state, report, meta) {
         at: meta.at,
         round: state.round,          // 信息性显示：回归判定不是楼层轮，不推进轮次计数
         mode: 'reentry',
+        src: 'longform',             // 回归判定只发生在长线章重挂（2026-09-02 留痕来源标签）
         ok: true,
         reentry: {
             window: meta.windowLabel,
@@ -783,6 +787,7 @@ export function applyFailure(state, meta) {
         at: meta.at,
         round: meta.round,
         mode: meta.mode,
+        src: meta.src ?? null,   // 失败轮的来源标签随它本该成功的轮（2026-09-02）
         floors: meta.floorCount,
         ok: false,
         error: String(meta.error ?? '').slice(0, 400),
@@ -796,6 +801,16 @@ export function applyFailure(state, meta) {
         pausedNow = true;
     }
     return { rec, pausedNow };
+}
+
+// 外部写入留痕的统一出口（2026-09-02 换装留痕走它）：unshift＋滚动封顶＋落盘。
+// 换装的留痕与判定轮共用同一个滚动池（traceRounds 管）、同一张留痕面板
+export function pushTraceRecord(rec) {
+    const state = listenerState();
+    state.trace.unshift(rec);
+    const capped = Math.max(1, Math.floor(Number(listenerCfg().traceRounds) || 50));
+    if (state.trace.length > capped) state.trace.length = capped;
+    persistListener();
 }
 
 // ---------------------------------------------------------------------------
@@ -958,6 +973,7 @@ export async function runListenerRound({ manual = false } = {}) {
 
     const mode = modeOf(state);
     const roundOwnerId = state.unit?.id ?? null;   // 本轮的主人：判完时单位槽若已换人（挂/卸/接回），产物整体作废
+    const roundSrc = mode === 'unit' ? (state.unit?.source === 'longform' ? 'longform' : 'plan') : null;   // 失败留痕的来源标签（2026-09-02）
     const floorSig = floorsSignature(chat);
     const allFloors = collectFloorsFromChat(chat);
     const floors = limitFloors(allFloors, Number(state.matRoutine.floors) || 0);   // 日常监听材料单（第三十七轮）：成功与失败留痕同一个口径
@@ -1057,7 +1073,7 @@ export async function runListenerRound({ manual = false } = {}) {
             return { ok: false, voided: true };
         }
         const { rec, pausedNow } = applyFailure(state, {
-            round, at, mode,
+            round, at, mode, src: roundSrc,
             floorCount: floors.filter(f => !f.isUser).length,
             error: err?.message ?? String(err),
         });
@@ -1163,7 +1179,7 @@ export async function runReentryRound({ window: win, unitId } = {}) {
             return { ok: false, voided: true };
         }
         const msg = String(err?.message ?? err).slice(0, 400);
-        state.trace.unshift({ at: Date.now(), round: state.round, mode: 'reentry', ok: false, error: msg });
+        state.trace.unshift({ at: Date.now(), round: state.round, mode: 'reentry', src: 'longform', ok: false, error: msg });
         state.dot = true;
         state.dotReason = `回归判定失败：${msg.slice(0, 120)}`;
         persistListener();

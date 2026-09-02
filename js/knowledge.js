@@ -13,6 +13,7 @@
 // 注入」时，草稿放弃/重写不碰冷却），防「模型从小把里连挑最熟那条」。冷却可手动清零。
 import { chatCompletion, parseModelJson } from "./api.js";
 import { settings, save, newId } from "./settings.js";
+import { getTavernContext } from "./context.js";
 
 // 配置兜底（ensureDefaults 已建好；这里再防一次形状伤——导入旧备份可能带残缺结构）
 export function knowledgeCfg() {
@@ -81,6 +82,84 @@ export function renameList(id, name) {
 export function deleteList(id) {
     const cfg = knowledgeCfg();
     cfg.lists = cfg.lists.filter(l => l.id !== id);
+    save();
+}
+
+// ---------------------------------------------------------------------------
+// 装扮用途（2026-09-02 装扮功能，DESIGN §6.9 修订）：清单可打「装扮」标记——标记清单只喂
+// 装扮流程（剧情指导页第 1 步「装扮」悬浮面板的抓取与轻量选择），不出现在向导第 1 步与
+// 长线页的知识库勾选里、不进冷却账（它们从不进规划发送集，冷却自然不结算）。
+// 标记清单再分两态（绑定⇄衣库，左右按键不是打钩）：
+//   衣库（bind 为空）＝全局，跟随到所有聊天；
+//   绑定（bind = { chatId, picks: [世界书键], providerId }）＝只与当前聊天走：绑定时选
+//   世界书条目（角色/衣柜设定，轻量选择的对照材料）与处理模型；其他聊天里整张清单不出现
+//   （知识库页只在一个「绑定在其他聊天」收纳区里可见、可转回衣库——绑定的聊天被删了也走这里救）
+// ---------------------------------------------------------------------------
+
+export function isOutfitList(list) {
+    return Boolean(list?.outfit);
+}
+
+// 这张清单在当前聊天可见吗：非装扮清单恒可见；衣库全局可见；绑定清单只在它绑的聊天里可见
+export function listVisibleInChat(list) {
+    if (!isOutfitList(list)) return true;
+    const b = list.bind;
+    if (!b || typeof b !== 'object') return true;
+    return String(b.chatId ?? '') === String(getTavernContext().chatId ?? '');
+}
+
+// 当前聊天可用的装扮清单（装扮面板的下拉源）；绑定其他聊天的不在其中
+export function outfitListsForChat() {
+    return knowledgeLists().filter(l => isOutfitList(l) && listVisibleInChat(l));
+}
+
+// 绑定在其他聊天的装扮清单（知识库页收纳区显示；含绑定聊天已删的孤儿——从这里一键转回衣库）
+export function outfitListsBoundElsewhere() {
+    return knowledgeLists().filter(l => {
+        if (!isOutfitList(l)) return false;
+        const b = l.bind;
+        return b && typeof b === 'object' && String(b.chatId ?? '') !== String(getTavernContext().chatId ?? '');
+    });
+}
+
+// 装扮标记开关：关掉标记时绑定下岗进暂存（再开标记绑定时恢复，不清丢）
+export function setListOutfit(id, on) {
+    const list = findList(id);
+    if (!list) return;
+    if (on) list.outfit = true;
+    else {
+        delete list.outfit;
+        if (list.bind) { list.bindStash = list.bind; delete list.bind; }
+    }
+    save();
+}
+
+// 绑定⇄衣库：bind = null 转衣库（全局）；传对象（或 true）＝绑到当前聊天。来回切换不丢配置——
+// 转衣库前把 bind 暂存到 bindStash，再绑定时从暂存恢复勾选与模型（未暂存过则从空开始）
+export function setListBind(id, bind) {
+    const list = findList(id);
+    if (!list || !isOutfitList(list)) return;
+    if (bind) {
+        const stash = list.bind ?? list.bindStash ?? null;
+        list.bind = {
+            chatId: String(getTavernContext().chatId ?? ''),
+            picks: Array.isArray(bind.picks) ? bind.picks.map(String) : (stash?.picks ?? []),
+            providerId: bind.providerId !== undefined ? String(bind.providerId) : String(stash?.providerId ?? ''),
+        };
+        list.bindStash = null;   // 已上岗，暂存清掉
+    } else {
+        list.bindStash = list.bind;   // 暂存：再切回绑定时勾选与模型还在
+        delete list.bind;
+    }
+    save();
+}
+
+// 更新绑定清单的世界书勾选 / 处理模型（绑定面板就地保存用）
+export function updateListBind(id, { picks, providerId } = {}) {
+    const list = findList(id);
+    if (!list || !isOutfitList(list) || !list.bind) return;
+    if (Array.isArray(picks)) list.bind.picks = picks.map(String);
+    if (providerId !== undefined) list.bind.providerId = String(providerId ?? '');
     save();
 }
 

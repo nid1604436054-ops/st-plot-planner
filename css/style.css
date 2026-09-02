@@ -1919,3 +1919,30 @@
 }
 
 
+
+/* ============ 装扮（2026-09-02）============ */
+
+/* 留痕来源标签（三来源共用滚动池）：挂 body 的留痕悬浮窗（.pp-ls-float）在双作用域之外，样式自带作用域 */
+.pp-ls-float .pp-ls-srclabel {
+    display: inline-block;
+    padding: 0 6px;
+    border-radius: 8px;
+    font-size: 0.75em;
+    border: 1px solid currentColor;
+    opacity: 0.85;
+    white-space: nowrap;
+    margin-left: 4px;
+}
+
+.pp-ls-float .pp-ls-srclabel-longform { color: #7fa8d9; }
+.pp-ls-float .pp-ls-srclabel-outfit { color: #c79ad6; }
+.pp-ls-float .pp-ls-srclabel-plan { color: #9bb8a4; }
+
+/* 装扮面板（.pp-viewer 悬浮查看器里）的角色行容器 */
+.pp-viewer .pp-ot-rowbox {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 0 4px;
+    border-bottom: 1px dashed var(--SmartThemeBorderColor, #666);
+}

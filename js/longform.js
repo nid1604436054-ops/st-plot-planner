@@ -256,7 +256,7 @@ function lfKbPayload(kbListIds) {
     const checked = new Set(kbListIds);
     const ids = [];
     for (const list of knowledgeLists()) {
-        if (!checked.has(list.id)) continue;
+        if (!checked.has(list.id) || list.outfit) continue;   // 装扮清单不进长线（2026-09-02）：按打标记前的旧勾选兜底过滤
         for (const e of list.entries) {
             if (Number(e.cooldown) > 0) continue;
             ids.push(e.id);

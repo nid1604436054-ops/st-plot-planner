@@ -12,10 +12,13 @@ import {
     runListenerRound, resumeListener, setListenerEnabled, manualLitCurrentNode,
     opUnmountUnit, opRecallSidelined, opDiscardSidelined, lastListenerPrompt,
 } from "../../listener.js";
+import { outfitState, outfitRemaining, setOutfitMode, setOutfitFloors, withdrawOutfit } from "../../outfit.js";
 
 let traceWinOpen = false;   // 留痕悬浮窗开着（跨页签会话记忆）
 
 const SOURCE_BADGE = { manual: '手动导入', plan10: '剧情规划导入', longform: '长线章' };
+// 留痕来源标签（2026-09-02 三来源）：换装记录来自 outfit.js；判定轮的标签在 listener.js 落账时写
+const TRACE_SRC_LABEL = { plan: '普通剧情规划', longform: '长线剧情', outfit: '换装' };
 
 // 回归判定的偏离三档（第三十三轮）：措辞给用户看，不照搬模型内部词
 const DEV_LABEL = { on_track: '没偏——剧情仍在规划轨迹上', minor: '偏了，但能自然拉回', major: '⚠ 偏大了——继续演会损坏后续章节的安排' };
@@ -44,9 +47,11 @@ function fmtTime(at) {
     return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// 最新一条留痕记录（指导区与问题区都从它读）
+// 最新一条判定留痕记录（指导区与问题区都从它读）——换装记录（mode=outfit）不是判定轮，
+// 指导区不该拿它当「本轮」显示，跳过取第一条判定记录
 function lastTrace(state) {
-    return Array.isArray(state.trace) ? state.trace[0] ?? null : null;
+    if (!Array.isArray(state.trace)) return null;
+    return state.trace.find(r => r?.mode !== 'outfit') ?? null;
 }
 
 // 三项小结一行（页内静默轮/留痕共用口径）：无发现的项亮「无」、有发现的写实际发现
@@ -216,6 +221,10 @@ function renderTab(container) {
         <div class="pp-muted">${rec ? '最近一轮失败，注入槽已清空（绝不复用过期指导）' : '还没有判定记录'}</div>`}
     </div>
 
+    ${/* 装扮注入区（2026-09-02）：当前装扮的注入设置——两框互斥联动（勾一个灰另一个）、层数随角色楼
+        自动递减可直接改数、走完自动清框停注（两框都灰＝停注）；「撤下」进留痕。与监听总开关无关 */ ''}
+    ${outfitZoneHtml()}
+
     <div class="pp-section">
         <b>旋钮</b>
         <div class="pp-ls-knobs">
@@ -366,6 +375,73 @@ function bindTab(container) {
     });
 
     bindMatZone(container);
+    bindOutfitZone(container);
+}
+
+// ---------------------------------------------------------------------------
+// 装扮注入区（2026-09-02）：当前装扮（outfit 块的 active）的注入设置。用户设计的两框互斥联动——
+// 勾「持续」灰掉层数框、勾「注入几层楼」灰掉持续框；层数随角色楼自动递减（一条角色回复＝一层）、
+// 数字可直接改；层数走完自动清掉第二个框＝两框都灰＝停注；「撤下」进留痕。新装扮在装扮面板确认时
+// 旧的自动进留痕。不依赖监听总开关（这格注入与监听引擎互不相干，开关管不到它）
+// ---------------------------------------------------------------------------
+
+function outfitZoneHtml() {
+    return `<div class="pp-section" id="pp_ls_outfitzone">${outfitZoneInner()}</div>`;
+}
+
+function outfitZoneInner() {
+    const st = outfitState();
+    const active = st.active;
+    if (!active) return `
+        <b title="给扮演模型的装扮状态注入：装扮单元在剧情指导页第 1 步「装扮」面板确认立卡后自动开始注入，设置在这里">装扮注入</b>
+        <div class="pp-muted">当前没有生效装扮——去剧情指导页第 1 步点「装扮」生成/抽取并确认立卡</div>`;
+    const remaining = outfitRemaining();
+    const mode = active.mode;
+    const statusText = mode === 'always' ? '持续注入中'
+        : mode === 'floors' ? `按层数注入中（剩 ${remaining} 层）`
+        : '已停注（两框都空）——勾任意一框恢复注入';
+    return `
+        <b title="给扮演模型的装扮状态注入（隐身槽，比监听指导更靠前）；与监听总开关无关">装扮注入</b>
+        <div class="pp-ls-knobs">
+            <label title="持续注入：不限层数，一直注入到被新装扮覆盖或点「撤下」"><input type="checkbox" id="pp_ls_ot_always" ${mode === 'always' ? 'checked' : ''} ${mode === 'floors' ? 'disabled' : ''} /> 持续</label>
+            <label title="注入几层楼：一条角色回复＝一层，层数随角色发言自动往下走、走完自动停注（两框都空）；数字可以随时直接改。勾这个会灰掉「持续」，取消勾选＝停注"><input type="checkbox" id="pp_ls_ot_floors" ${mode === 'floors' ? 'checked' : ''} ${mode === 'always' ? 'disabled' : ''} /> 注入几层楼</label>
+            <input type="number" class="text_pole" id="pp_ls_ot_n" min="1" max="500" step="1" value="${mode === 'floors' ? Math.max(1, remaining) : 20}" ${mode === 'floors' ? '' : 'disabled'} title="剩余层数（可直接改）：随角色楼自动递减，走完自动清框停注" />
+            <span id="pp_ls_ot_withdraw" class="menu_button" title="撤下当前装扮：停止注入、进监听留痕（结束状态＝手动撤下）。装扮单元还在暂存池里，想重来去装扮面板重新确认">撤下</span>
+        </div>
+        <div>「${escapeHtml(active.title)}」 <span class="pp-muted">${statusText}</span></div>
+        <details class="pp-fold">
+            <summary title="这套装扮的注入正文快照（立卡那一刻的单元正文）">装扮正文</summary>
+            <div class="pp-ls-guidance">${escapeHtml(active.text)}</div>
+        </details>`;
+}
+
+function bindOutfitZone(container) {
+    const zone = container.querySelector('#pp_ls_outfitzone');
+    if (!zone) return;
+    const rerender = () => {
+        zone.innerHTML = outfitZoneInner();   // 就地换内层，不整页重渲染
+        bindOutfitZone(container);
+    };
+    zone.querySelector('#pp_ls_ot_always')?.addEventListener('change', e => {
+        setOutfitMode(e.target.checked ? 'always' : 'none');
+        rerender();
+    });
+    zone.querySelector('#pp_ls_ot_floors')?.addEventListener('change', e => {
+        if (!e.target.checked) { setOutfitMode('none'); }
+        else {
+            const n = Number(zone.querySelector('#pp_ls_ot_n')?.value);
+            setOutfitMode('floors', Number.isFinite(n) && n > 0 ? n : 20);
+        }
+        rerender();
+    });
+    zone.querySelector('#pp_ls_ot_n')?.addEventListener('change', e => {
+        setOutfitFloors(Number(e.target.value) || 1);
+        rerender();
+    });
+    zone.querySelector('#pp_ls_ot_withdraw')?.addEventListener('click', () => {
+        if (withdrawOutfit()) toastr.success('已撤下：装扮进监听留痕（结束状态＝手动撤下）');
+        rerender();
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -661,14 +737,27 @@ function refreshTraceWindow() {
     if (!win) return;
     const state = listenerState();
     const cfg = listenerCfg();
-    const rows = state.trace.map(rec => `
+    const rows = state.trace.map(rec => {
+    // 留痕来源标签（2026-09-02 三来源共用滚动池）：普通剧情规划 / 长线剧情 / 换装；
+    // 轻量轮不带标签（无挂载规划的例行检查不属于三来源）；旧记录无 src 也不带
+    const srcChip = TRACE_SRC_LABEL[rec.src]
+        ? `<span class="pp-ls-srclabel pp-ls-srclabel-${rec.src}" title="留痕来源：${TRACE_SRC_LABEL[rec.src]}（三来源共用同一个滚动池）">${TRACE_SRC_LABEL[rec.src]}</span>`
+        : '';
+    const head = rec.mode === 'outfit'
+        ? `<b>换装</b> · ${fmtTime(rec.at)} · 「${escapeHtml(rec.outfit?.title ?? '')}」${escapeHtml(rec.outfit?.setting ?? '')}${rec.outfit?.end ? ` · 已${escapeHtml(rec.outfit.end.status)}` : ' · 注入中'}`
+        : `<b>#${rec.round}</b> ${rec.mode === 'unit' ? '单位' : rec.mode === 'reentry' ? '回归' : '轻量'} · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}`;
+    return `
     <details class="pp-fold pp-ls-trace-item">
         <summary>
-            <b>#${rec.round}</b> ${rec.mode === 'unit' ? '单位' : rec.mode === 'reentry' ? '回归' : '轻量'} · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}
+            ${head}${srcChip}
             ${rec.tokens ? `<span class="pp-muted">${rec.tokens.promptTokens.toLocaleString()}/${rec.tokens.completionTokens.toLocaleString()} tok</span>` : ''}
         </summary>
         <div class="pp-ls-trace-body">
         ${!rec.ok ? `<div class="pp-ls-err">${escapeHtml(rec.error ?? '')}</div>` : ''}
+        ${rec.mode === 'outfit' && rec.ok ? `
+            <div>开始注入：${escapeHtml(rec.outfit?.setting ?? '')}${rec.outfit?.end ? ` · 结束：${escapeHtml(rec.outfit.end.status)}（${fmtTime(rec.outfit.end.at)}）` : ' · 注入中'}</div>
+            <div class="pp-ls-guidance" title="这套装扮的全文快照（开始注入那一刻记的；到期/被覆盖/撤下时在这一条上补结束状态）">${escapeHtml(rec.outfit?.text ?? '')}</div>
+        ` : ''}
         ${rec.mode === 'unit' && rec.ok ? `
             <div>判定：<b>${escapeHtml(rec.judgment)}</b>${rec.litNode ? ` · 点亮节点：${escapeHtml(rec.litNode)}` : ''}</div>
             ${rec.progressNote ? `<div class="pp-muted">${escapeHtml(rec.progressNote)}</div>` : ''}
@@ -687,11 +776,12 @@ function refreshTraceWindow() {
             ${(rec.findings?.plotRepeat && (rec.findings.plotRepeat.found || rec.findings.plotRepeat.note)) ? `<div class="pp-ls-ev"><b>剧情重复${rec.findings.plotRepeat.found ? '' : '·无'}</b> ${escapeHtml(rec.findings.plotRepeat.note)}</div>` : ''}
             ${(rec.findings?.styleRepeat && (rec.findings.styleRepeat.level !== '无' || rec.findings.styleRepeat.note)) ? `<div class="pp-ls-ev"><b>文风重复·${escapeHtml(rec.findings.styleRepeat.level)}</b> ${escapeHtml(rec.findings.styleRepeat.note)}</div>` : ''}
         ` : ''}
-        ${rec.guidance ? `<div class="pp-ls-guidance">${escapeHtml(rec.guidance)}</div>` : (rec.ok && rec.mode !== 'reentry' ? `<div class="pp-muted">静默原因：${escapeHtml(rec.noGuidanceReason || '未给原因')}</div>` : '')}
+        ${rec.guidance ? `<div class="pp-ls-guidance">${escapeHtml(rec.guidance)}</div>` : (rec.ok && rec.mode !== 'reentry' && rec.mode !== 'outfit' ? `<div class="pp-muted">静默原因：${escapeHtml(rec.noGuidanceReason || '未给原因')}</div>` : '')}
         ${rec.materials ? `<div class="pp-muted" title="本轮实际喂给监听模型的材料清单">材料：${escapeHtml(materialsLine(rec.materials))}</div>` : ''}
         ${rec.retried ? '<div class="pp-muted">（本轮经过一次坏输出自动修复重试）</div>' : ''}
         </div>
-    </details>`).join('');
+    </details>`;
+    }).join('');
 
     win.innerHTML = `
     <div class="pp-ls-float-head">

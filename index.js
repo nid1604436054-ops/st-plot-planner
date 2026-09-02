@@ -5,6 +5,7 @@ import { eventSource, event_types } from "/script.js";
 import { initDrawer, openDrawer } from "./js/ui/drawer.js";
 import { initWandMenu } from "./js/ui/wandMenu.js";
 import { replayScopedInjections, tickInjectionExpiries } from "./js/injection.js";
+import { replayOutfitSlot, tickOutfitExpiry } from "./js/outfit.js";
 import { scanAndApplyStorage } from "./js/store.js";
 import { syncMemory, mergeMirrorFromSource, persistMemory } from "./js/memoryTable.js";
 import { flushChatData } from "./js/chatdata.js";
@@ -42,6 +43,7 @@ jQuery(() => {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         flushChatData();
         replayScopedInjections();
+        replayOutfitSlot();   // 装扮注入槽按新聊天的 outfit 块重放/清空（不受监听总开关管）
         scanAndApplyStorage();
         autoSyncMemory();
         resetGuidance();
@@ -49,9 +51,10 @@ jQuery(() => {
     });
 
     // 新消息到达：按楼层净增推进「按层数过期」的计数（滑动/重新生成楼数不变、不吃层），
-    // 重扫储存条目，同步记忆表格镜像
+    // 重扫储存条目，同步记忆表格镜像；装扮的层数递减同一口径（走到 0 自动清框停注）
     eventSource.on(event_types.MESSAGE_RECEIVED, () => {
         tickInjectionExpiries();
+        tickOutfitExpiry();
         scanAndApplyStorage();
         autoSyncMemory();
     });

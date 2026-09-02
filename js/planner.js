@@ -418,16 +418,39 @@ const stableTailIdx = parts => parts.findIndex(p => p.startsWith('## 历史剧�
     || p.startsWith('## 最近对话记录'));
 
 export function materialSections(opts = {}) {
-    const { parts, hits } = baseMaterialSections(opts);
+    const { parts, hits, picks } = baseMaterialSections(opts);
     const at = stableTailIdx(parts);
     parts.splice(at === -1 ? parts.length : at, 0,
         ...reactionSection('## 路人反应（世界对引人注目之事的回应口径，后续剧情安排与其余波、收束口径一致）', opts.reactionText));
-    return { parts, hits };
+    return { parts, hits, picks };
+}
+
+// 动作参考掺入段（2026-09-02 动作指导书路线，只进剧情规划向导）：材料里出自「动作指导书」的
+// 世界书条目（自选或检索命中）在场时追加这一节——告诉模型这些条目是动作参考、动作写法照它、
+// 关键动作要挂进节点。检查报告/随机事件/路人反应/长线一概不带（用户拍板：长线精度有限，
+// 混外部知识将来走打碎混合加具体规划更准、免得模型注意力乱飞）
+function actionRefSection(picks, hits) {
+    const names = new Set();
+    for (const p of picks ?? []) if (p?.book?.kind === 'action') names.add(p.book.name);
+    for (const h of hits ?? []) if (h?.action && h?.bookName) names.add(h.bookName);
+    if (!names.size) return [];
+    return [
+        '## 动作指导（动作参考材料的使用口径）',
+        `本次材料的世界书条目中，出自「动作指导书」的有：${[...names].join('、')}。这些条目是动作参考材料——规划涉及相关情节时，动作的写法、流程与细节以条目为准，不得按自己的惯常想象另编一套；并把条目中的关键动作与规划节点挂钩：安排该动作自然发生在对应节点的剧情里（节点推进到哪、哪个动作随之发生要能对上），不是罗列在旁边当摆设。条目没覆盖的动作照常自行设计；与角色设定或既定事实冲突时，设定与事实赢。`,
+    ];
 }
 
 export function buildGuidanceMessages(options = {}) {
-    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', reactionText = '', knowledgePayload = [], activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [], lorePicks = [], draftSkeletons = [] } = options;
-    const { parts, hits } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries, reactionText, lorePicks });
+    const { userNote = '', previousPlan = '', revisionNote = '', eventText = '', reactionText = '', outfitText = '', knowledgePayload = [], activePlan = '', historySummaries = [], memoryTags = null, memorySheets = null, memoryModes = null, memoryRecent = 0, storageItems = [], lorePicks = [], draftSkeletons = [] } = options;
+    const { parts, hits, picks } = materialSections({ memoryTags, memorySheets, memoryModes, memoryRecent, storageItems, activePlan, historySummaries, reactionText, lorePicks });
+    // 动作指导掺入段（2026-09-02）：只在世界书材料里有动作指导书条目时出现，排在稳定区
+    // （玩法小节之后有它、没有则退到检索命中/最近对话之前）——条目本身已在自选/检索小节里
+    const actSec = actionRefSection(picks, hits);
+    if (actSec.length) {
+        let at = parts.findIndex(p => p.startsWith('## 游戏玩法'));
+        if (at === -1) at = parts.findIndex(p => p.startsWith('## 检索命中的世界书条目') || p.startsWith('## 最近对话记录'));
+        parts.splice(at === -1 ? parts.length : at, 0, ...actSec);
+    }
     // 知识库材料小节与近期草稿骨架（第七轮防复刻：连 roll 收敛的根因＝放弃的草稿不在任何
     // 往后看的材料里，对话/记忆/历史摘要都只记正式剧情）同锚插在检索命中之前——第十三轮
     // 重排：知识库抽样分组每把轮换换新＝「开头会变」的小节，与检索命中/对话一起垫底，别让
@@ -444,8 +467,16 @@ export function buildGuidanceMessages(options = {}) {
             ] : []),
             ...(kbSection ?? []));
     }
-    // 注入模板序固定：剧情 → 事件 → 反应——事件小节插在路人反应之前（无反应小节时退到
-    // 稳定区头，仍在检索命中/对话之前），顺序不提供旋钮
+    // 注入模板序固定：剧情 → 装扮 → 事件 → 反应——装扮小节（2026-09-02，第 1 步勾选的装扮单元）
+    // 与事件小节都锚在路人反应之前（无反应小节时退到稳定区头，仍在检索命中/对话之前），顺序不提供旋钮
+    const ot = String(outfitText ?? '').trim();
+    if (ot) {
+        const rIdx = parts.findIndex(p => p.startsWith('## 路人反应'));
+        const at = rIdx !== -1 ? rIdx : stableTailIdx(parts);
+        parts.splice(at === -1 ? parts.length : at, 0,
+            '## 装扮（相关角色当前的衣物与饰品状态——规划按它写：涉及穿着、换装、整理与互动描写的细节以它为准，不得无声变更装扮；可在节点里安排与装扮相关的互动）',
+            ot);
+    }
     const evt = String(eventText ?? '').trim();
     if (evt) {
         const rIdx = parts.findIndex(p => p.startsWith('## 路人反应'));

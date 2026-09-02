@@ -7,7 +7,7 @@
 import { settings, save } from "../../settings.js";
 import {
     importSillyTavernJson, createTextBook, addLorebook, removeLorebook,
-    findEntry, addEntry, removeEntry, scanLorebooks, parseKeys,
+    findEntry, addEntry, removeEntry, scanLorebooks, parseKeys, setBookKind,
     trashBook, trashEntry, restoreTrashItem, purgeTrashItem, clearTrash,
 } from "../../lorebook.js";
 import { chatEnabledBookIds, collectRecentChat, formatChatLog } from "../../context.js";
@@ -61,6 +61,11 @@ export const worldbookTab = {
             <div id="pp_wb_txt_editor" style="display:none">
                 <label class="pp-label">世界书名称</label>
                 <input id="pp_wb_txt_name" class="text_pole textarea_compact" type="text" />
+                <label class="pp-label" title="书的类型（建好后在书行上可改）：普通世界书＝条目照常进规划材料；动作指导书＝条目进剧情规划材料时，规划提示词额外加「动作参考」段——动作写法照条目、关键动作与节点挂钩（长线不接）">书类型</label>
+                <select id="pp_wb_txt_kind" class="text_pole textarea_compact">
+                    <option value="normal">普通世界书</option>
+                    <option value="action">动作指导书</option>
+                </select>
                 <label class="pp-label" title="可选；多个词用逗号分隔。保存后可随时在条目旁修改">本条关键词（可选，逗号分隔）</label>
                 <input id="pp_wb_txt_keys" class="text_pole textarea_compact" type="text" />
                 <label class="pp-label" title="整块作为一条条目导入，不分块">内容</label>
@@ -143,6 +148,7 @@ export const worldbookTab = {
                 name,
                 parseKeys(container.querySelector('#pp_wb_txt_keys').value),
                 content,
+                container.querySelector('#pp_wb_txt_kind').value === 'action' ? 'action' : 'normal',
             );
             addLorebook(book);
             openBooks.add(book.id);
@@ -276,6 +282,10 @@ function renderBooks(container) {
                 </div>
                 <div class="pp-item-ops">
                     <span class="menu_button" data-toggle="${b.id}">条目 ${enabledCount(b)}/${b.entries.length} <i class="fa-solid fa-chevron-${open ? 'down' : 'right'}"></i></span>
+                    <span class="pp-seg" data-bkind="${b.id}" title="书的类型（2026-09-02 动作指导书）：普通＝条目照常进规划材料；动作指导＝条目进剧情规划材料时提示词额外加「动作参考」段（动作写法照条目、关键动作与节点挂钩）。被动标签——条目收录规则（启用书单＋关键词/常驻）完全不变，长线与检查不接">
+                        <span class="pp-seg-opt${b.kind === 'action' ? '' : ' on'}" data-kind="normal">普通书</span>
+                        <span class="pp-seg-opt${b.kind === 'action' ? ' on' : ''}" data-kind="action">动作指导书</span>
+                    </span>
                     <label title="按对话记忆：勾选随当前聊天文件保存，切换对话自动恢复各自的勾选"><input type="checkbox" data-en="${b.id}" ${bookEnabledInChat(b) ? 'checked' : ''} /> 启用</label>
                     <span class="menu_button fa-solid fa-trash" data-del="${b.id}" title="删除整本"></span>
                 </div>
@@ -327,6 +337,19 @@ function renderBooks(container) {
         openBooks.has(id) ? openBooks.delete(id) : openBooks.add(id);
         renderBooks(container);
     }));
+    // 书类型切换（2026-09-02 动作指导书）：普通 ⇄ 动作指导，被动标签——检索与条目规则不动
+    list.querySelectorAll('[data-bkind]').forEach(seg => seg.querySelectorAll('.pp-seg-opt').forEach(opt => opt.addEventListener('click', () => {
+        const id = seg.dataset.bkind;
+        const book = settings.lorebooks.find(b => b.id === id);
+        const next = opt.dataset.kind === 'action' ? 'action' : 'normal';
+        if (!book || (book.kind === 'action') === (next === 'action')) return;
+        setBookKind(id, next);
+        save();
+        renderBooks(container);
+        toastr.info(next === 'action'
+            ? `「${book.name}」已标为动作指导书：条目进剧情规划材料时，提示词额外加「动作参考」段（动作写法照条目、关键动作与节点挂钩）；长线与检查报告不接`
+            : `「${book.name}」恢复为普通世界书`);
+    })));
     list.querySelectorAll('[data-en]').forEach(el => el.addEventListener('change', () => {
         toggleBookInChat(el.dataset.en, el.checked);
     }));

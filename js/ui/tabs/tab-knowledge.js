@@ -17,7 +17,9 @@ import { settings, save } from "../../settings.js";
 import {
     knowledgeLists, findList, createList, renameList, deleteList, setListFeed,
     addEntries, deleteEntry, updateEntry, entryText, structureImport, clearCooldown,
+    isOutfitList, listVisibleInChat, outfitListsBoundElsewhere, setListOutfit, setListBind, updateListBind,
 } from "../../knowledge.js";
+import { resolveLorePicks } from "../../lorebook.js";
 import { escapeHtml } from "../../utils.js";
 
 // 展开视图（互斥）：null 收起 | {type:'entries'|'import', listId}
@@ -62,7 +64,8 @@ function listRowHtml(list) {
     const cooling = list.entries.filter(e => Number(e.cooldown) > 0).length;
     const open = view?.listId === list.id;   // 条目区/导入区任一展开都算开（箭头朝下）
     const feedName = list.feed === 'full' ? '全量' : '抽样';
-    const meta = `${list.entries.length} 条${cooling ? ` · ${cooling} 条冷却中` : ''} · ${feedName} · 表头：${list.fields.join('、')}`;
+    const outfitMeta = isOutfitList(list) ? ` · 装扮（${list.bind ? '绑定' : '衣库·全局'}）` : '';
+    const meta = `${list.entries.length} 条${cooling ? ` · ${cooling} 条冷却中` : ''} · ${feedName}${outfitMeta} · 表头：${list.fields.join('、')}`;
     return `
     <div class="pp-item pp-kb-lrow" data-klist="${escapeHtml(list.id)}" title="点这一行展开/收起条目">
         <span class="menu_button pp-kb-chev fa-solid ${open ? 'fa-chevron-down' : 'fa-chevron-right'}" data-ktoggle="${escapeHtml(list.id)}" title="展开/收起条目"></span>
@@ -130,6 +133,61 @@ function entriesListHtml(list) {
     ${entries.length !== list.entries.length ? `<div class="pp-muted">列出 ${entries.length}/${list.entries.length} 条</div>` : ''}`;
 }
 
+// 装扮用途与绑定⇄衣库（2026-09-02）：清单展开的条目区里配置。标记开着才显示绑定段；
+// 绑定段左右按键两态（用户点名不要打钩式）——「衣库」全局跟随、「绑定」只与本聊天走，
+// 绑定时选世界书条目（轻量选择的对照材料）与处理模型
+function outfitCfgHtml(list) {
+    if (!isOutfitList(list)) return `
+    <div class="pp-kb-toolrow">
+        <span class="pp-seg" data-koutfit="${escapeHtml(list.id)}" title="给这张清单打「装扮」标记：标记后它不再出现在剧情规划第 1 步与长线页的知识库勾选里（也不结冷却），只喂剧情指导页第 1 步的「装扮」悬浮面板（角色衣橱清单）">
+            <span class="pp-seg-opt on">普通清单</span>
+            <span class="pp-seg-opt" data-koutfit-on="1">装扮清单</span>
+        </span>
+    </div>`;
+    const bind = list.bind;
+    const profs = settings.api.profiles ?? [];
+    const picked = bind ? resolveLorePicks(bind.picks ?? []) : [];
+    return `
+    <div class="pp-kb-toolrow">
+        <span class="pp-seg" data-koutfit="${escapeHtml(list.id)}" title="「装扮」标记：关掉后绑定配置一并清除（暂存的世界书勾选与模型会留着，再开绑定时恢复）">
+            <span class="pp-seg-opt">普通清单</span>
+            <span class="pp-seg-opt on" data-koutfit-on="1">装扮清单</span>
+        </span>
+        <span class="pp-seg" data-kbind="${escapeHtml(list.id)}" title="左右按键两态（不是打钩）：「衣库」＝全局清单，跟随到所有聊天；「绑定」＝只与当前聊天走——其他聊天里整张清单不出现（在知识库页底部的收纳区可见、可转回衣库）。来回切换保留各自配置">
+            <span class="pp-seg-opt${bind ? '' : ' on'}" data-kbind-set="shelf">衣库</span>
+            <span class="pp-seg-opt${bind ? ' on' : ''}" data-kbind-set="bind">绑定本聊天</span>
+        </span>
+        ${bind ? `
+        <select class="text_pole" data-kbprov="${escapeHtml(list.id)}" title="这张清单的轻量选择（装扮生成）走哪个连接：主连接或供应商方案；「默认」＝方案库第一条">
+            <option value="" ${!bind.providerId ? 'selected' : ''}>默认（方案库第一条）</option>
+            <option value="__main__" ${bind.providerId === '__main__' ? 'selected' : ''}>主连接</option>
+            ${profs.map(p => `<option value="${escapeHtml(p.id)}" ${bind.providerId === p.id ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model ?? '')}</option>`).join('')}
+        </select>` : ''}
+    </div>
+    ${bind ? `
+    <details class="pp-fold" data-kbwb="${escapeHtml(list.id)}">
+        <summary title="绑定的世界书条目＝这张清单跑「模型生成」时的对照材料（角色与场合设定，整条原文随轻量选择发送）；只在这张清单绑定本聊天时随行">绑定世界书条目（已勾 ${picked.length} 条）</summary>
+        <div class="pp-gd-selp">${outfitWbPickHtml(list)}</div>
+    </details>
+    <div class="pp-muted" title="绑定后这张清单只在本聊天出现；聊天删了也不丢——知识库页底部的「绑定在其他聊天的装扮清单」收纳区任何时候都能看到它、一键转回衣库">已绑定当前聊天（${escapeHtml(String(bind.chatId ?? '').slice(-8))}）；换聊天这里不出现，去页底收纳区转回衣库</div>` : ''}`;
+}
+
+// 绑定的世界书条目勾选（照监听页世界书自选的行样式，内联不另开窗）：按书折叠勾条目
+function outfitWbPickHtml(list) {
+    const books = settings.lorebooks ?? [];
+    if (!books.length) return '<div class="pp-muted">还没有世界书——在「世界书」页签导入后再来勾</div>';
+    const sel = new Set(list.bind?.picks ?? []);
+    return books.map(book => {
+        const onN = book.entries.filter(e => sel.has(`${book.id}:${e.uid}`)).length;
+        return `
+        <label class="pp-mem-chip" title="整本书一起勾/清"><input type="checkbox" data-kbwbbook="${escapeHtml(list.id)}|${escapeHtml(book.id)}" ${onN > 0 && onN === book.entries.length ? 'checked' : ''} /> ${escapeHtml(book.name)}（${onN}/${book.entries.length}）</label>
+        ${book.entries.map(e => {
+            const key = `${book.id}:${e.uid}`;
+            return `<label class="pp-mem-chip"><input type="checkbox" data-kbwbe="${escapeHtml(list.id)}|${escapeHtml(key)}" ${sel.has(key) ? 'checked' : ''} /> ${escapeHtml(e.comment ?? `条目 ${e.uid + 1}`)}</label>`;
+        }).join('')}`;
+    }).join(' ');
+}
+
 // 导入区：供应商单次选用 + 粘贴框 + 结构化 → 草稿（逐条审改、勾选入库）。
 // 操作钮在草稿页头部不入底部（2026-08-29 真机反馈：保存不该翻到内容最下面；
 // 底部那颗重复的「丢弃草稿」已删）。粘贴的原文随设置留底，刷新不丢
@@ -179,22 +237,24 @@ export const knowledgeTab = {
             if (ui?.draft && lists.some(l => l.id === ui.draft.listId)) draft = ui.draft;
             if (typeof ui?.raw === 'string') rawText = ui.raw;
         }
-        // 视图指向的清单可能已被删掉：当收起处理
+        // 视图指向的清单可能已被删掉：当收起处理；绑定到其他聊天的装扮清单在本页不可见，同样收起
         if (view && !lists.some(l => l.id === view.listId)) view = null;
-        const viewList = view ? findList(view.listId) : null;
+        let viewList = view ? findList(view.listId) : null;
+        if (viewList && !listVisibleInChat(viewList)) { view = null; viewList = null; }
         // 展开区跟在自家清单行正下方（2026-08-29 真机反馈第二轮：原来垫在所有行之后，
         // 加条目/入库都得翻到页底）——点哪行就地在哪行下面展开
         const panelHtml = viewList ? (view.type === 'entries' ? `
             <div class="pp-kb-entries">
                 <div class="pp-kb-toolrow">
                     <input type="text" id="pp_kb_query" class="text_pole textarea_compact" placeholder="搜索编号或任意字段内容…" value="${escapeHtml(query)}" style="flex:1 1 auto" />
-                    <span class="pp-seg" id="pp_kb_feed" title="这张清单怎么随规划发送（建好后随时可改）：抽样＝「知识库抓取」按轮换抓一小把让模型挑（一轮内不重复）；全量＝整表条目全部随分析发给模型挑、挑中的进冷却（冷却中的自动跳过）——礼物这类「整张候选表都该在场」的清单用全量">
+                    <span class="pp-seg" id="pp_kb_feed" title="这张清单怎么随规划发送（建好后随时可改）：抽样＝「知识库抓取」按轮换抓一小把让模型挑（一轮内不重复）；全量＝整表条目全部随分析发给模型挑、挑中的进冷却（冷却中的跳过）——礼物这类「整张候选表都该在场」的清单用全量">
                         <span class="pp-seg-opt${viewList.feed === 'full' ? '' : ' on'}" data-kfeed="sample">抽样</span>
                         <span class="pp-seg-opt${viewList.feed === 'full' ? ' on' : ''}" data-kfeed="full">全量</span>
                     </span>
                     <span class="menu_button" id="pp_kb_add" title="手动添加一条空条目，插到条目列表最上面（展开填写各字段）"><i class="fa-solid fa-plus"></i> 添加条目</span>
                     <span class="menu_button" id="pp_kb_import" title="粘贴外部起草的原始文本，模型照表头（${escapeHtml(viewList.fields.join('、'))}）结构化成条目草稿，审后入库">导入</span>
                 </div>
+                ${outfitCfgHtml(viewList)}
                 <div id="pp_kb_elist">${entriesListHtml(viewList)}</div>
             </div>` : importHtml(viewList)) : '';
         container.innerHTML = `
@@ -216,8 +276,17 @@ export const knowledgeTab = {
                     <span class="menu_button" id="pp_kb_newcreate" title="建一张空清单，随后在展开区的「导入」里粘贴草稿结构化，或手动添加条目">创建</span>
                 </div>
             </div>
-            ${lists.map(list => listRowHtml(list) + (viewList?.id === list.id ? panelHtml : '')).join('')}
-        </div>`;
+            ${lists.filter(listVisibleInChat).map(list => listRowHtml(list) + (viewList?.id === list.id ? panelHtml : '')).join('')}
+        </div>
+        ${outfitListsBoundElsewhere().length ? `
+        <div class="pp-section">
+            <b title="这些装扮清单绑定在其他聊天（或绑定的聊天已删）：本页与装扮面板都不出现，只在这里收着——点「转为衣库」恢复全局可见（绑定配置暂存，再绑定时恢复）">绑定在其他聊天的装扮清单</b>
+            ${outfitListsBoundElsewhere().map(l => `
+            <div class="pp-kb-erow">
+                <span class="pp-kb-ebody">${escapeHtml(l.name)}（${l.entries.length} 条 · 绑定聊天 ${escapeHtml(String(l.bind?.chatId ?? '').slice(-8))}）</span>
+                <span class="menu_button" data-kshelf="${escapeHtml(l.id)}" title="解除绑定、转为全局衣库清单（在所有聊天可见；原来的世界书勾选与模型暂存，再绑定时恢复）">转为衣库</span>
+            </div>`).join('')}
+        </div>` : ''}`;
         this.wire(container);
     },
     wire(container) {
@@ -326,6 +395,58 @@ export const knowledgeTab = {
             toastr.info(next === 'full'
                 ? `「${list.name}」改为全量：整表条目全部随分析发给模型挑（冷却中的自动跳过），不再抓取/重抓、不占轮换队列`
                 : `「${list.name}」改为抽样：规划时在「知识库抓取」面板按轮换抓一小把`);
+        }));
+        // 装扮标记与绑定⇄衣库（2026-09-02）：左右按键两态，点一下即改即存
+        container.querySelectorAll('[data-koutfit]').forEach(seg => seg.querySelectorAll('.pp-seg-opt').forEach(opt => opt.addEventListener('click', () => {
+            const id = seg.dataset.koutfit;
+            const on = Boolean(opt.dataset.koutfitOn);
+            const l = findList(id);
+            if (isOutfitList(l) === on) return;
+            setListOutfit(id, on);
+            rerender();
+            toastr.info(on
+                ? `「${l.name}」已标记为装扮清单：从剧情规划第 1 步与长线页的知识库勾选里退出（不结冷却），只喂剧情指导页第 1 步「装扮」面板`
+                : `「${l.name}」恢复为普通清单（绑定配置已暂存，再开标记时恢复）`);
+        })));
+        container.querySelectorAll('[data-kbind]').forEach(seg => seg.querySelectorAll('.pp-seg-opt').forEach(opt => opt.addEventListener('click', () => {
+            const id = seg.dataset.kbind;
+            const wantBind = opt.dataset.kbindSet === 'bind';
+            const l = findList(id);
+            if (!isOutfitList(l) || Boolean(l.bind) === wantBind) return;
+            setListBind(id, wantBind ? { picks: undefined, providerId: undefined } : null);
+            rerender();
+            toastr.info(wantBind
+                ? `「${l.name}」已绑定当前聊天：只在这个聊天里出现（衣库暂存配置保留，切回衣库时恢复）`
+                : `「${l.name}」转为全局衣库：跟随到所有聊天（绑定配置暂存，再绑定时恢复）`);
+        })));
+        container.querySelectorAll('[data-kbprov]').forEach(sel => sel.addEventListener('change', () => {
+            updateListBind(sel.dataset.kbprov, { providerId: sel.value });
+        }));
+        container.querySelectorAll('[data-kbwbbook]').forEach(cb => cb.addEventListener('change', () => {
+            const [listId, bookId] = cb.dataset.kbwbbook.split('|');
+            const l = findList(listId);
+            const book = (settings.lorebooks ?? []).find(b => b.id === bookId);
+            if (!l?.bind || !book) return;
+            const keys = new Set(l.bind.picks ?? []);
+            for (const e of book.entries) {
+                const key = `${bookId}:${e.uid}`;
+                if (cb.checked) keys.add(key); else keys.delete(key);
+            }
+            updateListBind(listId, { picks: [...keys] });
+            rerender();
+        }));
+        container.querySelectorAll('[data-kbwbe]').forEach(cb => cb.addEventListener('change', () => {
+            const [listId, key] = cb.dataset.kbwbe.split('|');
+            const l = findList(listId);
+            if (!l?.bind) return;
+            const keys = new Set(l.bind.picks ?? []);
+            if (cb.checked) keys.add(key); else keys.delete(key);
+            updateListBind(listId, { picks: [...keys] });
+        }));
+        container.querySelectorAll('[data-kshelf]').forEach(btn => btn.addEventListener('click', () => {
+            setListBind(btn.dataset.kshelf, null);
+            rerender();
+            toastr.success('已转为全局衣库清单（在所有聊天可见）');
         }));
         const refreshList = () => {
             if (!elist) { rerender(); return; }

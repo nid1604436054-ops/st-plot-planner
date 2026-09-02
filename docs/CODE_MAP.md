@@ -30,7 +30,7 @@
 | materials.js | ~110 | 材料小节拼装（规划/检查/事件/反应共用——预览与真实调用同一拼法） | materialSections |
 | injection.js | ~140 | M4 隐身注入：setExtensionPrompt 调用全部收口在这 | addInjection、replayScopedInjections、tickInjectionExpiries |
 | store.js | ~60 | M5 游戏玩法注入（键空间 pps:） | scanAndApplyStorage |
-| units.js | ~210 | T2 单元池数据层（chatdata 的 units 块） | 单元增删改、加工史徽章规则 |
+| units.js | ~280 | T2 单元池数据层（chatdata 的 units 块；2026-09-02 起第三个工具「装扮」同机入池，徽章「装」） | 单元增删改、加工史徽章规则 |
 | story.js | ~85 | 进行中剧情＋历史归档（经 chatdata 按聊天走） | 采用/完结/归档入口 |
 | lorebook.js | ~250 | M1 世界书导入＋关键词检索 | scanLorebooks、resolveLorePicks |
 
@@ -46,6 +46,7 @@
 | reactions.js | ~165 | 路人反应校准卡生成 | 生成入口 |
 | memoryTable.js | ~585 | 记忆表格对接（只读 st-memory-enhancement 原始数据）＋镜像维护＋AI 打标 | buildMemoryContext、syncMemory、mergeMirrorFromSource |
 | gameplayConsult.js | ~50 | 玩法咨询：一句思路→完整玩法规则 | 咨询入口 |
+| outfit.js | ~300 | 2.0 装扮（2026-09-02，DESIGN §6.4「装扮」条目）：每聊天 outfit 块（面板草稿＋当前装扮 active）＋注入模式状态机（持续/层数互斥、层数按楼层净增递减、走完自动停注）＋换装留痕（经 listener.pushTraceRecord 进共用池）＋轻量选择调用（outfitSelectMessages/runOutfitSelect，thinkingOff 恒开）＋槽经 injection.applyOutfitSlot（深度＝监听深度＋1）——**setExtensionPrompt 不在本文件**（收口在 injection.js） | outfitState、activateOutfit、setOutfitMode、setOutfitFloors、tickOutfitExpiry、withdrawOutfit、replayOutfitSlot、outfitSelectMessages、runOutfitSelect、drawForRow、rowCandidates、drawRowText、providerForList |
 
 **UI 层**
 
@@ -75,6 +76,9 @@
 4. **隐身注入**：story 确认采用自动绑定 → injection.addInjection/applyInjection → index.js 事件里 tickInjectionExpiries（按楼层净增计层）＋replayScopedInjections（切聊天重放）→ 生效中的注入在 tab-guidance 底部折叠区查看/撤下。
 5. **检查报告**：tab-guidance 检查入口 → planner.runStoryReview（与向导共用运行页、流式上屏与并发闸）→ 报告页。
 6. **长线管线（第十八轮新增，材料面板第十九轮改自备，骨架编辑/实时状态/数量注入第二十轮，页面重构与修订下沉第二十四轮，操作条挪位＋信息层级第二十五轮，提示词分两层＋批量焐热第二十七轮）**：tab-longform 参数/材料折叠＋其下操作条（勾选存 longform 块的 mats——记忆全量/玩法（null＝跟随生效中 store.storageItemsInEffect）/知识库清单/世界书自选，与 1.0 的 picks 互不影响）→ longform.lfStableAndVolatile（materialSections＋lfKbSection 知识库整表小节，拆稳定区/会变区——检索命中与最近对话垫到任务段后，前缀不断在材料中间）→ runLfSkeleton（骨架＋切块一次调用；rescaleFloors/validateVolumes 楼数算术在本地）→ runLfDetailBatch 逐卷（**先焐热再并行** warmFirstAllSettled：第一卷跑完才发射其余——前缀缓存要等第一个请求跑完才存在，并发同前缀互抢全部按未命中计价；卷文本台词硬禁令在 detailSystemPrompt）→ 修订两层四档（骨架：runLfSkeletonRevise 整书/runLfVolSkeletonRevise 单卷；卷文本：runLfRevise 整书/runLfVolTextRevise 单卷——两档卷文本修订都带台词禁令）→ runLfSplitBatch 逐卷切章（焐热同款）＋runLfVolSplit 单卷带意见重切（章预算同款本地重配；章文本展开式重写禁照抄＋【节点 N】内嵌挂钩＋判据从段正文提炼禁空话，nodes 数组缺行时 nodesFromText 从章文本行兜底）→ mountChapter 把章挂进监听单位槽（source:'longform'、unitId 记在章上）→ 监听每轮判定后 syncLfProgress 把 nodeIdx 写回章的 lit（进度账的持久方是 longform 块，监听槽只是执行位）。**所有调用的 system＝lfCommonSystem 公共头（换算锚/硬约束组/JSON 元规则，字节级不变）＋各步任务提示词进 user 消息排在材料后**——跨步共享前缀＝[公共头+材料稳定区(+骨架)]，材料只在状态变化时付一次全价。数量建议三纯函数（lfVolumeRange/lfAnchorTarget/lfChapterCap）把卷数/锚数/章数上限随预算注入提示词与任务文本；生成走流式（lfCall 透传 onDelta/onReasoning→chatCompletion SSE），tab-longform 的 setBusyNote/rerenderVols/updateBusyMeta 消费出实时状态（模型·用时·思考·字数·完成数）；骨架编辑（saveVolSkeleton/delVolume）改卷字段后楼层总数＝各卷之和、切过章的卷回「未切章」待重切；「重新生成骨架」走 stashLfRegenBackup 备份旧书、生成失败 runLfSkeleton 内部 restoreLfBackup 自动恢复；卷内 UI 瞬态（展开/页签/编辑态/意见草稿）在模块级 volUi Map 与 volOpinions Map，刷新即失。
+
+7. **装扮（2026-09-02 新增）**：剧情指导页第 1 步「装扮」入口键 → tab-guidance.openOtPanel（openViewer 悬浮面板：角色行×装扮清单，抓取走 knowledge.grabFromList 轮换、纯抽取零调用 / 「模型生成」逐角色 outfit.runOutfitSelect 轻量选择——绑定清单自动带绑定的世界书条目、衣库清单用面板当次选的模型）→ 确认立卡 units.newOutfitUnit（多角色拼一个单元、徽章「装」，入池后走「插入单元」勾选随分析发送，planner 的「装扮」小节）＋ outfit.activateOutfit（成为当前装扮：默认持续注入，槽经 injection.applyOutfitSlot、深度＝监听深度＋1）→ 监听页「装扮注入」区两框互斥（持续/注入几层楼；setOutfitMode/setOutfitFloors）→ index.js 的 MESSAGE_RECEIVED → outfit.tickOutfitExpiry（楼层净增递减、走完自动清框停注、留痕补「到期」；CHAT_CHANGED → replayOutfitSlot 按新聊天重放）→ 撤下/被覆盖经 stampTraceEnd 补结束状态（换装留痕与判定轮共用 listener 的 trace 池，pushTraceRecord 出口）。知识库侧：knowledge.js 的装扮标记＋绑定⇄衣库（tab-knowledge 清单展开区配置；绑定清单在其他聊天整张不出现，页底收纳区可转回衣库）。
+8. **动作指导书（2026-09-02 新增）**：tab-worldbook 书类型（普通/动作指导，导入纯文本表单与书行两处）→ lorebook.setBookKind＋scanLorebooks 命中带 action 标记 → materials.materialSections 把自选解析结果（picks）随 {parts, hits} 带回 → planner.buildGuidanceMessages 检出动作指导书条目时在稳定区插「## 动作指导」掺入段（动作写法照条目＋关键动作与节点挂钩）——**只进向导**（检查报告/事件/反应/长线不带）。
 
 ## 3. 「改 X 先读 Y」路由
 

@@ -89,10 +89,27 @@ export function activeReactionInjections() {
 // 计层楼数 = 已落地的角色回复数（user 消息不计，一层 = 一条角色回复）。
 // 滑动/重新生成只是替换最后一条回复，楼数不变；删楼层只会让楼数变少——
 // 按净增推导对这三种情况都天然免疫
-function replyFloorCount() {
+export function replyFloorCount() {
     const chat = getTavernContext().chat;
     if (!Array.isArray(chat)) return 0;
     return chat.reduce((n, m) => n + (m?.is_user ? 0 : 1), 0);
+}
+
+// ---------------------------------------------------------------------------
+// 装扮注入槽（2026-09-02，outfit.js 专用）：独立于 M4 注入项数组与监听槽（pp:listener），
+// 不进 settings.injections、不受监听总开关管——状态机在 outfit.js（chatdata 的 outfit 块），
+// setExtensionPrompt 只准出现在本文件/store.js/listener.js 三处，槽的写出收口在这里。
+// 深度＝监听深度＋1（比监听指导更靠前、比 1.0 剧情注入默认的 4 更靠近末端——同轮并存时
+// 装扮在前、监听指导在后）
+// ---------------------------------------------------------------------------
+export function applyOutfitSlot(text) {
+    const d = Number(settings.listener?.depth);
+    const depth = (Number.isFinite(d) && d >= 0 ? Math.floor(d) : 2) + 1;
+    setExtensionPrompt('pp:outfit', String(text ?? ''), POSITION_IN_PROMPT, depth, false, ROLE_SYSTEM);
+}
+
+export function revokeOutfitSlot() {
+    setExtensionPrompt('pp:outfit', '', POSITION_IN_PROMPT, 3, false, ROLE_SYSTEM);
 }
 
 // 已过层数按「聊天楼层净增」推导（2026-08-26 用户拍板）：注入创建时记下基线楼数

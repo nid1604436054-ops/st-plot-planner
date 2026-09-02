@@ -35,9 +35,13 @@ import { escapeHtml, estimateTokens, scanUserScripting } from "../../utils.js";
 import { searchToolReady, withGlobalPresets } from "../../api.js";
 import { knowledgeLists, payloadFromIds, grabFromList, entryText, settleCooldown, knowledgeCfg, kbSendPayload, knowledgeUsedLabels } from "../../knowledge.js";
 import { resolveLorePicks } from "../../lorebook.js";
-import { unitsState, persistUnits, newEventUnit, newReactionUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, eventOriginText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
+import { unitsState, persistUnits, newEventUnit, newReactionUnit, newOutfitUnit, addUnit, removeUnit, clearUnits, unitImportable, eventUnitText, eventOriginText, finalizeEventDraft, MAX_UNITS_PER_TOOL } from "../../units.js";
 import { opMountUnit, makeUnitFromStory, listenerCfg } from "../../listener.js";
 import { syncLfProgress } from "../../longform.js";
+import { outfitState, outfitDraft, persistOutfit, activateOutfit, drawForRow, rowCandidates, drawRowText, runOutfitSelect, providerForList } from "../../outfit.js";
+import { outfitListsForChat, findList as kbFindList } from "../../knowledge.js";
+import { resolveLorePicks as resolveLorePicksForOutfit } from "../../lorebook.js";
+import { collectFloorsFromChat, limitFloors, formatFloors } from "../../listener.js";
 
 // 向导状态机：'' 空闲 | collect ① | ready ② 分析前确认 | running 分析实时输出页（不占跳转条步骤）| result ③ | reviewing/report 检查报告
 let step = '';
@@ -313,8 +317,8 @@ function normalizeReactionCard(rx) {
 }
 
 // 单元卡头：加工史徽章（左＝先经过的工具，右＝后经过的；空位占位保持多卡标题对齐）+ 标题
-const TOOL_MARK = { event: '事', reaction: '反' };
-const TOOL_NAME = { event: '随机事件', reaction: '路人反应' };
+const TOOL_MARK = { event: '事', reaction: '反', outfit: '装' };
+const TOOL_NAME = { event: '随机事件', reaction: '路人反应', outfit: '装扮' };
 
 function unitMarkHtml(b) {
     return b
@@ -378,9 +382,19 @@ function wireRxCardFields(cardEl, unit) {
     return { textEl };
 }
 
-// 单元区展开卡：事件卡＝描述正文；反应卡＝原结构化卡面（见 rxCardFieldsHtml）。
-// 转注入/层数/删除全在这里（工具面板只管生成，不存放单元）
+// 单元区展开卡：事件卡＝描述正文；反应卡＝原结构化卡面（见 rxCardFieldsHtml）；
+// 装扮卡＝各角色正文（2026-09-02）——注入不走这里的「转为隐身注入」，装扮有自己的注入通道
+// （立卡即成为当前装扮，设置在「监听」页的装扮注入区：持续/层数互斥、撤下进留痕）
 function unitAreaCardHtml(u) {
+    if (u.tool === 'outfit') {
+        return `<div class="pp-item pp-gd-evcard" data-ucard="${escapeHtml(u.id)}">
+            <div class="pp-gd-evdesc">${escapeHtml(u.text ?? '')}</div>
+            <div class="pp-btn-row pp-gd-evops">
+                <span class="pp-muted" title="装扮单元的注入不走「转为隐身注入」——确认立卡时已自动成为当前装扮并开始持续注入；注入方式（持续/注入几层楼）与撤下在「监听」页的装扮注入区">注入设置在「监听」页 · 装扮注入区</span>
+                <span data-ua-del="1" class="menu_button fa-solid fa-trash" title="从暂存池删除这个单元（当前装扮与注入不受影响——它们持有正文快照）"></span>
+            </div>
+        </div>`;
+    }
     if (u.tool === 'event') {
         return `<div class="pp-item pp-gd-evcard" data-ucard="${escapeHtml(u.id)}">
             <div class="pp-gd-evdesc">${escapeHtml(u.text ?? '')}</div>
@@ -440,7 +454,7 @@ function wireUnitAreaCard(cardEl, unit, rerender, refreshCounts) {
             });
             toastr.success(`已注入，${injLayers} 层后自动撤下（页面底部「生效中的隐身注入」可提前撤下）`);
         });
-    } else {
+    } else if (unit.tool === 'reaction') {
         const { textEl } = wireRxCardFields(cardEl, unit);
         cardEl.querySelector('[data-ua-inject]').addEventListener('click', () => {
             const text = textEl.value.trim();
@@ -1005,8 +1019,14 @@ function wizardStorageItems() {
 // 只发勾上的；全量清单不走抓取集、整表可用条目现场并入（冷却跳过、踢进 kbKick 的本次不发）；
 // 取消勾选清单＝这张清单本次不带）。面板、确认页细账与真实调用三处共用本函数，口径一致
 function wizardKnowledgePayload() {
+    // 装扮清单（2026-09-02 打了装扮标记的）不进向导发送集：它们只喂装扮面板——这里按
+    // 「打标记前勾过」的旧勾选兜底过滤，冷却账也因此永远不碰它们
+    const checked = (run.kbListIds ?? []).filter(id => {
+        const l = knowledgeLists().find(x => x.id === id);
+        return l && !l.outfit;
+    });
     return kbSendPayload({
-        checkedListIds: run.kbListIds ?? [],
+        checkedListIds: checked,
         grabbedIds: run.kbIds ?? [],
         selIds: run.kbSel ?? [],
         modes: run.kbModes,
@@ -1028,7 +1048,8 @@ function wizardUnitTexts() {
     const st = unitsState();
     const ev = st.eventUnits.filter(u => u.inPlan).map(u => String(u.text ?? '').trim()).filter(Boolean);
     const rx = st.reactionUnits.filter(u => u.inPlan && !unitInjected(u)).map(u => String(u.text ?? '').trim()).filter(Boolean);
-    return { eventText: ev.join('\n\n'), reactionText: rx.join('\n\n') };
+    const ot = st.outfitUnits.filter(u => u.inPlan).map(u => String(u.text ?? '').trim()).filter(Boolean);
+    return { eventText: ev.join('\n\n'), reactionText: rx.join('\n\n'), outfitText: ot.join('\n\n') };
 }
 
 // 联网搜索是否会对本次分析生效：设置页开了「启用联网搜索」（总开关）且填了搜索密钥。
@@ -1076,8 +1097,9 @@ function renderCollect(container, main) {
     // 游戏玩法：只列启用中的条目；「生效中」标记与主对话注入同一判定
     const gpItems = settings.storageItems.filter(i => i.enabled);
     const gpHit = new Set(storageItemsInEffect().map(i => i.id));
-    // 知识库清单（「知识库」页签管理的全部清单；没有清单时整块不渲染）
-    const kbLists = knowledgeLists();
+    // 知识库清单（「知识库」页签管理的全部清单；没有清单时整块不渲染）——
+    // 打了装扮标记的清单不在这里出现（它们只喂第 1 步的「装扮」悬浮面板，不进规划材料）
+    const kbLists = knowledgeLists().filter(l => !l.outfit);
     main.innerHTML = `
     <div class="pp-section">
         <div class="pp-gd-stephead">
@@ -1124,6 +1146,7 @@ function renderCollect(container, main) {
         <div class="pp-btn-row">
             <span id="pp_gd_ev_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内生成——掷骰 / 大模型随机 / 按意见生成三键与意见二选一（意见框有字时只剩「按意见生成」能点），生成先出草稿、点草稿上的「立为单元」入池，暂存最多 3 个。大模型随机无条件把事件库已有条目作为防复刻清单随行（不做勾选）。生成材料自动带本页上方同一批，也可勾选导入路人反应的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的；生成的事件必须与它咬合：顺着它描述的世界状态发展、不复写同一件事；仅随机两键生效；已生效注入不自动带，防双算；导入产物正文自带前因，删掉原始单元也不丢）。入池单元在本页下方「插入单元」区点开查看、勾选随分析发送、转隐身注入；采纳规划后暂存不清空，清空键在「插入单元」区">随机事件</span>
             <span id="pp_gd_rx_panel" class="menu_button" title="整个板块在悬浮面板里，第 1 步只留这个入口：面板内填指导意见（可选）、点「生成反应卡」出草稿、点草稿上「立为单元」入池（材料自动带本页上方同一批，也可导入随机事件的暂存单元做既定方向（最多勾一项——勾了新的自动替掉旧的）——导入的事件按将要且一定会发生对待，反应卡围绕它出；导入产物正文自带前因，删掉原始单元也不丢；模型会顺带给浓缩短标题作单元名）。入池单元在本页下方「插入单元」区点开查看与操作——勾选随分析发送 / 转隐身注入（按楼层预算到期自动撤下，生效期间规划与检查自动附带同一口径，两路互斥）；产物最多暂存 3 个，清空键在「插入单元」区">路人反应</span>
+            <span id="pp_gd_ot_panel" class="menu_button" title="装扮（换装）悬浮面板：给本聊天的角色挑/生成当前装扮。知识库清单打「装扮」标记后在这里可用（标记与绑定⇄衣库开关在「知识库」页签）；两种成稿——「纯抽取」零模型调用（勾选条目原文拼成正文）、「模型生成」每角色一次轻量选择小调用（候选一小把＋绑定的世界书对照＋最近对话，模型挑中并写状态句，智力不衰减）。确认立卡＝装扮单元（可勾选随规划分析发送）且自动成为当前装扮开始持续注入——注入设置（持续/注入几层楼、撤下进留痕）在「监听」页的装扮注入区，与监听总开关无关；新装扮确认时旧的自动进监听留痕">装扮</span>
             <span id="pp_gd_kb_panel" class="menu_button" title="知识库抓取（悬浮面板，与随机事件/路人反应同款交互）：抽样清单各按轮换抓一小把（条数在「设置 → 知识库」，默认 5；轮换制＝整张清单洗牌按序发，全部条目各发一次之前不重复、发完一轮自动重洗；不按语境过滤；冷却中的条目本轮跳过），抓到的条目在面板里看得见——采用方式每张抽样清单各自二选一：「全部采用」＝整把发给规划模型让它自己挑（默认），「自选」＝你勾哪条发哪条（各清单独立，一张自选不影响其他清单）；单条可踢、每张清单可整把换新。全量清单不抓取——整表可用条目全部随行（模型从中挑、挑中的进冷却；冷却中跳过；单条可踢可还原）。发送的随材料进第 2 步确认页（按清单点名、0 条发送的清单标 ⚠ 点名）。清单与条目在「知识库」页签管理">知识库抓取</span>
             <span id="pp_gd_lore_panel" class="menu_button" title="世界书自选（悬浮面板，与知识库抓取同款交互）：按书分组勾条目，勾中的整条原文随分析进材料——「照着写」的材料（性知识/世界观口径这类，每次都该在场），与知识库「选着用」（候选素材、挑中进冷却）分工。不看关键词/常驻/书与条目的启用状态（勾选是唯一口径，禁用的照样能勾）；与检索命中自动去重（自选优先）；勾选随对话记忆保存，无冷却">世界书自选</span>
         </div>
@@ -1163,8 +1186,9 @@ function renderCollect(container, main) {
         const us = unitsState();
         const evN = us.eventUnits.filter(u => u.inPlan).length;
         const rxN = us.reactionUnits.filter(u => u.inPlan).length;
+        const otN = us.outfitUnits.filter(u => u.inPlan).length;
         // 单元数常驻显示（0 也显示）：第 2 步确认页与这里同口径，有没有单元一眼可见
-        const unitSeg = ` · 单元：随机事件 ${evN} · 路人反应 ${rxN}`;
+        const unitSeg = ` · 单元：随机事件 ${evN} · 路人反应 ${rxN} · 装扮 ${otN}`;
         return `对话 ${st.layers} 层 · 世界书命中 ${st.hits} 条 · ${memSeg}${gpDesc}${kbSeg}${loreSeg}${unitSeg}`;
     };
     // 标签列下方的即时提示：只在该说话时出现（档位/标签没配对上、或标签档要空手）
@@ -1275,12 +1299,14 @@ function renderCollect(container, main) {
     // 页面不被这两个板块占一行以外的地盘；按钮文案带暂存计数，面板里的每次变动回来同步刷新
     const evBtnEl = main.querySelector('#pp_gd_ev_panel');
     const rxBtnEl = main.querySelector('#pp_gd_rx_panel');
+    const otBtnEl = main.querySelector('#pp_gd_ot_panel');
     const kbBtnEl = main.querySelector('#pp_gd_kb_panel');
     const loreBtnEl = main.querySelector('#pp_gd_lore_panel');
     const syncToolBtns = () => {
         const us = unitsState();
         evBtnEl.textContent = us.eventUnits.length ? `随机事件（${us.eventUnits.length}）` : '随机事件';
         rxBtnEl.textContent = us.reactionUnits.length ? `路人反应（${us.reactionUnits.length}）` : '路人反应';
+        otBtnEl.textContent = us.outfitUnits.length ? `装扮（${us.outfitUnits.length}）` : '装扮';
         const kbN = wizardKnowledgePayload().length;
         kbBtnEl.textContent = kbN ? `知识库抓取（${kbN}）` : '知识库抓取';
         const loreN = resolveLorePicks(run.lorePicks).length;
@@ -1292,19 +1318,19 @@ function renderCollect(container, main) {
     const unitsBox = main.querySelector('#pp_gd_c1_units');
     const renderUnitPicks = () => {
         const us = unitsState();
-        const all = [...us.eventUnits, ...us.reactionUnits];
+        const all = [...us.eventUnits, ...us.reactionUnits, ...us.outfitUnits];
         const group = (tool, list) => !list.length ? '' : `
         <div class="pp-gd-ughead">
             <label class="pp-label">${TOOL_NAME[tool]}单元（${list.length}）</label>
-            <span class="menu_button" data-uclear="${tool}" title="清空${TOOL_NAME[tool]}名下的全部暂存单元（另一工具的不动；已转隐身注入的不受影响）；采纳规划不会清池">清空</span>
+            <span class="menu_button" data-uclear="${tool}" title="清空${TOOL_NAME[tool]}名下的全部暂存单元（其他工具的不动；已转隐身注入与当前装扮的不受影响——它们持有正文快照）；采纳规划不会清池">清空</span>
         </div>
         ${list.map(u => unitPickRow(u) + (expandedUnits.has(u.id) ? unitAreaCardHtml(u) : '')).join('')}`;
         unitsBox.innerHTML = all.length ? `
-        <label class="pp-label" title="勾选的单元作为整块提示词随分析发给规划模型（事件进「随机事件」小节、反应进「路人反应」小节，规划为其留出融入空间）。单元的生成在上面两个工具面板里；点单元名展开提示词全文与操作">插入单元</label>
-        ${group('event', us.eventUnits)}${group('reaction', us.reactionUnits)}` : '';
+        <label class="pp-label" title="勾选的单元作为整块提示词随分析发给规划模型（事件进「随机事件」小节、反应进「路人反应」小节、装扮进「装扮」小节，规划为其留出融入空间）。单元的生成在上面几个工具面板里；点单元名展开提示词全文与操作">插入单元</label>
+        ${group('event', us.eventUnits)}${group('reaction', us.reactionUnits)}${group('outfit', us.outfitUnits)}` : '';
         unitsBox.querySelectorAll('[data-c1u]').forEach(cb => cb.addEventListener('change', () => {
             const cur = unitsState();
-            for (const u of [...cur.eventUnits, ...cur.reactionUnits]) {
+            for (const u of [...cur.eventUnits, ...cur.reactionUnits, ...cur.outfitUnits]) {
                 if (u.id === cb.dataset.c1u) { u.inPlan = cb.checked; break; }
             }
             persistUnits();
@@ -1319,17 +1345,20 @@ function renderCollect(container, main) {
             if (u) wireUnitAreaCard(cardEl, u, renderUnitPicks, syncToolBtns);
         });
         unitsBox.querySelectorAll('[data-uclear]').forEach(btn => btn.addEventListener('click', () => {
-            clearUnits(btn.dataset.uclear);
-            (btn.dataset.uclear === 'event' ? evImports : rxImports).clear();
+            const tool = btn.dataset.uclear;
+            clearUnits(tool);
+            if (tool === 'event') evImports.clear();
+            else if (tool === 'reaction') rxImports.clear();
             renderUnitPicks();
             syncToolBtns();
-            toastr.success(`已清空${TOOL_NAME[btn.dataset.uclear]}单元（另一工具的不动；已转隐身注入的不受影响）`);
+            toastr.success(`已清空${TOOL_NAME[tool]}单元（其他工具的不动；已转隐身注入与当前装扮的不受影响）`);
         }));
     };
     renderUnitPicks();
     const onPanelChange = () => { syncToolBtns(); renderUnitPicks(); refreshMem(); };
     evBtnEl.addEventListener('click', () => openEvPanel(onPanelChange));
     rxBtnEl.addEventListener('click', () => openRxPanel(onPanelChange));
+    otBtnEl.addEventListener('click', () => openOtPanel(onPanelChange));
     kbBtnEl.addEventListener('click', () => openKbPanel(onPanelChange));
     loreBtnEl.addEventListener('click', () => openLorePanel(onPanelChange));
 
@@ -1344,6 +1373,7 @@ function renderCollect(container, main) {
                 userNote: run.note,
                 eventText: ut.eventText,
                 reactionText: ut.reactionText,
+                outfitText: ut.outfitText,
                 knowledgePayload: wizardKnowledgePayload(),
                 lorePicks: run.lorePicks ?? [],   // 世界书自选（第七轮）：预览与真实调用同一批
                 draftSkeletons: draftSkeletonList(),   // 近期草稿骨架（第七轮）：同上，看到的＝发出的
@@ -1427,6 +1457,7 @@ function renderReady(container, main) {
     const us = unitsState();
     const evNames = us.eventUnits.filter(u => u.inPlan).map(u => u.title || '(未命名)');
     const rxNames = us.reactionUnits.filter(u => u.inPlan).map(u => u.title || '(未命名)');
+    const otNames = us.outfitUnits.filter(u => u.inPlan).map(u => u.title || '(未命名)');
     const gpNames = wizardStorageItems().map(i => i.name || '(未命名)');
     const ut = wizardUnitTexts();
     // 知识库细账（第十四轮改按清单点名）：发送的条目按清单分组各报一段（随材料进确认页，与
@@ -1465,6 +1496,7 @@ function renderReady(container, main) {
         <div class="pp-gd-stephead" title="记忆表格、对话层数、世界书命中、预设等其余材料清单在第 1 步「查看完整提示词」弹窗开头"><b>第 2 步 · 分析前确认</b></div>
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的随机事件单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 随机事件：${evNames.length ? escapeHtml(evNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的路人反应单元名单，随分析发给模型；正文在第 1 步点单元名查看">插入单元 · 路人反应：${rxNames.length ? escapeHtml(rxNames.join('、')) : '无'}</div>
+        <div class="pp-gd-stat" title="第 1 步「插入单元」区勾选的装扮单元名单，随分析发给模型（装扮小节——规划按它写穿着细节）；当前装扮对扮演模型的注入与此无关，那边在「监听」页的装扮注入区">插入单元 · 装扮：${otNames.length ? escapeHtml(otNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步勾选的游戏玩法条目，作为材料随分析发送，规划按这些规则设计">玩法：${gpNames.length ? escapeHtml(gpNames.join('、')) : '无'}</div>
         <div class="pp-gd-stat" title="第 1 步「知识库抓取」面板里决定发送的条目（按清单各报一段：抽样清单＝逐条编号点名，「自选」的清单带标记；全量清单＝整表随行只报条数；编号＝清单号-条目号；勾了清单却 0 条发送的标 ⚠ 点名），随材料发送——规划从中选用素材，确认采用时选用的进冷却（放弃草稿不冷却）">知识库：${kbText}</div>
         <div class="pp-gd-stat" title="第 1 步「世界书自选」面板里勾的条目（原文整条随材料发送——「照着写」的材料，不挑不冷却；与检索命中自动去重、这边优先），按书点名条数">自选世界书：${loreText}</div>
@@ -2011,6 +2043,198 @@ function openKbPanel(onChange) {
 }
 
 // ---------------------------------------------------------------------------
+// 装扮（换装）悬浮面板（2026-09-02，DESIGN §6.4 装扮设计落码）：按角色行从「装扮标记」清单
+// 抓候选（轮换制复用知识库抓取），两种成稿——「纯抽取」零模型调用（勾选条目原文拼接）/
+// 「模型生成」每角色一次轻量选择小调用（outfit.js）。确认立卡＝装扮单元（随规划分析发送走
+// 下方「插入单元」勾选）＋自动成为当前装扮开始持续注入（设置在「监听」页装扮注入区）。
+// 绑定清单的世界书对照条目随清单走（绑定配置在「知识库」页签），面板不再重选一遍
+// ---------------------------------------------------------------------------
+
+let otBusy = false;
+function openOtPanel(onChange) {
+    const body = openViewer('装扮').querySelector('.pp-viewer-body');
+    const status = text => { const el = body.querySelector('#pp_gd_ot_status'); if (el) el.textContent = text; };
+    const draft = outfitDraft();
+    const profs = settings.api.profiles ?? [];
+    const cfg = knowledgeCfg();
+
+    // 一行的候选条目勾选区（照知识库抓取面板的行样式：只显示抓到的那一把）；纯抽取模式下正文随勾选自动重拼
+    const rowPicksHtml = (row, i) => {
+        const list = kbFindList(row.listId);
+        if (!list) return '<div class="pp-muted">这张清单已不存在，换一张</div>';
+        const picked = new Set(row.picked ?? []);
+        const drawn = new Set(row.drawn ?? []);
+        const shown = (list.entries ?? []).filter(e => drawn.has(e.id));
+        if (!shown.length) return '<div class="pp-muted" title="候选区只显示抓到的那一把（轮换制）；要换一批点「抓取/重抓」">还没抓取——点「抓取」按轮换抓一把候选</div>';
+        return shown.map(e => `
+        <div class="pp-kb-erow${picked.has(e.id) ? '' : ' pp-kb-unsel'}">
+            <label title="勾上＝这条进本角色的候选（纯抽取＝拼进正文；模型生成＝随候选发给轻量选择）"><input type="checkbox" data-otpick="${i}|${escapeHtml(e.id)}" ${picked.has(e.id) ? 'checked' : ''} /></label>
+            <span class="pp-muted pp-kb-ecode">${escapeHtml(e.code)}</span>
+            <span class="pp-kb-ebody" title="${escapeHtml(entryText(list, e))}">${escapeHtml(entryText(list, e) || '（空条目）')}</span>
+        </div>`).join('');
+    };
+
+    const render = () => {
+        const lists = outfitListsForChat();
+        const active = outfitState().active;
+        if (!lists.length) {
+            body.innerHTML = '<div class="pp-muted">还没有打「装扮」标记的知识库清单——去「知识库」页签，在清单行把「装扮」开关打开。衣库清单（没绑定）在所有聊天可用；绑定了的清单只在它绑定的聊天里出现</div>';
+            return;
+        }
+        const gen = draft.mode === 'gen';
+        body.innerHTML = `
+        <div class="pp-gd-ughead">
+            <label class="pp-label" title="两种成稿方式：「纯抽取」不调模型——勾选的条目原文直接拼成本角色正文；「模型生成」每个角色一次轻量选择小调用（三五千 token 顶天，主生成的智力不受影响）——模型从勾选的候选里挑一套并写状态句">成稿方式</label>
+            <span class="pp-seg" id="pp_gd_ot_mode" title="切换只影响之后的抓取与生成，已写好的各角色正文保留">
+                <span class="pp-seg-opt${gen ? '' : ' on'}" data-otmode="draw">纯抽取</span>
+                <span class="pp-seg-opt${gen ? ' on' : ''}" data-otmode="gen">模型生成</span>
+            </span>
+            <span class="menu_button" id="pp_gd_ot_addrow" title="多加一位角色（多角色确认时拼成一个装扮单元）"><i class="fa-solid fa-plus"></i> 添加角色</span>
+        </div>
+        ${draft.rows.map((row, i) => `
+        <div class="pp-ot-rowbox">
+            <div class="pp-kb-toolrow">
+                <input type="text" class="text_pole textarea_compact" data-otname="${i}" value="${escapeHtml(row.name)}" placeholder="角色名" style="flex:0 1 120px" title="本行给哪位角色挑装扮" />
+                <select class="text_pole" data-otlist="${i}" style="flex:1 1 160px" title="这张角色清单用哪张装扮清单（清单在「知识库」页签管理；绑定了世界书的清单，绑定的条目会自动作为轻量选择的对照材料）">
+                    ${lists.map(l => `<option value="${escapeHtml(l.id)}" ${l.id === row.listId ? 'selected' : ''}>${escapeHtml(l.name)}（${(l.entries ?? []).length} 条${l.bind ? ' · 绑定本聊天' : ''}）</option>`).join('')}
+                </select>
+                <span class="menu_button" data-otgrab="${i}" title="按轮换抓 ${cfg.grabCount} 条进勾选区（整张清单洗牌按序发，一轮内不重复；重抓＝换下一批，丢掉的算已发过）">${(row.picked ?? []).length ? '重抓' : `抓取`}</span>
+                <span class="menu_button fa-solid fa-trash" data-otdelrow="${i}" title="删掉这一行角色"></span>
+            </div>
+            ${rowPicksHtml(row, i)}
+            ${gen && (row.pickCodes ?? []).length ? `<div class="pp-muted" title="轻量选择模型自报选中的编号">模型选中：${escapeHtml(row.pickCodes.join('、'))}</div>` : ''}
+            <textarea class="text_pole textarea_compact" data-ottext="${i}" rows="4" placeholder="${gen ? '点下方「轻量选择」生成，或手写本角色的装扮正文' : '勾选上方条目自动拼入，也可手改'}" title="本角色的装扮正文（确认立卡时按角色拼进单元）。纯抽取模式下勾选变化会自动重拼——手改过后再动勾选会被重拼覆盖，先勾完再改">${escapeHtml(row.text)}</textarea>
+        </div>`).join('') || '<div class="pp-muted">还没有角色行——点「添加角色」开始（每行一位角色、一张装扮清单）</div>'}
+        ${gen ? `
+        <div class="pp-kb-toolrow" style="margin-top:6px">
+            <label title="轻量选择带不带最近对话（判断场合用：在家不出门就不选正装）。一层＝一条角色回复"><input type="checkbox" id="pp_gd_ot_usechat" ${draft.useChat ? 'checked' : ''} /> 带最近对话</label>
+            <input type="number" class="text_pole" id="pp_gd_ot_chatfloors" min="1" max="50" step="1" value="${draft.chatFloors}" title="带最近几层角色楼（其间夹的用户消息一并保留）" />
+            <select class="text_pole" id="pp_gd_ot_prov" title="轻量选择走哪个连接：绑定清单用绑定时配置的模型（在那边改），这里管的是没绑定（衣库）清单；「默认」＝方案库第一条，没有方案就是主连接">
+                <option value="" ${draft.providerId === '' ? 'selected' : ''}>默认（方案库第一条）</option>
+                <option value="__main__" ${draft.providerId === '__main__' ? 'selected' : ''}>主连接</option>
+                ${profs.map(p => `<option value="${escapeHtml(p.id)}" ${draft.providerId === p.id ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model ?? '')}</option>`).join('')}
+            </select>
+            <span class="menu_button" id="pp_gd_ot_gen" title="按角色逐个跑轻量选择（每个角色一次小调用：候选一小把＋绑定的世界书对照＋最近对话 → 模型挑中并写状态句）。已写好的正文会被生成结果覆盖">轻量选择</span>
+        </div>` : ''}
+        <div class="pp-kb-toolrow" style="margin-top:6px">
+            <input type="text" class="text_pole textarea_compact" id="pp_gd_ot_title" value="${escapeHtml(draft.title)}" placeholder="单元标题（可空，默认「装扮·角色名」）" style="flex:1 1 auto" />
+            <span class="menu_button" id="pp_gd_ot_confirm" title="把「有名字且有正文」的角色行拼成一个装扮单元入池，并立即成为当前装扮开始持续注入——旧装扮自动进监听留痕；注入方式（持续/注入几层楼）与撤下在「监听」页的装扮注入区">确认立为装扮单元</span>
+        </div>
+        <div id="pp_gd_ot_status" class="pp-muted">${active ? `当前装扮：「${escapeHtml(active.title)}」（${active.mode === 'always' ? '持续注入中' : active.mode === 'floors' ? '按层数注入中' : '已停注'}）——换新装扮直接确认，旧的自动进留痕；设置与撤下在「监听」页` : '当前没有生效装扮'}</div>
+        <div class="pp-muted" style="margin-top:6px" title="装扮清单的管理与绑定⇄衣库开关在「知识库」页签；留痕来源标签＝换装，与剧情规划/长线共用监听页留痕滚动池">清单轮换/冷却与知识库同机（冷却只按规划采用结算，装扮抓取不结冷却）；确认立卡不影响本面板草稿，重 roll 随意</div>`;
+
+        // —— 接线 ——
+        body.querySelector('#pp_gd_ot_mode')?.querySelectorAll('.pp-seg-opt').forEach(el => el.addEventListener('click', () => {
+            draft.mode = el.dataset.otmode === 'gen' ? 'gen' : 'draw';
+            persistOutfit();
+            render();
+        }));
+        body.querySelector('#pp_gd_ot_addrow')?.addEventListener('click', () => {
+            draft.rows.push({ name: '', listId: draft.rows[0]?.listId ?? outfitListsForChat()[0]?.id ?? '', drawn: [], picked: [], pickCodes: [], text: '' });
+            persistOutfit();
+            render();
+        });
+        body.querySelectorAll('[data-otname]').forEach(el => el.addEventListener('input', () => {
+            draft.rows[Number(el.dataset.otname)].name = el.value.slice(0, 60);
+            persistOutfit();
+        }));
+        body.querySelectorAll('[data-otlist]').forEach(el => el.addEventListener('change', () => {
+            const row = draft.rows[Number(el.dataset.otlist)];
+            row.listId = el.value;
+            row.drawn = [];
+            row.picked = [];
+            row.pickCodes = [];
+            row.text = '';
+            persistOutfit();
+            render();
+        }));
+        body.querySelectorAll('[data-otgrab]').forEach(btn => btn.addEventListener('click', () => {
+            const row = draft.rows[Number(btn.dataset.otgrab)];
+            const got = drawForRow(row, cfg.grabCount);
+            if (!got.length) toastr.info('这张清单没有可抓的条目（全部冷却中或清单为空）');
+            if (draft.mode === 'draw') row.text = drawRowText(row);
+            persistOutfit();
+            render();
+        }));
+        body.querySelectorAll('[data-otdelrow]').forEach(btn => btn.addEventListener('click', () => {
+            draft.rows.splice(Number(btn.dataset.otdelrow), 1);
+            persistOutfit();
+            render();
+        }));
+        body.querySelectorAll('[data-otpick]').forEach(cb => cb.addEventListener('change', () => {
+            const [i, entryId] = cb.dataset.otpick.split('|');
+            const row = draft.rows[Number(i)];
+            const set = new Set(row.picked ?? []);
+            if (cb.checked) set.add(entryId); else set.delete(entryId);
+            row.picked = [...set];
+            if (draft.mode === 'draw') row.text = drawRowText(row);   // 勾选变 → 正文重拼（手改会被覆盖，先勾完再改）
+            persistOutfit();
+            render();
+        }));
+        body.querySelectorAll('[data-ottext]').forEach(ta => ta.addEventListener('input', () => {
+            draft.rows[Number(ta.dataset.ottext)].text = ta.value;
+            persistOutfit();
+        }));
+        body.querySelector('#pp_gd_ot_usechat')?.addEventListener('change', e => { draft.useChat = e.target.checked; persistOutfit(); });
+        body.querySelector('#pp_gd_ot_chatfloors')?.addEventListener('change', e => {
+            draft.chatFloors = Math.min(Math.max(Math.round(Number(e.target.value) || 6), 1), 50);
+            e.target.value = String(draft.chatFloors);
+            persistOutfit();
+        });
+        body.querySelector('#pp_gd_ot_prov')?.addEventListener('change', e => { draft.providerId = e.target.value; persistOutfit(); });
+        body.querySelector('#pp_gd_ot_title')?.addEventListener('input', e => { draft.title = e.target.value.slice(0, 60); persistOutfit(); });
+        body.querySelector('#pp_gd_ot_gen')?.addEventListener('click', async () => {
+            if (otBusy) return;
+            const todo = draft.rows.filter(r => r.name.trim() && r.listId && (r.picked ?? []).length);
+            if (!todo.length) { toastr.warning('没有可生成的角色行——每行要有角色名、选了清单、勾了候选条目'); return; }
+            otBusy = true;
+            try {
+                const chat = getTavernContext().chat ?? [];
+                const allFloors = collectFloorsFromChat(chat);
+                for (let k = 0; k < todo.length; k++) {
+                    const row = todo[k];
+                    const list = kbFindList(row.listId);
+                    status(`轻量选择中…… ${k + 1}/${todo.length}（${row.name.trim()}）`);
+                    const wbText = list?.bind?.picks?.length
+                        ? resolveLorePicksForOutfit(list.bind.picks).map(p => `【${p.book.name} / ${p.entry.comment ?? `条目 ${p.entry.uid + 1}`}】\n${p.entry.content}`).join('\n\n')
+                        : '';
+                    const chatText = draft.useChat
+                        ? formatFloors(limitFloors(allFloors, draft.chatFloors))
+                        : '';
+                    const { provider } = providerForList(list, draft.providerId);
+                    const r = await runOutfitSelect({ name: row.name.trim(), list, candidates: rowCandidates(row), wbText, chatText, provider });
+                    row.text = r.text;
+                    row.pickCodes = r.pick;
+                    persistOutfit();
+                    render();
+                }
+                status('生成完毕——核对各角色正文后点「确认立为装扮单元」');
+            } catch (err) {
+                status('');
+                toastr.error(`轻量选择失败：${String(err.message ?? err).slice(0, 160)}`);
+            } finally {
+                otBusy = false;
+            }
+        });
+        body.querySelector('#pp_gd_ot_confirm')?.addEventListener('click', () => {
+            const st = unitsState();
+            if (st.outfitUnits.length >= MAX_UNITS_PER_TOOL) { toastr.warning(`装扮单元暂存已满 ${MAX_UNITS_PER_TOOL} 个，先在第 1 步「插入单元」区删一个（当前装扮不受影响）`); return; }
+            const chars = draft.rows.filter(r => r.name.trim() && String(r.text ?? '').trim())
+                .map(r => ({ name: r.name.trim(), text: String(r.text ?? '').trim() }));
+            if (!chars.length) { toastr.warning('没有可立卡的角色行——每行要有角色名和正文（勾条目、抓取或手写）'); return; }
+            const unit = newOutfitUnit(chars, draft.title);
+            if (!addUnit(unit)) { toastr.warning('装扮单元入池失败（暂存已满）'); return; }
+            activateOutfit(unit);
+            status(`已立卡并开始持续注入：「${unit.title}」——注入设置与撤下在「监听」页的装扮注入区`);
+            onChange();
+        });
+    };
+
+    render();
+    onChange();
+}
+
+// ---------------------------------------------------------------------------
 // 世界书自选悬浮面板（第七轮 §6.10，照知识库抓取面板同款交互）：按书分组勾条目，
 // 勾中的整条原文随分析进材料——「照着写」的材料（性知识/世界观口径这类，每次都该在场），
 // 区别于知识库的「选着用」（候选素材、挑中进冷却）。不看关键词/常驻/书与条目的启用状态
@@ -2146,6 +2370,7 @@ async function startAnalyze(container, { revise = false } = {}) {
             revisionNote: revise ? run.reviseNote : '',
             eventText: ut.eventText,
             reactionText: ut.reactionText,
+            outfitText: ut.outfitText,
             knowledgePayload: kbPayload,
             lorePicks: run.lorePicks ?? [],   // 世界书自选（第七轮 §6.10）：勾中的整条原文随行
             draftSkeletons: draftSkeletonList(),   // 近期草稿骨架（第七轮防复刻）：放弃/换掉的草稿清单随行
