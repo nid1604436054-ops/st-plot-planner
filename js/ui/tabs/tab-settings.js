@@ -2,7 +2,7 @@
 // + 数据备份与搬家（导出备份 / 导入备份 / 备份继承）
 // 配置直接放在主面板里，魔法棒 → 剧情规划器 → 设置，无需再去扩展面板
 // （「生效中的隐身注入」原住本页底部，2026-08-26 搬去剧情指导页底部工具区——见 tab-events.js）
-import { settings, save, newId } from "../../settings.js";
+import { settings, save, newId, upsertApiProfile, renameApiProfile } from "../../settings.js";
 import { testConnection, fetchModels, searchWeb } from "../../api.js";
 import { guidanceSystemPrompt } from "../../planner.js";
 import { activeStory } from "../../story.js";
@@ -65,11 +65,16 @@ export const settingsTab = {
         <div class="pp-section">
             <details class="pp-fold" data-secfold="conn" ${secFolds.conn ? 'open' : ''}>
                 <summary><i class="fa-solid fa-plug"></i> 大模型连接</summary>
-                <label class="pp-label" title="把不同供应商的连接各存一套（地址+密钥+模型），下拉一键切换，测试不同供应商不用反复粘贴；温度等其余参数全局共用">供应商方案</label>
+                <label class="pp-label" title="把不同供应商/不同模型的连接各存一套（地址+密钥+模型三件套算一套），下拉一键切换，测试不同组合不用反复粘贴；同一地址下存几个模型都行，名字随时可改；温度等其余参数全局共用">供应商方案</label>
             <div class="pp-model-row">
                 <select id="pp_set_prof" class="text_pole" title="选择已保存的方案立即整套启用（地址、密钥、模型一起换过来）；切换后模型下拉显示「当前自定义」，点「获取模型列表」可刷新成新供应商的列表"></select>
-                <div id="pp_set_prof_save" class="menu_button" title="把当前地址、密钥、模型存成一个方案：名字自动取地址域名；同一地址+密钥再次保存只更新模型，同域名不同密钥会另存一条（名字带 -2 -3 区分）">保存</div>
+                <div id="pp_set_prof_save" class="menu_button" title="把当前地址、密钥、模型存成一个方案：同一地址+密钥下换个模型会另存一条（名字自动带模型名，可点「改名」自定）；地址+密钥+模型三样全同的已存在时不重复建条；名字撞车自动加 -2 -3">保存</div>
+                <div id="pp_set_prof_rename" class="menu_button" title="改下拉里选中方案的显示名（只改名字，地址、密钥、模型都不动）——比如把「api.deepseek.com·deepseek-chat」改成「便宜版」">改名</div>
                 <div id="pp_set_prof_del" class="menu_button" title="删除下拉里选中的方案（只删留底的方案，不动当前连接）">删除</div>
+            </div>
+            <div class="pp-model-row" id="pp_set_prof_rename_row" hidden>
+                <input id="pp_set_prof_rename_text" class="text_pole textarea_compact" type="text" placeholder="方案的新名字" autocomplete="off" />
+                <div id="pp_set_prof_rename_ok" class="menu_button" title="保存新名字（只改显示名，连接内容不动）">确定</div>
             </div>
             <label class="pp-label">API 地址（含 /v1）</label>
             <input id="pp_set_base" class="text_pole textarea_compact" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" />
@@ -308,6 +313,7 @@ export const settingsTab = {
         profSel.addEventListener('change', () => {
             const p = (settings.api.profiles ?? []).find(x => x.id === profSel.value);
             if (!p) return;
+            container.querySelector('#pp_set_prof_rename_row').hidden = true;   // 换了对象，改名行里预填的旧名作废
             settings.api.baseUrl = p.baseUrl;
             settings.api.apiKey = p.apiKey;
             settings.api.model = String(p.model ?? '');
@@ -324,25 +330,24 @@ export const settingsTab = {
             const base = String(container.querySelector('#pp_set_base').value || '').trim();
             const key = String(container.querySelector('#pp_set_key').value || '').trim();
             if (!base) { toastr.warning('请先填写 API 地址'); return; }
+            // 模型也照输入框现值取（手动输入模式没失焦时 change 没触发，直接读控件防存进旧值）
+            let model = String(settings.api.model ?? '').trim();
+            if (manualModel) model = String(container.querySelector('#pp_set_model_text').value || '').trim();
+            else {
+                const sel = container.querySelector('#pp_set_model');
+                if (sel && sel.value) model = String(sel.value).trim();
+            }
             settings.api.baseUrl = base;
             settings.api.apiKey = key;
+            settings.api.model = model;
+            // 第四十轮（用户拍板）：去重键改成 地址+密钥+模型 三件套——同一网站下换个模型再存＝另存
+            // 一条，不再覆盖原来那条；三件套全同＝命中已有，不重复建条
+            const r = upsertApiProfile(base, key, model);
             save();
-            const list = settings.api.profiles ??= [];
-            const same = list.find(x => x.baseUrl === base && x.apiKey === key);
-            if (same) {
-                same.model = settings.api.model;
-                save();
-                toastr.success(`方案「${same.name}」已更新（模型 ${settings.api.model || '未选'}）`);
-            } else {
-                let host = base;
-                try { host = new URL(base).host; } catch { /* 地址不规范就用原文当名字 */ }
-                let name = host, n = 2;
-                while (list.some(x => x.name === name)) name = `${host}-${n++}`;
-                list.push({ id: newId('ap-'), name, baseUrl: base, apiKey: key, model: settings.api.model });
-                save();
-                rebuildProfileSelect(container);
-                toastr.success(`已保存方案「${name}」`);
-            }
+            rebuildProfileSelect(container);
+            profSel.value = r.profile.id;   // 保存后直接选中它，接着「改名」一步到位
+            if (r.created) toastr.success(`已保存方案「${r.profile.name}」（点「改名」可自定名字）`);
+            else toastr.info(`这个地址+模型已经存过了，就是方案「${r.profile.name}」`);
         });
         container.querySelector('#pp_set_prof_del').addEventListener('click', () => {
             const list = settings.api.profiles ?? [];
@@ -351,8 +356,35 @@ export const settingsTab = {
             const [removed] = list.splice(idx, 1);
             save();
             rebuildProfileSelect(container);
+            container.querySelector('#pp_set_prof_rename_row').hidden = true;
             toastr.success(`已删除方案「${removed.name}」`);
         });
+
+        // 改名（第四十轮）：选中方案 → 点「改名」出输入行（预填现名）→「确定」落账；
+        // 空名/与他人重名会被拒（下拉里两条同名分不清）
+        const renameRow = container.querySelector('#pp_set_prof_rename_row');
+        const renameText = container.querySelector('#pp_set_prof_rename_text');
+        container.querySelector('#pp_set_prof_rename').addEventListener('click', () => {
+            const p = (settings.api.profiles ?? []).find(x => x.id === profSel.value);
+            if (!p) { toastr.warning('请先在下拉里选中要改名的方案'); return; }
+            renameRow.hidden = false;
+            renameText.value = p.name;
+            renameText.focus();
+            renameText.select();
+        });
+        const applyRename = () => {
+            const p = (settings.api.profiles ?? []).find(x => x.id === profSel.value);
+            if (!p) { renameRow.hidden = true; return; }
+            const r = renameApiProfile(p.id, renameText.value);
+            if (!r.ok) { toastr.warning(r.reason); return; }
+            save();
+            rebuildProfileSelect(container);
+            profSel.value = p.id;
+            renameRow.hidden = true;
+            toastr.success(`已改名为「${p.name}」`);
+        };
+        container.querySelector('#pp_set_prof_rename_ok').addEventListener('click', applyRename);
+        renameText.addEventListener('keydown', e => { if (e.key === 'Enter') applyRename(); });
 
         container.querySelector('#pp_set_fetch_models').addEventListener('click', async function () {
             const result = container.querySelector('#pp_set_test_result');

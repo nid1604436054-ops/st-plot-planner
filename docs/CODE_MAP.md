@@ -23,7 +23,7 @@
 | 文件 | 行数 | 职责 | 关键导出 |
 |---|---|---|---|
 | api.js | ~460 | 模型通道＋联网搜索；预设/思考关闭/标头重试/JSON 修复全在这；报错带原生返回（流式中断带等待秒数/已收字数/底层报错、200 非 JSON 带原文片段——第二十九轮） | chatCompletion、parseModelJson、globalPresetBlock、withGlobalPresets、searchWeb |
-| settings.js | ~150 | 设置单例＋默认值＋老安装迁移（补键都在 ensureDefaults） | settings、save、newId |
+| settings.js | ~190 | 设置单例＋默认值＋老安装迁移（补键都在 ensureDefaults）；供应商方案两纯函数（第四十轮：upsertApiProfile 三件套去重〔同地址多模型各存一条、自动名域名·模型名〕＋renameApiProfile 改名〔空名/重名拒〕） | settings、save、newId、upsertApiProfile、renameApiProfile |
 | chatdata.js | ~140 | 每聊天数据冷热双层（chatMetadata 热层 ↔ settings.chatData 冷层留底） | loadChatData、saveChatData、flushChatData |
 | context.js | ~70 | getContext() 唯一依赖点：聊天记录＋角色卡摘要 | collectPlanningContext、characterSummary |
 | utils.js | ~170 | 转义/截断/容错 JSON（extractJson）/指纹/文件读写/token 粗估 | extractJson、escapeHtml |
@@ -55,7 +55,7 @@
 | ui/wandMenu.js | ~30 | 魔法棒菜单入口 |
 | ui/tabs/tab-guidance.js | ~2560 | **最大文件**：三步向导全部＋两个工具面板＋两个材料面板（内部分区见下；第三十九轮：确认采用＝存档＋注入＋**自动挂载监听**三合一〔opMountUnit＋syncLfProgress；退位槽占用被拒不阻断采用、toast 指路历史补挂〕、历史剧情每条带「挂载」按钮〔规划挂监听唯一手动出口〕、「转为隐身注入」悬浮改口专职不需要节点判定的材料） |
 | ui/tabs/tab-memory.js | ~705 | 记忆表格页（镜像/原表库/已删除/打标/备份恢复） |
-| ui/tabs/tab-settings.js | ~670 | 设置页（连接/方案库/联网搜索/监听/知识库/高级/预设/备份搬家；第三十七轮：监听材料三控件〔楼层数/检索/记忆表〕撤走搬监听页、留指路牌） |
+| ui/tabs/tab-settings.js | ~730 | 设置页（连接/方案库/联网搜索/监听/知识库/高级/预设/备份搬家；第三十七轮：监听材料三控件〔楼层数/检索/记忆表〕撤走搬监听页、留指路牌；第四十轮：供应商方案改三件套去重〔同地址下不同模型各存一条〕＋新增「改名」按钮〔预填输入行/回车确认、只动显示名〕、保存后下拉自动选中新条、保存时模型照控件现值取） |
 | ui/tabs/tab-events.js | ~500 | 事件库设置＋AI 建库两折叠区 |
 | ui/tabs/tab-worldbook.js | ~460 | 世界书页（导入/启停/条目编辑/检索测试/回收站） |
 | ui/tabs/tab-knowledge.js | ~450 | 知识库页（清单管理/结构化导入/冷却徽章） |
@@ -108,4 +108,4 @@
 - **酒馆页面跑旧 JS**：真机复验前 Ctrl+F5 强刷。
 - **展开字符串字面量**：`...(cond ? 'a' : 'b')` 会按字符拆散，必须 `['...']` 包数组。
 - **cmd 环境**：无 ls/rm/head/grep；`;` 不是命令分隔符（用 &&）；rg 正则里的 `|` 会被 shell 当管道（拆多个 -e）；rg 中文经管道输出会 GBK 乱码；node --import 必须 file:///C:/... 带盘符冒号。
-- **离线测试台**：%TEMP%\pp-re-test（第十六轮重建的精简台，第十八轮 61 项、第十九轮扩至 72 项、第二十轮扩至 87 项、第二十四轮 104 项、第二十五轮 113 项、第二十六轮 121 项、第二十七轮 136 项、第二十八轮 146 项、第二十九轮 149 项、第三十轮 166 项、第三十一轮 180 项、第三十二轮 199 项、第三十三轮 233 项、第三十四轮 254 项、第三十五轮 255 项、第三十七轮 276 项、第三十八轮 283 项、第三十九轮 294 项——改动 js 后记得把工作区文件拷进测试台再跑，测试台 import 的是自己的副本；jsonResponse 桩的 text 字段返回真 JSON 正文——非流式路径读 text 再本地 parse，桩与真实 Response 对齐；setExtensionPrompt 替身全量留痕进 globalThis.__slotWrites、document 替身带 dispatchEvent〔第三十二轮起断言注入槽用〕；held-fetch 竞态断言注意 listenerAttempt 会重试两发——「先挂起再拒」的桩第二发要立即拒，否则吊 90 秒超时〔第三十三轮教训〕；测「升级后首见」型迁移不能靠置空字段＋persist 复现——listenerState 内部的播种会在 persist 那一下当场重播，须先摆好旧键再删字段〔第三十七轮教训〕）；%TEMP% 会被系统清理——重要断言随轮次记进交付记录，丢了照记录重建（搭法在记忆 offline-testbed-technique）。
+- **离线测试台**：%TEMP%\pp-re-test（第十六轮重建的精简台，第十八轮 61 项、第十九轮扩至 72 项、第二十轮扩至 87 项、第二十四轮 104 项、第二十五轮 113 项、第二十六轮 121 项、第二十七轮 136 项、第二十八轮 146 项、第二十九轮 149 项、第三十轮 166 项、第三十一轮 180 项、第三十二轮 199 项、第三十三轮 233 项、第三十四轮 254 项、第三十五轮 255 项、第三十七轮 276 项、第三十八轮 283 项、第三十九轮 294 项、第四十轮 309 项——改动 js 后记得把工作区文件拷进测试台再跑，测试台 import 的是自己的副本；jsonResponse 桩的 text 字段返回真 JSON 正文——非流式路径读 text 再本地 parse，桩与真实 Response 对齐；setExtensionPrompt 替身全量留痕进 globalThis.__slotWrites、document 替身带 dispatchEvent〔第三十二轮起断言注入槽用〕；held-fetch 竞态断言注意 listenerAttempt 会重试两发——「先挂起再拒」的桩第二发要立即拒，否则吊 90 秒超时〔第三十三轮教训〕；测「升级后首见」型迁移不能靠置空字段＋persist 复现——listenerState 内部的播种会在 persist 那一下当场重播，须先摆好旧键再删字段〔第三十七轮教训〕）；%TEMP% 会被系统清理——重要断言随轮次记进交付记录，丢了照记录重建（搭法在记忆 offline-testbed-technique）。

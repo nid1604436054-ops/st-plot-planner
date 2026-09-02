@@ -13,7 +13,8 @@ const DEFAULTS = {
         temperature: 0.7,
         maxTokens: 1500,
         thinkingOff: false, // 推理模型关闭思考（生成侧总开关；监听恒关不吃它——第十七轮分家）：请求体附加主流关闭参数（GLM 系 thinking / Qwen 系 enable_thinking 等），端点不认时自动去参重试
-        profiles: [],       // 供应商方案库：{id, name, baseUrl, apiKey, model}，设置页存当前连接、下拉一键切换（温度等其余参数全局共用）
+        profiles: [],       // 供应商方案库：{id, name, baseUrl, apiKey, model}，设置页存当前连接、下拉一键切换（温度等其余参数全局共用）；
+                            // 第四十轮起同一地址下不同模型各存一条（名字可改）——存取走 upsertApiProfile/renameApiProfile
     },
     search: {
         provider: 'tavily',    // 联网搜索供应商（当前仅 Tavily，浏览器直连）
@@ -149,4 +150,35 @@ export function save() {
 
 export function newId(prefix = '') {
     return `${prefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// 供应商方案保存（第四十轮：用户拍板「一个网站下可选不同模型配置分别保存＋自己改名」）。
+// 去重键 = 地址＋密钥＋模型三件套：同地址同密钥换个模型再存＝另存一条（旧逻辑按地址＋密钥去重，
+// 一个网站永远只有一条、换模型就覆盖——本轮按用户要求废掉）；三件套全同＝命中已有不新建。
+// 新条目名字自动取 域名·模型名（地址不规范用原文），重名自动加 -2 -3；名字随时可在设置页改
+export function upsertApiProfile(baseUrl, apiKey, model) {
+    const list = settings.api.profiles ??= [];
+    const same = list.find(x => x.baseUrl === baseUrl && x.apiKey === apiKey && x.model === model);
+    if (same) return { profile: same, created: false };
+    let host = baseUrl;
+    try { host = new URL(baseUrl).host; } catch { /* 地址不规范就用原文当名字 */ }
+    const base = model ? `${host}·${model}` : host;
+    let name = base, n = 2;
+    while (list.some(x => x.name === name)) name = `${base}-${n++}`;
+    const profile = { id: newId('ap-'), name, baseUrl, apiKey, model };
+    list.push(profile);
+    return { profile, created: true };
+}
+
+// 供应商方案改名：只动显示名（监听/长线/知识库都按 id 取方案，名字纯装饰）。
+// 空名与他人重名会被拒——下拉里两条同名会分不清
+export function renameApiProfile(id, name) {
+    const list = settings.api.profiles ?? [];
+    const p = list.find(x => x.id === id);
+    if (!p) return { ok: false, reason: '方案不存在（可能刚被删除），刷新下拉后重试' };
+    const n = String(name ?? '').trim();
+    if (!n) return { ok: false, reason: '名字不能为空' };
+    if (list.some(x => x.id !== id && x.name === n)) return { ok: false, reason: `已有同名方案「${n}」，换一个名字` };
+    p.name = n;
+    return { ok: true };
 }
