@@ -211,6 +211,9 @@ function normalizeUnit(u) {
         ...(u.lfRef ? { lfRef: { vol: Number(u.lfRef.vol) || 0, ch: Number(u.lfRef.ch) || 0 } } : {}),
         nodes,
         nodeIdx: idx,
+        // 锚层（第四十五轮）：各节点点亮时所在的角色楼楼层号（全聊天绝对号），删楼回退按它熄灭；
+        // null/缺位＝第四十五轮之前的旧点亮，不因删楼熄灭。只留已点亮段
+        litFloors: (Array.isArray(u.litFloors) ? u.litFloors : []).slice(0, idx).map(v => Number.isInteger(v) && v > 0 ? v : null),
     };
 }
 
@@ -360,6 +363,13 @@ export function floorsSignature(chat) {
     let h = 5381;
     for (let i = 0; i < last.text.length; i++) h = ((h << 5) + h + last.text.charCodeAt(i)) >>> 0;
     return `${list.filter(m => !m.isUser).length}:${h.toString(16)}`;
+}
+
+// 列表里最后一个带楼层号的角色楼（楼层号为全聊天绝对号）；没有角色楼＝0。
+// 锚层口径（第四十五轮）：节点点亮锚在「点亮那一轮的最后一层角色楼」上
+export function lastRoleFloor(list) {
+    for (let i = list.length - 1; i >= 0; i--) if (list[i]?.floor != null) return list[i].floor;
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -695,7 +705,12 @@ export function guidanceText(goal, actionHint) {
 }
 
 export function applyUnitOutcome(state, report, meta) {
+    let litFloor = null;
     if (report.judgment === 'achieved' && state.unit && state.unit.nodeIdx < state.unit.nodes.length) {
+        // 锚层（第四十五轮）：点亮时记下本轮最后一层角色楼，删楼回退按锚点熄灭；0＝异常楼层态→无锚不回退
+        litFloor = Math.max(1, Number(meta.lastFloor) || 0) || null;
+        if (!Array.isArray(state.unit.litFloors)) state.unit.litFloors = [];   // 直接调用方（测试台）可能手工造单位
+        state.unit.litFloors[state.unit.nodeIdx] = litFloor;
         state.unit.nodeIdx += 1;   // 点亮当前节点（进度账唯一自动写点）
     }
     state.round = meta.round;
@@ -714,6 +729,7 @@ export function applyUnitOutcome(state, report, meta) {
         ok: true,
         judgment: report.judgment,
         litNode: report.judgment === 'achieved' ? state.unit?.nodes[Math.max(0, state.unit.nodeIdx - 1)]?.title ?? '' : '',
+        litFloor,
         evidence: report.evidence,
         progressNote: report.progressNote,
         watch: report.watch,
@@ -778,7 +794,14 @@ export function applyLightOutcome(state, report, meta) {
 export function applyReentryOutcome(state, report, meta) {
     const before = state.unit?.nodeIdx ?? 0;
     const applied = Math.max(before, report.reached);
-    if (state.unit) state.unit.nodeIdx = Math.min(applied, state.unit.nodes.length);
+    // 锚层（第四十五轮，可驳默认）：批量补点亮的节点统一锚定回归判定那轮的最后一层角色楼——
+    // 不逐节点解析证据楼层（自由文本 notes 不可靠），删楼时这批节点随顶层锚点一起回退
+    const anchorFloor = Math.max(1, Number(meta.lastFloor) || 0) || null;
+    if (state.unit) {
+        if (!Array.isArray(state.unit.litFloors)) state.unit.litFloors = [];   // 直接调用方（测试台）可能手工造单位
+        for (let i = before; i < applied; i++) state.unit.litFloors[i] = anchorFloor;
+        state.unit.nodeIdx = Math.min(applied, state.unit.nodes.length);
+    }
     const rec = {
         at: meta.at,
         round: state.round,          // 信息性显示：回归判定不是楼层轮，不推进轮次计数
@@ -791,6 +814,7 @@ export function applyReentryOutcome(state, report, meta) {
             reached: report.reached,
             applied,
             nodesTotal: state.unit?.nodes.length ?? 0,
+            anchorFloor,
             deviation: report.deviationLevel,
             deviationNote: report.deviationNote,
             summary: report.summary,
@@ -914,6 +938,7 @@ export function createSendGate({ hardCapMs = GATE_HARD_CAP_MS, click = () => {},
 let running = false;          // 一轮未结束不叠新一轮
 let gate = null;              // 排队闸（initListener 装配）
 let analyzeTimer = null;      // 事件去抖
+let reconTimer = null;        // 删楼对账去抖（连删多楼时合并成一次）
 let holdToastShown = false;   // 扣发送提示一轮只弹一次
 let lastPromptText = '';      // 最近一次判定（例行轮或回归判定）实际发出的提示词全文——只在内存留最近一份，
                               // 全文随楼层数线性膨胀，进存档会把聊天文件撑翻倍；面板「看提示词全文」读它
@@ -1066,6 +1091,7 @@ export async function runListenerRound({ manual = false } = {}) {
     const ctx = getTavernContext();
     const chat = Array.isArray(ctx.chat) ? ctx.chat : null;
     if (!chat || !chat.length) return { skipped: 'no-chat' };   // chatdata 就绪窗口坑：ctx.chat 未载完不硬跑
+    runLitReconcile();   // 轮首兜底对账（第四十五轮）：删楼事件万一没接住（升级中途删楼等），判定前先把账对齐
     if (running) return { skipped: 'busy' };
     running = true;
     gate?.beginRound();
@@ -1076,6 +1102,7 @@ export async function runListenerRound({ manual = false } = {}) {
     const roundSrc = mode === 'unit' ? (state.unit?.source === 'longform' ? 'longform' : 'plan') : null;   // 失败留痕的来源标签（2026-09-02）
     const floorSig = floorsSignature(chat);
     const allFloors = collectFloorsFromChat(chat);
+    const lastFloor = lastRoleFloor(allFloors);   // 锚层：本轮最后一层角色楼（点亮锚在这上面）
     const floors = limitFloors(allFloors, Number(state.matRoutine.floors) || 0);   // 日常监听材料单（第三十七轮）：成功与失败留痕同一个口径
     const round = state.round + 1;
     const at = Date.now();
@@ -1158,14 +1185,14 @@ export async function runListenerRound({ manual = false } = {}) {
                 report.noGuidanceReason = '长线偏离挂起中：判定与进度账照跑，指导暂停注入（处置出口见监听页挂起卡的指路行）';
             }
             writeSlot(text);   // 滚动覆写：静默轮写空串（旧指导不留到下一轮）
-            applyUnitOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, guidance: text, suspended, retried: parsed.retried, tokens, materials });
+            applyUnitOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, lastFloor, guidance: text, suspended, retried: parsed.retried, tokens, materials });
         } else {
             const report = normalizeLightReport(parsed.result);
             const intervene = lightShouldIntervene(report, cfg.intervene) && report.goal;
             const text = intervene ? guidanceText(report.goal, report.actionHint) : '';
             if (!intervene && report.goal) report.noGuidanceReason = `介入档（${INTERVENE_LIGHT[cfg.intervene].label}）不够格：${report.noGuidanceReason || '本轮发现未达发送门槛'}`;
             writeSlot(text);
-            applyLightOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, guidance: text, retried: parsed.retried, tokens, materials });
+            applyLightOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, lastFloor, guidance: text, retried: parsed.retried, tokens, materials });
         }
         const capped = Math.max(1, Math.floor(Number(cfg.traceRounds) || 50));
         if (state.trace.length > capped) state.trace.length = capped;
@@ -1232,6 +1259,7 @@ export async function runReentryRound({ window: win, unitId } = {}) {
 
     try {
         const allFloors = collectFloorsFromChat(chat);
+        const lastFloor = lastRoleFloor(allFloors);   // 锚层：回归判定批量点亮统一锚在这一层（第四十五轮）
         const floors = limitFloors(allFloors, Number(state.matReentry.floors) || 0);   // 重挂对账材料单（第三十七轮）：与日常单互不影响
         const floorsText = formatFloors(floors);
         const floorsNote = state.matReentry.floors > 0 ? `最近 ${state.matReentry.floors} 层角色楼（楼层号为全聊天绝对号）` : undefined;
@@ -1271,7 +1299,7 @@ export async function runReentryRound({ window: win, unitId } = {}) {
             return { ok: true, mode: 'reentry', voided: true };
         }
         const report = normalizeReentryReport(parsed.result, state.unit);
-        applyReentryOutcome(state, report, { at, windowLabel: win.label, tokens, materials });
+        applyReentryOutcome(state, report, { at, windowLabel: win.label, lastFloor, tokens, materials });
         const capped = Math.max(1, Math.floor(Number(cfg.traceRounds) || 50));
         if (state.trace.length > capped) state.trace.length = capped;
         persistListener();
@@ -1294,6 +1322,67 @@ export async function runReentryRound({ window: win, unitId } = {}) {
         return { ok: false, error: msg };
     } finally {
         running = false;   // 不碰排队闸：回归判定不在发送链路上，扣发送没有任何理由
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 删楼回退对账（第四十五轮）：节点点亮时锚定楼层号（litFloors），删楼后锚层越界的
+// 节点熄灭、账往回倒——纯账本零调用。口径按用户承诺「只从下往上删，不中间抽楼」：
+// 锚层 > 现存最后一层角色楼即越界；无锚（第四十五轮之前的旧点亮）不因删楼熄灭。
+// 长线章账本的回退写点在 longform.js（对账器经 index.js 注册进来，保持单向依赖）
+// ---------------------------------------------------------------------------
+
+// 单个单位的锚点对账：返回 null＝没回退；否则 { from, to, unlit:[{title,anchor}] }（已就地改账）
+export function reconcileUnitAnchors(unit, lastFloor) {
+    if (!unit || !Array.isArray(unit.litFloors)) return null;
+    let keep = 0;
+    for (let i = 0; i < unit.nodeIdx; i++) {
+        const a = unit.litFloors[i];
+        if (a == null || a <= lastFloor) keep = i + 1;   // 无锚＝旧账，不因删楼熄灭
+        else break;   // 从下往上删：第一个越界即止
+    }
+    if (keep >= unit.nodeIdx) return null;
+    const unlit = [];
+    for (let i = keep; i < unit.nodeIdx; i++) unlit.push({ title: unit.nodes[i]?.title ?? `节点${i + 1}`, anchor: unit.litFloors[i] ?? null });
+    const from = unit.nodeIdx;
+    unit.nodeIdx = keep;
+    unit.litFloors = unit.litFloors.slice(0, keep);
+    return { from, to: keep, unlit };
+}
+
+// 监听两账（活动单位＋退位槽）删楼回退＋留痕落账。返回回退清单（null＝没动）；
+// 每条带 unit 引用供长线侧显式倒章账本（留痕记录里不带——不留对象进存档）
+export function rollbackListenerFloors(lastFloor) {
+    const state = listenerState();
+    const rolled = [];
+    for (const u of [state.unit, state.sidelined]) {
+        const r = reconcileUnitAnchors(u, lastFloor);
+        if (r) rolled.push({ unit: u, label: String(u.title ?? ''), src: u.source === 'longform' ? 'longform' : 'plan', ...r });
+    }
+    if (!rolled.length) return null;
+    for (const r of rolled) {
+        state.trace.unshift({ at: Date.now(), round: state.round, mode: 'rollback', src: r.src, ok: true, rollback: { label: r.label, from: r.from, to: r.to, unlit: r.unlit, lastFloor } });
+    }
+    const capped = Math.max(1, Math.floor(Number(listenerCfg().traceRounds) || 50));
+    if (state.trace.length > capped) state.trace.length = capped;
+    persistListener();
+    updateWandDot(state);
+    notifyPanel();
+    toastr.info(`删楼回退：${rolled.map(r => `「${String(r.label).slice(0, 30)}」熄灭 ${r.from - r.to} 个节点`).join('；')}——被删楼层里的剧情重新演出会再次点亮`);
+    return rolled;
+}
+
+// 对账器挂钩：长线侧的章账本回退写点由 index.js 注册进来（listener 不 import longform）
+let litReconciler = null;
+export function registerLitReconciler(fn) { litReconciler = typeof fn === 'function' ? fn : null; }
+
+function runLitReconcile() {
+    try {
+        const chat = Array.isArray(getTavernContext().chat) ? getTavernContext().chat : null;
+        if (!chat || !chat.length) return;   // chatdata 就绪窗口坑：没载完不硬对账（空聊天也不当「全删」处理）
+        litReconciler?.();
+    } catch (e) {
+        console.warn('[PlotPlanner] 删楼对账失败（账面不动，下一轮判定前会再试）', e);
     }
 }
 
@@ -1384,6 +1473,12 @@ export function initListener() {
     // 最后一楼被编辑/重生成：内容变了签名就变，自动重判；没变不吃轮
     eventSource.on(event_types.MESSAGE_EDITED, scheduleAnalyze);
 
+    // 删楼（第四十五轮）：楼层被删 → 对账回退锚层越界的节点（去抖合并「连删多楼」的连发事件）
+    eventSource.on(event_types.MESSAGE_DELETED, () => {
+        clearTimeout(reconTimer);
+        reconTimer = setTimeout(runLitReconcile, 600);
+    });
+
     updateWandDot(listenerState());
 }
 
@@ -1418,6 +1513,8 @@ export function setListenerEnabled(on) {
 export function manualLitCurrentNode() {
     const state = listenerState();
     if (!state.unit || state.unit.nodeIdx >= state.unit.nodes.length) return false;
+    const chat = Array.isArray(getTavernContext().chat) ? getTavernContext().chat : [];
+    state.unit.litFloors[state.unit.nodeIdx] = lastRoleFloor(collectFloorsFromChat(chat)) || null;   // 锚层：手动点亮锚在现存最后一层（第四十五轮）
     state.unit.nodeIdx += 1;
     if (state.halt?.kind === 'suspended') state.halt = null;
     state.dot = false;

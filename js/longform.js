@@ -10,7 +10,8 @@ import { loadChatData, saveChatData, flushChatData } from "./chatdata.js";
 import { chatCompletion, parseModelJson } from "./api.js";
 import { materialSections } from "./materials.js";
 import { storyState, activeStory } from "./story.js";
-import { listenerState, opMountUnit, runReentryRound } from "./listener.js";
+import { listenerState, opMountUnit, runReentryRound, collectFloorsFromChat, lastRoleFloor, rollbackListenerFloors } from "./listener.js";
+import { getTavernContext } from "./context.js";
 import { storageItemsInEffect } from "./store.js";
 import { knowledgeLists, payloadFromIds, entryText } from "./knowledge.js";
 
@@ -149,6 +150,10 @@ function normChapter(c) {
         text: String(o.text ?? ''),
         nodes,
         lit: Math.min(Math.max(0, Math.round(Number(o.lit) || 0)), nodes.length),   // 进度账：已点亮节点数
+        // 锚层（第四十五轮）：各节点点亮时的楼层号，与 lit 同长；删楼回退按它倒账。只留已点亮段
+        litFloors: (Array.isArray(o.litFloors) ? o.litFloors : [])
+            .slice(0, Math.min(Math.max(0, Math.round(Number(o.lit) || 0)), nodes.length))
+            .map(v => Number.isInteger(v) && v > 0 ? v : null),
         done: o.done === true || (nodes.length > 0 && (Number(o.lit) || 0) >= nodes.length),
         unitId: String(o.unitId ?? ''),
         mixLog,
@@ -973,6 +978,7 @@ function settleSplitResult(vi, result) {
     v.chapters = chapters.map((c, ci) => normChapter({
         ...c,
         lit: prev[ci] && prev[ci].nodes.length === c.nodes.length ? prev[ci].lit : 0,
+        litFloors: prev[ci] && prev[ci].nodes.length === c.nodes.length ? (prev[ci].litFloors ?? []) : [],   // 重切换表＝锚层作废（与 lit 同条件）
         done: prev[ci] && prev[ci].nodes.length === c.nodes.length ? prev[ci].done : false,
         unitId: prev[ci]?.unitId ?? '',
     }));
@@ -1125,6 +1131,7 @@ export function chapterUnit(st, vi, ci) {
         lfRef: { vol: vi, ch: ci },
         nodes: ch.nodes.map(n => ({ title: n.title, criterion: n.criterion, text: '' })),
         nodeIdx: Math.min(ch.lit, ch.nodes.length),
+        litFloors: (Array.isArray(ch.litFloors) ? ch.litFloors : []).slice(0, Math.min(ch.lit, ch.nodes.length)),   // 锚层随账本带回（第四十五轮）
     };
 }
 
@@ -1140,7 +1147,15 @@ export function syncLfProgress() {
         const ch = st.volumes[active.lfRef.vol]?.chapters?.[active.lfRef.ch];
         if (ch && ch.unitId === active.id) {
             const lit = Math.min(active.nodeIdx, ch.nodes.length);
-            if (lit > ch.lit) ch.lit = lit;   // 只进不退：退位槽旧副本接回时不把账本倒回去
+            if (lit > ch.lit) {
+                // 新点亮段的锚层入账（第四十五轮）：单位侧点亮自带楼层号，账本跟着长。
+                // 删楼回退不走这里——章账本的倒回只在对账器 reconcileLfFloors 的显式路径上，
+                // 「只进不退」总口径（旧副本不倒账）原样保留
+                if (!Array.isArray(ch.litFloors)) ch.litFloors = [];
+                const ua = Array.isArray(active.litFloors) ? active.litFloors : [];
+                for (let i = ch.lit; i < lit; i++) ch.litFloors[i] = ua[i] ?? null;
+                ch.lit = lit;
+            }
             if (active.nodeIdx >= active.nodes.length) ch.done = true;
             if (!st.mount || st.mount.unitId !== active.id) {
                 st.mount = { vol: active.lfRef.vol, ch: active.lfRef.ch, unitId: active.id, at: active.at };
@@ -1154,7 +1169,13 @@ export function syncLfProgress() {
         const ch = st.volumes[side.lfRef.vol]?.chapters?.[side.lfRef.ch];
         if (ch && ch.unitId === side.id && ch.nodes.length === side.nodes.length) {
             const lit = Math.min(side.nodeIdx, ch.nodes.length);
-            if (lit > ch.lit) ch.lit = lit;   // 重切过（节点数对不上）不回写，防错账
+            if (lit > ch.lit) {
+                // 冻结进度落账时锚层一并入账（第四十五轮）；回退同样只走对账器显式路径
+                if (!Array.isArray(ch.litFloors)) ch.litFloors = [];
+                const sa = Array.isArray(side.litFloors) ? side.litFloors : [];
+                for (let i = ch.lit; i < lit; i++) ch.litFloors[i] = sa[i] ?? null;
+                ch.lit = lit;   // 重切过（节点数对不上）不回写，防错账
+            }
             if (side.nodeIdx >= side.nodes.length) ch.done = true;
             persistLf();
         }
@@ -1164,6 +1185,33 @@ export function syncLfProgress() {
         persistLf();
     }
     return st;
+}
+
+// 删楼回退对账器（第四十五轮；index.js 注册进监听的删楼事件与轮首兜底）：
+// 监听两账（活动单位＋退位槽）先倒、留痕落账，再对真被锚层回退的长线章**显式**把账本倒回去——
+// 不借道 syncLfProgress 的通用比较，「只进不退」（第三十一轮：旧副本不倒账）原样保留。
+// 返回回退清单（null＝没动）。挂普通规划单位时也能用——章账本分支自然落空
+export function reconcileLfFloors() {
+    const chat = Array.isArray(getTavernContext().chat) ? getTavernContext().chat : [];
+    if (!chat.length) return null;   // chatdata 未载完不硬对账（就绪窗口坑：空聊天不当「全删」处理）
+    const rolled = rollbackListenerFloors(lastRoleFloor(collectFloorsFromChat(chat)));
+    if (!rolled) return null;
+    const st = lfState();
+    let touched = false;
+    for (const r of rolled) {
+        const u = r.unit;
+        if (!u || u.source !== 'longform' || !u.lfRef) continue;
+        const ch = st.volumes[u.lfRef.vol]?.chapters?.[u.lfRef.ch];
+        // 节点表对得上才倒（重切过不碰，防错账——与冻结落账同一守卫）
+        if (ch && ch.unitId === u.id && ch.nodes.length === u.nodes.length && u.nodeIdx < ch.lit) {
+            ch.lit = u.nodeIdx;
+            ch.litFloors = (Array.isArray(ch.litFloors) ? ch.litFloors : []).slice(0, ch.lit);
+            if (ch.lit < ch.nodes.length) ch.done = false;
+            touched = true;
+        }
+    }
+    if (touched) persistLf();
+    return rolled;
 }
 
 export function mountChapter(vi, ci) {

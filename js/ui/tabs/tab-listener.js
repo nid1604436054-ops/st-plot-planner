@@ -62,10 +62,11 @@ function fmtTime(at) {
 }
 
 // 最新一条判定留痕记录（指导区与问题区都从它读）——换装（mode=outfit）与混合重编（mode=mix）
-// 不是判定轮，指导区不该拿它们当「本轮」显示，跳过取第一条判定记录
+// 不是判定轮，删楼回退（mode=rollback）是纯账本操作，指导区不该拿它们当「本轮」显示，
+// 跳过取第一条判定记录
 function lastTrace(state) {
     if (!Array.isArray(state.trace)) return null;
-    return state.trace.find(r => r?.mode !== 'outfit' && r?.mode !== 'mix') ?? null;
+    return state.trace.find(r => r?.mode !== 'outfit' && r?.mode !== 'mix' && r?.mode !== 'rollback') ?? null;
 }
 
 // 三项小结一行（页内静默轮/留痕共用口径）：无发现的项亮「无」、有发现的写实际发现
@@ -89,6 +90,10 @@ function traceSummary(rec) {
     if (rec.mode === 'unit') {
         const j = { achieved: '达成✓', not_yet: '未达成', stuck: '卡死⚠' }[rec.judgment] ?? rec.judgment;
         return rec.guidance ? `${j} · 已发指导` : `${j} · 静默（${clamp(rec.noGuidanceReason || '未给原因', 40)}）`;
+    }
+    if (rec.mode === 'rollback') {
+        const r = rec.rollback ?? {};
+        return `删楼回退 · ${r.from ?? '?'}→${r.to ?? '?'} 节点 · 现存最后一层 ${r.lastFloor ?? 0}`;
     }
     const f = rec.findings ?? {};
     const parts = [
@@ -955,6 +960,8 @@ function refreshTraceWindow() {
         ? `<b>换装</b> · ${fmtTime(rec.at)} · 「${escapeHtml(rec.outfit?.title ?? '')}」${escapeHtml(rec.outfit?.setting ?? '')}${rec.outfit?.end ? ` · 已${escapeHtml(rec.outfit.end.status)}` : ' · 注入中'}`
         : rec.mode === 'mix'
         ? `<b>混合重编</b> · ${fmtTime(rec.at)} · 「${escapeHtml(rec.mix?.title ?? '')}」`
+        : rec.mode === 'rollback'
+        ? `<b>删楼回退</b> · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}`
         : `<b>#${rec.round}</b> ${rec.mode === 'unit' ? '单位' : rec.mode === 'reentry' ? '回归' : '轻量'} · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}`;
     return `
     <details class="pp-fold pp-ls-trace-item">
@@ -975,14 +982,14 @@ function refreshTraceWindow() {
             ${rec.mix?.changesNote ? `<div class="pp-ls-reentry-summary">${escapeHtml(rec.mix.changesNote)}</div>` : ''}
         ` : ''}
         ${rec.mode === 'unit' && rec.ok ? `
-            <div>判定：<b>${escapeHtml(rec.judgment)}</b>${rec.litNode ? ` · 点亮节点：${escapeHtml(rec.litNode)}` : ''}</div>
+            <div>判定：<b>${escapeHtml(rec.judgment)}</b>${rec.litNode ? ` · 点亮节点：${escapeHtml(rec.litNode)}${rec.litFloor ? `（第 ${rec.litFloor} 层点亮）` : ''}` : ''}</div>
             ${rec.suspended ? '<div class="pp-muted">挂起轮：判定与进度账照跑、指导未注入（偏大挂起中）</div>' : ''}
             ${rec.progressNote ? `<div class="pp-muted">${escapeHtml(rec.progressNote)}</div>` : ''}
             ${(rec.evidence ?? []).map(e => `<div class="pp-ls-ev">${e.floor != null ? `<b>[楼层${e.floor}]</b> ` : ''}「${escapeHtml(clamp(e.quote, 120))}」<span class="pp-muted">${escapeHtml(clamp(e.note, 80))}</span></div>`).join('')}
             ${(rec.watch && (rec.watch.ooc || rec.watch.slowBurn || rec.watch.fakeCompletion || rec.watch.notes)) ? `<div class="pp-muted">watch：${[rec.watch.ooc ? 'OOC元对话' : '', rec.watch.slowBurn ? '慢热' : '', rec.watch.fakeCompletion ? '疑似假装完成' : '', rec.watch.notes ? escapeHtml(clamp(rec.watch.notes, 80)) : ''].filter(Boolean).join('｜')}</div>` : ''}
         ` : ''}
         ${rec.mode === 'reentry' && rec.ok ? `
-            <div>${escapeHtml(DEV_LABEL[rec.reentry?.deviation] ?? '')} · 走到第 ${rec.reentry?.applied ?? 0}/${rec.reentry?.nodesTotal ?? '?'} 节点（挂载时账面 ${rec.reentry?.before ?? 0}）</div>
+            <div>${escapeHtml(DEV_LABEL[rec.reentry?.deviation] ?? '')} · 走到第 ${rec.reentry?.applied ?? 0}/${rec.reentry?.nodesTotal ?? '?'} 节点（挂载时账面 ${rec.reentry?.before ?? 0}${rec.reentry?.anchorFloor ? ` · 新点亮锚定第 ${rec.reentry.anchorFloor} 层` : ''}）</div>
             ${rec.reentry?.window ? `<div class="pp-muted">对照窗口：${escapeHtml(rec.reentry.window)}</div>` : ''}
             ${rec.reentry?.deviationNote ? `<div class="pp-muted">${escapeHtml(rec.reentry.deviationNote)}</div>` : ''}
             ${rec.reentry?.summary ? `<div class="pp-ls-reentry-summary">${escapeHtml(rec.reentry.summary)}</div>` : ''}
@@ -993,7 +1000,12 @@ function refreshTraceWindow() {
             ${(rec.findings?.plotRepeat && (rec.findings.plotRepeat.found || rec.findings.plotRepeat.note)) ? `<div class="pp-ls-ev"><b>剧情重复${rec.findings.plotRepeat.found ? '' : '·无'}</b> ${escapeHtml(rec.findings.plotRepeat.note)}</div>` : ''}
             ${(rec.findings?.styleRepeat && (rec.findings.styleRepeat.level !== '无' || rec.findings.styleRepeat.note)) ? `<div class="pp-ls-ev"><b>文风重复·${escapeHtml(rec.findings.styleRepeat.level)}</b> ${escapeHtml(rec.findings.styleRepeat.note)}</div>` : ''}
         ` : ''}
-        ${rec.guidance ? `<div class="pp-ls-guidance">${escapeHtml(rec.guidance)}</div>` : (rec.ok && rec.mode !== 'reentry' && rec.mode !== 'outfit' ? `<div class="pp-muted">静默原因：${escapeHtml(rec.noGuidanceReason || '未给原因')}</div>` : '')}
+        ${rec.mode === 'rollback' && rec.ok ? `
+            <div>「${escapeHtml(rec.rollback?.label ?? '')}」：第 ${rec.rollback?.from} → ${rec.rollback?.to} 节点（现存最后一层 ${rec.rollback?.lastFloor}）</div>
+            ${(rec.rollback?.unlit ?? []).map(u => `<div class="pp-ls-ev">熄灭：${escapeHtml(u.title)}${u.anchor ? `（锚定第 ${u.anchor} 层——该楼已删）` : ''}</div>`).join('')}
+            <div class="pp-muted">纯账本回退、不调用模型；被删楼层里的剧情后续重新演出会再次点亮</div>
+        ` : ''}
+        ${rec.guidance ? `<div class="pp-ls-guidance">${escapeHtml(rec.guidance)}</div>` : (rec.ok && rec.mode !== 'reentry' && rec.mode !== 'outfit' && rec.mode !== 'rollback' ? `<div class="pp-muted">静默原因：${escapeHtml(rec.noGuidanceReason || '未给原因')}</div>` : '')}
         ${rec.materials ? `<div class="pp-muted" title="本轮实际喂给监听模型的材料清单">材料：${escapeHtml(materialsLine(rec.materials))}</div>` : ''}
         ${rec.retried ? '<div class="pp-muted">（本轮经过一次坏输出自动修复重试）</div>' : ''}
         </div>
