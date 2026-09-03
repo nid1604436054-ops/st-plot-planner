@@ -535,7 +535,7 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
             '- 发现必须带可执行的修正：fix 写成「下一拍怎么改」的直接指令——文风重复写换什么句式／开头／结构（例：「下一拍起改用动作直入或对白起句，停用『从……的位置』式介词开头」），剧情重复写往哪个新走向带，OOC 写拉回哪条人设事实。禁止只复述现象（「高频使用某句式」是现象不是修正）、禁止「避免重复」「注意多样性」式口号；给不出具体改法的项不判（found=false／level=无）。',
             '',
             '【修正指导】',
-            '- 四项检查有任何发现时，生成一段修正指导：点明往哪个方向修（如拉回人设的事实依据、绕开重复的新走法、删掉复读直接接角色反应），结构＝一句目标句＋动作提示；长度不设上限、宁详勿简；措辞每轮变化、不复读上一轮修正指导。',
+            '- 四项检查有任何发现时，生成一段修正指导：开头用指令句点明本轮必须改正什么（是硬性要求不是建议，如「本轮起不再把 user 的原话复述进回复」），再给目标句＋动作提示（如拉回人设的事实依据、绕开重复的新走法）；长度不设上限、宁详勿简；措辞每轮变化、不复读上一轮修正指导。',
             '- 四项全部无发现时，不发指导——no_guidance_reason 写一两句本轮质量印象（例：「节奏稳定、人设无漂移；第 12 楼起略有原地打转苗头，暂不需干预」），禁用「均无发现」「一切正常」这类空话。正常轮次静默是这个模式的常态，不是异常。',
             '',
             `【介入强度】（当前档：${inter.label}）`,
@@ -750,8 +750,14 @@ export function findingsFixText(r, level) {
     // 写的「下一拍怎么改」；旧输出没有 fix 字段时回落 note（note 只描述现象，拼出来没有修正力）
     if (r.plotRepeat?.found) lines.push(`剧情重复——${clean(r.plotRepeat.fix) || clean(r.plotRepeat.note)}`);
     if (r.styleRepeat && r.styleRepeat.level !== '无') lines.push(`文风重复·${r.styleRepeat.level}——${clean(r.styleRepeat.fix) || clean(r.styleRepeat.note)}`);
-    if (r.userEcho?.found) lines.push(`复读 user 的话——${clean(r.userEcho.fix) || clean(r.userEcho.note)}`);   // 第五十四轮
-    return lines.length ? `【检查修正】本轮扮演按下列发现修正：\n${lines.join('\n')}` : '';
+    // 复读行（第五十四轮立、第五十五轮硬化）：自带禁令句——「接住 user 发言＝回应不是复述」要对冲
+    // 注入尾令的「先接住」（扮演模型容易把「接住」读成「复述一遍」，正是这个毛病的来源）
+    if (r.userEcho?.found) lines.push(`复读 user 的话——严禁把 user 说过的原话或近义重述写进回复；接住 user 的发言用角色的反应（回应/反问/行动），不是复述。改法：${clean(r.userEcho.fix) || clean(r.userEcho.note)}`);
+    if (!lines.length) return '';
+    // 注入端硬化（第五十五轮，用户点名「约束力不够」——参照第五十一轮素条教训：只有内容没有令、
+    // 扮演模型看一眼就过）：硬头声明「必须改正、不是参考」＋逐条编号（指令清单相）＋段尾落地令
+    const numbered = lines.map((l, i) => `${i + 1}. ${l}`);
+    return `【检查修正】下列发现本轮必须改正（这是硬性要求，不是氛围参考）：\n${numbered.join('\n')}\n——被点名的行为本轮不得再出现，修正后的写法从本轮扮演文本就落地。`;
 }
 
 // 回归判定契约（第三十三轮）：reached 与 level 是硬字段（错值即违契约，走 L1 重试），
@@ -1075,14 +1081,19 @@ export function lastListenerPrompt() {
 // 注入框（第五十一轮 2A）：素条加头尾——头声明这是剧情指导（扮演模型此前拿到的是光秃两句话、
 // 常被当氛围参考），尾教它先接住 user 最新发言再落回方向。账本/留痕/面板存的是不带框的裸文本，
 // 框只在写注入槽这一刻加——删楼/重做还原走同一条 writeSlot，天然只包一层。
+// 第五十五轮（用户点名「复读/文风重复约束力不够」）：带【检查修正】段的轮换专用尾令——原尾令
+// 「先接住」对复读惯性的扮演模型是诱发语（「接住」被读成「复述一遍」），修正轮把「接住＝回应、
+// 不是复述」说死。按文本内容选尾令是确定性的：同一裸文本永远包同一层框，还原路径一字不差不破。
 const GUIDE_HEAD = '【剧情指导·本轮】';
 const GUIDE_TAIL = '——本轮扮演按上述方向走；user 最新发言先接住，再自然落回方向。';
+const GUIDE_FIX_TAIL = '——user 最新发言先用角色的反应接住（回应、反问或行动，不复述他的原话），再按上述修正与方向走；被点名的行为本轮不得再出现。';
 
 function writeSlot(text) {
     const cfg = listenerCfg();
     const d = Number(cfg.depth);
     const raw = String(text ?? '').trim();
-    const t = raw ? `${GUIDE_HEAD}\n${raw}\n${GUIDE_TAIL}` : '';   // 静默/作废轮写空串，不注入空框
+    const tail = raw.includes('【检查修正】') ? GUIDE_FIX_TAIL : GUIDE_TAIL;
+    const t = raw ? `${GUIDE_HEAD}\n${raw}\n${tail}` : '';   // 静默/作废轮写空串，不注入空框
     setExtensionPrompt(SLOT_KEY, t, POSITION_IN_PROMPT, Number.isFinite(d) && d >= 0 ? Math.floor(d) : 2, false, ROLE_SYSTEM);
 }
 
@@ -1344,7 +1355,12 @@ export async function runListenerRound({ manual = false } = {}) {
         } else {
             const report = normalizeLightReport(parsed.result);
             const intervene = lightShouldIntervene(report, cfg.intervene) && report.goal;
-            const text = intervene ? guidanceText(report.goal, report.actionHint) : '';
+            let text = intervene ? guidanceText(report.goal, report.actionHint) : '';
+            // 机械修正段并进轻量注入（第五十五轮，与单位模式同构）：goal 是监听模型写的修正指导
+            // （建议腔、软口径无力——知识库教训），机械段逐条编号＋禁令补硬约束；同一道闸，模型
+            // 偷懒没写 goal 而发现达标时机械段单独顶上
+            const fix = findingsFixText(report, cfg.intervene);
+            if (fix) text = text ? `${text}\n${fix}` : fix;
             if (!intervene && report.goal) report.noGuidanceReason = `介入档（${INTERVENE_LIGHT[cfg.intervene].label}）不够格：${report.noGuidanceReason || '本轮发现未达发送门槛'}`;
             writeSlot(text);
             recordGuide(state, lastFloor + 1, text);   // 指导账本（第五十轮）：轻量轮同记账
