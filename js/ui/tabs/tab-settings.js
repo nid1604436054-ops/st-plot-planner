@@ -4,8 +4,7 @@
 // （「生效中的隐身注入」原住本页底部，2026-08-26 搬去剧情指导页底部工具区——见 tab-events.js）
 import { settings, save, newId, upsertApiProfile, renameApiProfile } from "../../settings.js";
 import { testConnection, fetchModels, searchWeb } from "../../api.js";
-import { guidanceSystemPrompt } from "../../planner.js";
-import { activeStory } from "../../story.js";
+import { commonTaskSystem } from "../../materials.js";
 import { chatDataKey, resetChatDataCache } from "../../chatdata.js";
 import { listenerCfg, setListenerEnabled } from "../../listener.js";
 import { escapeHtml, clamp, readFileAsText } from "../../utils.js";
@@ -714,9 +713,9 @@ function renderPreset(container) {
         const show = view.style.display === 'none';
         view.style.display = show ? '' : 'none';
         if (show) {
-            const hasActive = Boolean((activeStory()?.planText ?? '').trim());
-            view.textContent = `${guidanceSystemPrompt(hasActive)}\n\n## 用户全局预设（启用中的预设按顺序追加在这里——所有模型调用共用这一拼法，规划分析/检查报告/随机事件/路人反应/AI 打标/AI 建库/联网判断都会带上，每条带「### 预设名」小标题）`
-                + `\n（上面是「${hasActive ? '有' : '无'}进行中剧情」时的版本：progress 进度项只在该版本出现，第 3 步的「剧情进度」行同理）`;
+            // 第四十七轮：四家（规划/检查报告/随机事件/路人反应）system 统一为公共头，
+            // 任务身份与输出结构挪进了各自 user 的任务段——预览展示的是公共头＋预设追加位
+            view.textContent = `${commonTaskSystem()}\n\n## 用户全局预设（启用中的预设按顺序追加在这里——所有模型调用共用这一拼法，规划分析/检查报告/随机事件/路人反应/AI 打标/AI 建库/联网判断都会带上，每条带「### 预设名」小标题）`;
         }
     });
 }

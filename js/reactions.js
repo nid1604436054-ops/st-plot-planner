@@ -9,11 +9,13 @@
 // 「材料勾选」（chatdata 的 reaction 块）已退役。长线剧情里角色的身世、名声在世界书与记忆里，不带就没法
 // 校准路人认知。预设已全局化，由 chatCompletion 出口自动附带
 import { chatCompletion, parseModelJson } from "./api.js";
-import { materialSections, currentLorePicks } from "./materials.js";
+import { materialSections, currentLorePicks, commonTaskSystem } from "./materials.js";
 
 const DEFAULT_BOUNDARY = '不得导致感情实质破裂、主要角色受异性实质侵犯、user 无法逆转的损失；危机可以重，出口必须存在。';
 
-const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器」。用户会给你最近对话与相关材料（角色设定、世界书、既往记忆、玩法规则、进行中剧情），'
+// 任务段（第四十七轮：从 system 挪进 user——system 换四家公共头 commonTaskSystem 共吃缓存，
+// 文字逐字未动；「## 本任务·路人反应卡」标题由调用点拼）
+const CARD_TASK_PROMPT = '你是文字角色扮演的「路人反应校准器」。用户会给你最近对话与相关材料（角色设定、世界书、既往记忆、玩法规则、进行中剧情），'
     + '你要锁定一件最引人注目的事，生成一张「路人反应卡」，注入幕后指导主对话模型：'
     + '用户导入了事件单元时，锁定的就是它——那是将要且一定会发生的既定方向；没有导入，才从最近对话里自己找。'
     + '先想清楚这张卡是什么：它是给主对话模型的「反应口径」，不是替它写好的正文——你定身份、形式、烈度与边界，'
@@ -45,6 +47,8 @@ const CARD_SYSTEM_PROMPT = '你是文字角色扮演的「路人反应校准器�
  * @returns {Promise<{title:string, salience:number, immediate:string, aftermath:string, boundaries:string, floors:number}>}
  */
 export async function generateReactionCard({ note = '', materials = {}, activePlan = '' } = {}) {
+    // 第四十七轮：撤掉本处对小节标题的用途覆写——四家材料标题同字（默认口径），与向导逐字节
+    // 共享到分叉点；记忆表格的「路人认知背景」口径由任务段自己的说明覆盖（开头已写明给的是什么材料）
     const { parts } = materialSections({
         memoryTags: materials.memoryTags ?? [],
         memoryModes: materials.memoryModes ?? null,
@@ -54,11 +58,6 @@ export async function generateReactionCard({ note = '', materials = {}, activePl
         // 第四十三轮：世界书只带向导第 1 步的勾选（含常驻），自动检索撤出——向导传 materials.lorePicks，
         // 其他入口兜底读当前聊天的同一批（currentLorePicks）
         lorePicks: Array.isArray(materials.lorePicks) ? materials.lorePicks : currentLorePicks(),
-        headers: {
-            memoryPurpose: '既往剧情事件记录，是路人与世界已有认知的背景',
-            gameplay: '## 游戏玩法（当前生效的玩法规则，路人与世界的反应须遵守其约束）',
-            activePlan: '## 进行中剧情（正在执行的规划，反应口径与其方向一致）',
-        },
     });
     // 单元制口径：跨工具影响只走显式导入（materials.importedUnits，唯一影响通道）；
     // 已生效注入不自动进工具生成（防双算）。导入＝既定方向（2026-08-26 定则）：导入的事件
@@ -73,11 +72,13 @@ export async function generateReactionCard({ note = '', materials = {}, activePl
             ? ['围绕上面导入的事件单元出这张反应卡：这件事视为将要且一定会发生——值得多少注视（显著性）、当场招来什么反应（即时口径）、事后怎么传开或平息（余波口径）都按它来定。只管世界如何回应它：不复述事件本身、不替它写剧情。']
             : ['从最近对话里找出最近一件最引人注目的事，围绕它生成反应卡；实在没有就按日常被注视处理，salience 取 1。']),
         note.trim() ? `## 指导意见\n${note.trim()}` : '',
+        '## 本任务·路人反应卡',
+        CARD_TASK_PROMPT,
     ].filter(Boolean).join('\n\n');
 
     const request = {
         messages: [
-            { role: 'system', content: CARD_SYSTEM_PROMPT },
+            { role: 'system', content: commonTaskSystem() },
             { role: 'user', content: user },
         ],
     };

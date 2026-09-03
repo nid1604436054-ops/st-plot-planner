@@ -3,13 +3,12 @@
 // 勾选条目（自动检索归监听），「上下文收集 + 世界书检索」的老管线里检索一半已撤
 import { chatCompletion, searchWeb, searchToolReady, parseModelJson } from "./api.js";
 import { collectPlanningContext, formatChatLog, characterSummary } from "./context.js";
-import { resolveLorePicks } from "./lorebook.js";
 import { buildMemoryContext } from "./memoryTable.js";
 import { storageItemsInEffect } from "./store.js";
 import { activeReactionInjections } from "./injection.js";
 import { settings } from "./settings.js";
 import { knowledgeSection } from "./knowledge.js";
-import { materialSections as baseMaterialSections, gameplaySection, memorySectionHeader, currentLorePicks } from "./materials.js";
+import { materialSections as baseMaterialSections, currentLorePicks, commonTaskSystem } from "./materials.js";
 import { extractJson, fingerprint } from "./utils.js";
 
 // 输出 schema 两套变体：存在进行中剧情时才要求 progress（推进到哪个阶段 + 约百分比）。
@@ -51,12 +50,14 @@ const outputSchema = (withProgress, withKnowledge) => OUTPUT_SCHEMA_BASE.replace
 
 // 内置指令：保证返回 JSON（程序要解析成检查项 + 规划）。用户预设已全局化——启用中的
 // 由 api.js 的 chatCompletion 出口统一拼进 system 末尾（见 globalPresetBlock），此处不再单独拼。
-// hasActivePlan 为真才要求 progress 字段，与 buildGuidanceMessages 是否附带「进行中剧情」小节同步；
-// hasKnowledge 为真才要求 plan.knowledgeUsed 自报字段（§6.9 用后账），与「知识库材料」小节同步；
-// hasSkeleton 为真才带防复刻骨架条款、minBeats>0 才带节点下限条款（均与随行小节/设置同步，
-// 2026-08-29 真机第七轮：时间顺序 / user 不可编排 / 构思硬要求三组无条件常驻——实测病灶全是
-// 系统提示词里没说、模型就按默认分布走）
-export function guidanceSystemPrompt(hasActivePlan = false, hasKnowledge = false, hasSkeleton = false, minBeats = 0) {
+// 第四十七轮起这段是 user 消息里的「任务段」（system 换成四家公共头 commonTaskSystem 共吃缓存），
+// 文字与旧 system 版逐字相同、只挪位置（长线第二十七轮同款先例）；「## 本任务·…」标题由
+// buildGuidanceMessages 拼。hasActivePlan 为真才要求 progress 字段，与是否附带「进行中剧情」
+// 小节同步；hasKnowledge 为真才要求 plan.knowledgeUsed 自报字段（§6.9 用后账），与「知识库材料」
+// 小节同步；hasSkeleton 为真才带防复刻骨架条款、minBeats>0 才带节点下限条款（均与随行小节/设置
+// 同步，2026-08-29 真机第七轮：时间顺序 / user 不可编排 / 构思硬要求三组无条件常驻——实测病灶
+// 全是系统提示词里没说、模型就按默认分布走）
+export function guidanceTaskPrompt(hasActivePlan = false, hasKnowledge = false, hasSkeleton = false, minBeats = 0) {
     return [
         '你是文字角色扮演的剧情顾问，负责两件事：',
         `1) 检查：结合角色设定与世界书条目，判断最近对话是否存在 OOC（脱离人设、事实、关系或世界观）、是否与已有剧情重复、文风是否重复${hasActivePlan ? '、正在执行的剧情推进到什么程度' : ''}；`,
@@ -126,7 +127,9 @@ const REVIEW_SCHEMA = `{
   "advice": "把上述所有问题点明，并给出接下来可直接执行的剧情指导"
 }`;
 
-export const REVIEW_SYSTEM_PROMPT = [
+// 检查报告的任务段（第四十七轮：从 system 挪进 user——system 换四家公共头 commonTaskSystem，
+// 文字逐字未动；「## 本任务·剧情检查报告」标题由调用点拼）
+const REVIEW_TASK_PROMPT = [
     '你是文字角色扮演的剧情监理。用户会给你一份「正在执行的剧情规划」和最近的对话记录，',
     '你对照规划检查执行情况：完成度、近几轮是否有效推进、文风是否重复、是否 OOC、有无其他问题，',
     '最后把所有问题点明并给出可直接执行的剧情指导。',
@@ -482,8 +485,16 @@ export function buildGuidanceMessages(options = {}) {
         const at = rIdx !== -1 ? rIdx : stableTailIdx(parts);
         parts.splice(at === -1 ? parts.length : at, 0, '## 随机事件（本次规划需要融入的事件与走向）', evt);
     }
+    // 节点下限（第七轮方案⑤）：设置项「规划节点下限」，0 = 不设；用户构思点名数量时以构思为准
+    // （提示词里已写明点名的按不少于落实，这里的 minBeats 只是没点名时的兜底）
+    const minBeats = Math.min(50, Math.max(0, Math.round(Number(settings.guidance?.minBeats) || 0)));
     const all = [
         ...parts,
+        // 任务段（第四十七轮）：身份/要求/输出结构从 system 挪进 user——system 换四家公共头
+        // 共吃缓存；排在最近对话之后、每次重 roll 都会换的块（上一版/意见/构思）之前，
+        // 材料没动时它跟着前面的缓存走
+        '## 本任务·剧情规划分析',
+        guidanceTaskPrompt(Boolean(String(activePlan ?? '').trim()), Boolean(kbSection), skeletons.length > 0, minBeats),
         // 重新生成的两副面孔（第七轮）：带修改意见＝按意见修订；意见为空＝换一版（上一版随行只是
         // 为了不与它雷同，不是让它照着续写）——原来无脑「请按修改意见修订」会把模型锚定在上一版上复读
         ...(previousPlan ? [String(revisionNote ?? '').trim()
@@ -507,13 +518,11 @@ export function buildGuidanceMessages(options = {}) {
         });
     }
 
-    // 节点下限（第七轮方案⑤）：设置项「规划节点下限」，0 = 不设；用户构思点名数量时以构思为准
-    // （提示词里已写明点名的按不少于落实，这里的 minBeats 只是没点名时的兜底）
-    const minBeats = Math.min(50, Math.max(0, Math.round(Number(settings.guidance?.minBeats) || 0)));
     return {
         // 预设不在这里拼：启用中的由 chatCompletion 出口统一附加（api.withGlobalPresets），
-        // 预览侧用同一个函数拼装，保证「看到的」与「发出的」一致
-        system: guidanceSystemPrompt(Boolean(String(activePlan ?? '').trim()), Boolean(kbSection), skeletons.length > 0, minBeats),
+        // 预览侧用同一个函数拼装，保证「看到的」与「发出的」一致。
+        // system＝四家公共头（第四十七轮）：任务身份/要求/输出结构在 user 的「## 本任务·」段里
+        system: commonTaskSystem(),
         user: userContent,
         hasKnowledge: Boolean(kbSection),   // 第二遍对齐审校的 schema 要带同款 knowledgeUsed 字段（第十二轮）
         sections,
@@ -648,31 +657,27 @@ export async function runStoryReview({ planText = '', userNote = '', memoryTags 
     const { chatList } = collectPlanningContext();
     if (!chatList.length) throw new Error('当前没有可分析的聊天记录');
 
-    const memoryText = buildMemoryContext({ tagFilter: memoryTags, sheetModes: memoryModes, latestPerSheet: memoryRecent });
-    // 第四十三轮：世界书材料改带向导第 1 步的自选勾选（手动勾选∪常驻按钮），自动检索撤出
-    const picks = resolveLorePicks(Array.isArray(lorePicks) ? lorePicks : currentLorePicks());
-
-    // 第十三轮重排（与 buildGuidanceMessages 同款原则）：检查对象/玩法/反应/记忆这些跨次
-    // 调用稳定的小节在前，最近对话（滑动窗口）垫底
+    // 第四十七轮：材料并回 materialSections（与向导同序同标题——两家 [公共头＋材料] 逐字节对到
+    // 分叉点才各走各的；检查对象＝进行中剧情小节、玩法与生效反应卡由装配器带上）；任务段挪进
+    // user 末尾（system 换四家公共头）。世界书仍带向导第 1 步的自选勾选（第四十三轮口径不变）
+    const { parts, picks } = materialSections({
+        memoryTags,
+        memoryModes,
+        memoryRecent,
+        storageItems: storageItemsInEffect(),
+        activePlan: String(planText ?? ''),
+        lorePicks: Array.isArray(lorePicks) ? lorePicks : currentLorePicks(),
+    });
+    const hits = picks.length;   // 世界书自选条数（第四十三轮起只有自选、无命中计数——报告页展示用）
     const userContent = [
-        '## 角色设定摘要',
-        characterSummary() || '（无角色卡）',
-        ...(picks.length ? [
-            '## 自选世界书条目（用户点名随行的材料：原文整条——设定与口径以此为准）',
-            picks.map(p => `【${p.book.name} / ${p.entry.comment}】\n${p.entry.content}`).join('\n\n'),
-        ] : []),
-        '## 正在执行的剧情规划（检查对象）',
-        String(planText || '（空）'),
-        ...gameplaySection(storageItemsInEffect(), '## 游戏玩法（当前生效的玩法规则，检查执行情况时对照它）'),
-        ...reactionSection('## 路人反应（当前生效的反应卡，检查执行情况时对照它）'),
-        ...(memoryText ? [memorySectionHeader(memoryTags, '已有剧情事件记录，用于查重与推新参考', memoryRecent, memoryModes), memoryText] : []),
-        '## 最近对话记录',
-        formatChatLog(chatList),
+        ...parts,
         ...(userNote ? ['## 用户补充说明', userNote] : []),
+        '## 本任务·剧情检查报告',
+        REVIEW_TASK_PROMPT,
     ].join('\n\n');
 
     const messages = [
-        { role: 'system', content: REVIEW_SYSTEM_PROMPT },
+        { role: 'system', content: commonTaskSystem() },
         { role: 'user', content: userContent },
     ];
     const research = {

@@ -6,10 +6,12 @@
 import { chatCompletion, parseModelJson } from "./api.js";
 import { collectRecentChat, formatChatLog, currentFloor } from "./context.js";
 import { settings, save, newId } from "./settings.js";
-import { materialSections, currentLorePicks } from "./materials.js";
+import { materialSections, currentLorePicks, commonTaskSystem } from "./materials.js";
 import { storyState, activeStory } from "./story.js";
 
-const EVENT_SYSTEM_PROMPT = '你是文字角色扮演的随机遭遇生成器。基于当前情境与给定的事件方向，'
+// 事件库条目版任务段（第四十七轮：从 system 挪进 user——system 换四家公共头 commonTaskSystem
+// 共吃缓存，文字逐字未动；「## 本任务·随机遭遇生成」标题由调用点拼）
+const EVENT_TASK_PROMPT = '你是文字角色扮演的随机遭遇生成器。基于当前情境与给定的事件方向，'
     + '生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
     + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'
     + '事件描述与选项里不得替 user 写行为与台词（不写「user 答应/拒绝/说出/主动…」这类内容），只呈现世界发生了什么——user 的动作与回应由用户自己写。'
@@ -177,12 +179,12 @@ function contextSections(materials = {}) {
 export async function generateRandomEvent(rule, materials = {}) {
     const sections = [...contextSections(materials), '## 事件方向',
         `维度「${dimNameOf(rule.dimension)}」｜条目「${rule.name}」：${rule.promptHint ?? ''}`,
-        SEVERITY_HINT[rule.severity] ?? SEVERITY_HINT.light].join('\n\n');
+        SEVERITY_HINT[rule.severity] ?? SEVERITY_HINT.light];
 
     const request = {
         messages: [
-            { role: 'system', content: EVENT_SYSTEM_PROMPT },
-            { role: 'user', content: sections },
+            { role: 'system', content: commonTaskSystem() },
+            { role: 'user', content: [...sections, '## 本任务·随机遭遇生成', EVENT_TASK_PROMPT].join('\n\n') },
         ],
     };
     const raw = await chatCompletion(request);
@@ -202,7 +204,8 @@ export async function generateFreeRandomEvent({ dimension = null, note = '', mat
     const schema = '{ "title": "事件标题", "description": "遭遇描述（150 字内）", '
         + '"options": [ { "label": "选项名", "hint": "选后的幕后走向提示" } ] }';
 
-    const system = '你是文字角色扮演的随机遭遇生成器。基于当前情境即兴生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
+    // 任务段（第四十七轮：system 挪进 user，文字逐字未动）
+    const taskText = '你是文字角色扮演的随机遭遇生成器。基于当前情境即兴生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
         + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'
         + '事件描述与选项里不得替 user 写行为与台词（不写「user 答应/拒绝/说出/主动…」这类内容），只呈现世界发生了什么——user 的动作与回应由用户自己写。'
         + '轻重自定、宁重不轻（过轻会执行敷衍），但危机必须留出口。'
@@ -228,8 +231,8 @@ export async function generateFreeRandomEvent({ dimension = null, note = '', mat
 
     const request = {
         messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: sections.join('\n\n') },
+            { role: 'system', content: commonTaskSystem() },
+            { role: 'user', content: [...sections, '## 本任务·随机遭遇生成', taskText].join('\n\n') },
         ],
     };
     const raw = await chatCompletion(request);
@@ -245,7 +248,8 @@ export async function generateFreeRandomEvent({ dimension = null, note = '', mat
  * @returns {Promise<{title:string, description:string, dimension:string, options:Array<{label:string, hint:string}>}>}
  */
 export async function generateAiChoiceRandomEvent({ dimensions = [], materials = {} } = {}) {
-    const system = '你是文字角色扮演的随机遭遇生成器。基于当前情境即兴生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
+    // 任务段（第四十七轮：system 挪进 user，文字逐字未动）
+    const taskText = '你是文字角色扮演的随机遭遇生成器。基于当前情境即兴生成一次合理的意外遭遇（动态事件而非预编排剧本），并给出若干可选走向。'
         + '事件要写成已经发生的既成事实，不写「可能会发生」；提供方向，不提供剧情，拉不拉、怎么拉由 user 决定。'
         + '事件描述与选项里不得替 user 写行为与台词（不写「user 答应/拒绝/说出/主动…」这类内容），只呈现世界发生了什么——user 的动作与回应由用户自己写。'
         + '用户给出了维度清单：由你判断哪个维度最贴合当前剧情氛围，从中挑一个（只能挑清单里的），按它的气质展开。'
@@ -263,8 +267,8 @@ export async function generateAiChoiceRandomEvent({ dimensions = [], materials =
 
     const request = {
         messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: sections.join('\n\n') },
+            { role: 'system', content: commonTaskSystem() },
+            { role: 'user', content: [...sections, '## 本任务·随机遭遇生成', taskText].join('\n\n') },
         ],
     };
     const raw = await chatCompletion(request);
