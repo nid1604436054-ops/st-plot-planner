@@ -93,6 +93,7 @@ function traceSummary(rec) {
     }
     if (rec.mode === 'rollback') {
         const r = rec.rollback ?? {};
+        if (r.guide) return r.guide.reuse ? `第 ${r.guide.target} 层重做 · 沿用原指导` : `第 ${r.guide.target} 层重做 · 无原账（裸跑）`;
         return `删楼回退 · ${r.from ?? '?'}→${r.to ?? '?'} 节点 · 现存最后一层 ${r.lastFloor ?? 0}`;
     }
     const f = rec.findings ?? {};
@@ -961,7 +962,7 @@ function refreshTraceWindow() {
         : rec.mode === 'mix'
         ? `<b>混合重编</b> · ${fmtTime(rec.at)} · 「${escapeHtml(rec.mix?.title ?? '')}」`
         : rec.mode === 'rollback'
-        ? `<b>删楼回退</b> · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}`
+        ? `<b>${rec.rollback?.guide ? '指导沿用' : '删楼回退'}</b> · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}`
         : `<b>#${rec.round}</b> ${rec.mode === 'unit' ? '单位' : rec.mode === 'reentry' ? '回归' : '轻量'} · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}`;
     return `
     <details class="pp-fold pp-ls-trace-item">
@@ -1000,7 +1001,11 @@ function refreshTraceWindow() {
             ${(rec.findings?.plotRepeat && (rec.findings.plotRepeat.found || rec.findings.plotRepeat.note)) ? `<div class="pp-ls-ev"><b>剧情重复${rec.findings.plotRepeat.found ? '' : '·无'}</b> ${escapeHtml(rec.findings.plotRepeat.note)}</div>` : ''}
             ${(rec.findings?.styleRepeat && (rec.findings.styleRepeat.level !== '无' || rec.findings.styleRepeat.note)) ? `<div class="pp-ls-ev"><b>文风重复·${escapeHtml(rec.findings.styleRepeat.level)}</b> ${escapeHtml(rec.findings.styleRepeat.note)}</div>` : ''}
         ` : ''}
-        ${rec.mode === 'rollback' && rec.ok ? `
+        ${rec.mode === 'rollback' && rec.ok && rec.rollback?.guide ? `
+            <div>${rec.rollback.guide.trigger === 'delete' ? `删楼后重做第 ${rec.rollback.guide.target} 层` : `滑动/重新生成第 ${rec.rollback.guide.target} 层`}：${rec.rollback.guide.reuse ? '注入槽已换回那一轮的原指导' : '那一轮没有原指导记录（升级前生成/超出留存/单位换过主人），本次不注入指导'}${rec.rollback.lastFloor != null ? `（现存最后一层 ${rec.rollback.lastFloor}）` : ''}</div>
+            <div class="pp-muted">只换注入内容：重做落地后判定轮照常重跑、节点可再次点亮</div>
+        ` : ''}
+        ${rec.mode === 'rollback' && rec.ok && !rec.rollback?.guide ? `
             <div>「${escapeHtml(rec.rollback?.label ?? '')}」：第 ${rec.rollback?.from} → ${rec.rollback?.to} 节点（现存最后一层 ${rec.rollback?.lastFloor}）</div>
             ${(rec.rollback?.unlit ?? []).map(u => `<div class="pp-ls-ev">熄灭：${escapeHtml(u.title)}${u.anchor ? `（锚定第 ${u.anchor} 层——该楼已删）` : ''}</div>`).join('')}
             <div class="pp-muted">纯账本回退、不调用模型；被删楼层里的剧情后续重新演出会再次点亮</div>

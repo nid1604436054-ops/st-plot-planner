@@ -26,6 +26,9 @@ const HALT_KEY = 'pp:halt';   // 停进提示槽（2026-09-02 暂停收尾）：
 const CALL_TIMEOUT_MS = 90_000;
 const GATE_HARD_CAP_MS = 240_000;
 const FAIL_STREAK_PAUSE = 3;
+// 指导账本留存条数（第五十轮）：每层楼一条、按楼层号淘汰最旧——删楼/重做往前翻的原账上限；
+// 更早的楼层重做时按「无原账」处理（裸跑），不报错
+const GUIDE_LOG_KEEP = 100;
 
 // ---------------------------------------------------------------------------
 // 纯逻辑：档位文本（旋钮＝档位文本注入，判断点 4）
@@ -106,6 +109,12 @@ export function listenerState() {
                              // memRecent, picks }：世界书＝纯手选（重挂单不上三按钮机制），自动检索整块撤掉
         dot: false,          // 红点旗标（有问题未看；打开监听页签即清除）
         dotReason: '',       // 红点问题的一句话描述
+        guideLog: {},        // 指导账本（第五十轮）：{ '楼层号': { t: 指导全文, e: 血脉代号 } }——
+                             // 每轮判定的产出记到「它塑造的那层楼」名下，删楼/滑动/重新生成重做那层时沿用原账；
+                             // 静默轮与失败轮也记（t=''，当时注入的就是「没有指导」）
+        guideEra: 0,         // 血脉代号（第五十轮）：单位槽换主人（挂/卸/接回/同 id 重挂）就 +1——
+                             // 给前任写的旧指导不再作数；切聊天/关总开关不 +1（账仍历史为真）
+        // lastFloorSeen（第五十轮）：楼层水位＝最近见过的最后一层角色楼号，删楼缩水的判定基准；不播种
         halt: null,          // 停进提示（2026-09-02 暂停收尾）：{ kind:'paused' 手动卸下长线章 |
                              // 'suspended' 回归判定偏大挂起, title, note, unitId, at }；null＝无。
                              // 出口：挂载/接回/mix 重挂（打碎混合）/手动撤下/偏大后重挂没偏自动解除
@@ -114,6 +123,14 @@ export function listenerState() {
     state.sidelined = normalizeUnit(state.sidelined);
     if (!Array.isArray(state.trace)) state.trace = [];
     state.halt = normalizeHalt(state.halt);
+    // 指导账本形状收敛（第五十轮）：键＝正整数楼层号、值须带字符串 t；e 缺损归 0（旧账按第 0 代血脉算，不丢）
+    state.guideEra = Number.isFinite(Number(state.guideEra)) ? Math.max(0, Math.floor(Number(state.guideEra))) : 0;
+    if (!state.guideLog || typeof state.guideLog !== 'object' || Array.isArray(state.guideLog)) state.guideLog = {};
+    else for (const k of Object.keys(state.guideLog)) {
+        const v = state.guideLog[k];
+        if (!v || typeof v !== 'object' || typeof v.t !== 'string' || !Number.isInteger(Number(k)) || Number(k) <= 0) delete state.guideLog[k];
+        else v.e = Number.isFinite(Number(v.e)) ? Math.max(0, Math.floor(Number(v.e))) : 0;
+    }
     if (!state.loreStatus || typeof state.loreStatus !== 'object' || Array.isArray(state.loreStatus)) state.loreStatus = {};
     else for (const k of Object.keys(state.loreStatus)) {
         if (!['off', 'key', 'always'].includes(state.loreStatus[k])) delete state.loreStatus[k];   // 三档之外的全剔（旧聊天块的 lorePicks 是数组、不是这里的账）
@@ -265,6 +282,13 @@ function voidGuidance(state, reason) {
     state.guideVoidReason = String(reason ?? '').slice(0, 60) || '单位变动';
 }
 
+// 血脉换代（第五十轮）：单位槽换主人那刻起，账本里给前任写的指导不再作数（还原时 era 对不上即弃）。
+// 只在挂/卸/接回/同 id 重挂四处调用；切聊天与关总开关不换代——槽清了、账仍历史为真，
+// 回本聊天后删楼重做旧楼层照样沿用当时的原账
+function bumpGuideEra(state) {
+    state.guideEra = (Number(state.guideEra) || 0) + 1;
+}
+
 // 挂载的唯一规则（判断点 14 提案：被顶下来的单位进退位槽，进度账不动）：
 // 槽里已有单位且退位槽也占着 → 拒绝挂载（先去面板接回或丢弃），不让数据静默蒸发
 export function mountUnit(state, unit) {
@@ -276,6 +300,7 @@ export function mountUnit(state, unit) {
         state.unit = unit;
         state.lastFloorSig = '';
         voidGuidance(state, '重挂同一单位');   // 文本可能改过：旧指导按过期处理
+        bumpGuideEra(state);   // 血脉换代（第五十轮）：改过文本的单位重做旧楼层时不沿用改挂前的旧账
         return { ok: true };
     }
     if (state.unit && state.sidelined) {
@@ -287,6 +312,7 @@ export function mountUnit(state, unit) {
     state.unit = unit;
     state.lastFloorSig = '';   // 新单位立即按当前楼层重判一轮
     voidGuidance(state, '挂载新单位');
+    bumpGuideEra(state);
     return { ok: true };
 }
 
@@ -303,6 +329,7 @@ export function recallSidelined(state) {
     }
     state.lastFloorSig = '';
     voidGuidance(state, '接回退位单位');
+    bumpGuideEra(state);
     return { ok: true };
 }
 
@@ -313,6 +340,7 @@ export function unmountUnit(state) {
     state.sidelined = state.unit;
     state.unit = null;
     voidGuidance(state, '卸下单位');   // 卸下后按轻量口径执勤：单位指导绝不留到下一轮注入
+    bumpGuideEra(state);
     return { ok: true };
 }
 
@@ -878,6 +906,31 @@ export function pushTraceRecord(rec) {
 }
 
 // ---------------------------------------------------------------------------
+// 纯逻辑：指导账本（第五十轮，用户拍板「删到哪一层/重新生成就沿用那一轮原来的指导」）——
+// 每轮判定的产物记到「它塑造的那层楼」名下（= 本轮最后一层角色楼 + 1）；删楼缩水或
+// 滑动/重新生成重做某层时，按楼层号取回原账沿用。判定轮本身照跑（节点点亮进度与
+// R45「重新演出会再次点亮」口径一致），换的只是重做那次生成注入的指导
+// ---------------------------------------------------------------------------
+
+// 记账：静默轮与失败轮也记（t=''——当时注入的就是「没有指导」，重做同样沿用）；
+// 封顶留最近 GUIDE_LOG_KEEP 条、按楼层号淘汰最旧
+export function recordGuide(state, targetFloor, text) {
+    if (!Number.isInteger(targetFloor) || targetFloor <= 0) return;
+    if (!state.guideLog || typeof state.guideLog !== 'object' || Array.isArray(state.guideLog)) state.guideLog = {};
+    state.guideLog[String(targetFloor)] = { t: String(text ?? ''), e: Number(state.guideEra) || 0 };
+    const keys = Object.keys(state.guideLog).map(Number).sort((a, b) => a - b);
+    if (keys.length > GUIDE_LOG_KEEP) for (const k of keys.slice(0, keys.length - GUIDE_LOG_KEEP)) delete state.guideLog[String(k)];
+}
+
+// 取账：楼层号对上且血脉（era）没换过才给；undefined＝无账可用（没记过/超出留存/单位已换主人）
+export function guideEntryFor(state, floor) {
+    const e = state?.guideLog?.[String(floor)];
+    if (!e || typeof e !== 'object' || typeof e.t !== 'string') return undefined;
+    if ((Number(e.e) || 0) !== (Number(state.guideEra) || 0)) return undefined;
+    return e.t;
+}
+
+// ---------------------------------------------------------------------------
 // 纯逻辑：排队闸状态机（判断点 9/10：等待有界；失败/超界一律放行，绝不挂死发送）
 // click 由宿主注入（真实环境点 #send_but；测试台注入记录器）
 // ---------------------------------------------------------------------------
@@ -1101,6 +1154,8 @@ export async function runListenerRound({ manual = false } = {}) {
     const floorSig = floorsSignature(chat);
     const allFloors = collectFloorsFromChat(chat);
     const lastFloor = lastRoleFloor(allFloors);   // 锚层：本轮最后一层角色楼（点亮锚在这上面）
+    syncGuideLineForJudgment(state, lastFloor);   // 判定输入线校正（第五十轮）：有删楼没接住时「上一轮指导」按原账换线
+    state.lastFloorSeen = lastFloor;              // 楼层水位（第五十轮）：删楼缩水的判定基准，正常轮随抬
     const floors = limitFloors(allFloors, Number(state.matRoutine.floors) || 0);   // 日常监听材料单（第三十七轮）：成功与失败留痕同一个口径
     const round = state.round + 1;
     const at = Date.now();
@@ -1183,6 +1238,7 @@ export async function runListenerRound({ manual = false } = {}) {
                 report.noGuidanceReason = '长线偏离挂起中：判定与进度账照跑，指导暂停注入（处置出口见监听页挂起卡的指路行）';
             }
             writeSlot(text);   // 滚动覆写：静默轮写空串（旧指导不留到下一轮）
+            recordGuide(state, lastFloor + 1, text);   // 指导账本（第五十轮）：记到「它塑造的那层楼」名下
             applyUnitOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, lastFloor, guidance: text, suspended, retried: parsed.retried, tokens, materials });
         } else {
             const report = normalizeLightReport(parsed.result);
@@ -1190,6 +1246,7 @@ export async function runListenerRound({ manual = false } = {}) {
             const text = intervene ? guidanceText(report.goal, report.actionHint) : '';
             if (!intervene && report.goal) report.noGuidanceReason = `介入档（${INTERVENE_LIGHT[cfg.intervene].label}）不够格：${report.noGuidanceReason || '本轮发现未达发送门槛'}`;
             writeSlot(text);
+            recordGuide(state, lastFloor + 1, text);   // 指导账本（第五十轮）：轻量轮同记账
             applyLightOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, lastFloor, guidance: text, retried: parsed.retried, tokens, materials });
         }
         const capped = Math.max(1, Math.floor(Number(cfg.traceRounds) || 50));
@@ -1211,6 +1268,7 @@ export async function runListenerRound({ manual = false } = {}) {
             error: err?.message ?? String(err),
         });
         writeSlot('');   // 失败轮注入槽清空（判断点 10：宁可裸跑也不喂旧指导）
+        recordGuide(state, lastFloor + 1, '');   // 失败也记账（第五十轮）：这层楼当时就是裸跑生成的，重做同样裸跑
         const capped = Math.max(1, Math.floor(Number(cfg.traceRounds) || 50));
         if (state.trace.length > capped) state.trace.length = capped;
         persistListener();
@@ -1385,6 +1443,118 @@ function runLitReconcile() {
 }
 
 // ---------------------------------------------------------------------------
+// 指导还原出口（第五十轮）：删楼缩水 / 滑动·重新生成 → 注入槽换回「那一轮原来的指导」。
+// 与 R45 节点回退同一批触发时机，但独立动作——节点没回退（删的楼层里没点亮）指导也要还原。
+// 判定轮照跑不动：重做落地后照常重判、节点可再次点亮（「被删楼层里的剧情重新演出会再次点亮」）
+// ---------------------------------------------------------------------------
+
+// 轮首输入线校正（纯逻辑）：水位高于现存最后一层＝有删楼没接住（升载中途删楼等）——
+// 「上一轮指导」防复读线若按被删前的旧线喂会串味，换回「塑造现存最后一层的那条原账」；
+// 没有原账就清空（同失败轮口径）。只校正判定输入线，不写注入槽（生成早已过去，槽归还原出口管）
+export function syncGuideLineForJudgment(state, lastFloor) {
+    const seen = Number(state.lastFloorSeen);
+    if (!Number.isFinite(seen) || seen <= lastFloor) return;
+    state.lastFloorSeen = lastFloor;
+    const g = guideEntryFor(state, lastFloor);
+    if (g !== undefined) {
+        state.lastGuidance = g;
+        state.guideVoidReason = '';
+    } else {
+        state.lastGuidance = '';
+        state.guideVoidReason = '删楼回退：那一层没有原指导记录';
+    }
+}
+
+// 「指导沿用」留痕（mode=rollback 复用留痕池；rollback.guide 子形状与节点回退区分渲染）
+function pushGuideReplayTrace(state, { target, reuse, trigger, lastFloor, text }) {
+    state.trace.unshift({
+        at: Date.now(),
+        round: state.round,
+        mode: 'rollback',
+        src: null,
+        ok: true,
+        rollback: { guide: { target, reuse, trigger }, ...(Number.isInteger(lastFloor) ? { lastFloor } : {}) },
+        ...(reuse ? { guidance: String(text ?? '') } : {}),
+    });
+    const capped = Math.max(1, Math.floor(Number(listenerCfg().traceRounds) || 50));
+    if (state.trace.length > capped) state.trace.length = capped;
+    persistListener();
+    updateWandDot(state);
+    notifyPanel();
+}
+
+// 删楼缩水还原（宿主出口）：删楼事件与 send 型生成开始前都调——水位没降（没删楼）零动作。
+// M＝现存最后一层；注入槽与「上一轮指导」换回「第 M+1 层那一次」的原账（重发的正是这层楼）；
+// 无原账（升级前生成/超出留存/血脉已换）就清空作废——宁可裸跑，不喂对不上剧情位置的旧指导
+export function restoreGuideAfterShrink() {
+    try {
+        if (!listenerCfg().enabled) return;
+        const state = listenerState();
+        if (state.paused) return;
+        const chat = Array.isArray(getTavernContext().chat) ? getTavernContext().chat : null;
+        if (!chat || !chat.length) return;   // 空聊天护栏：不当「全删」处理
+        const M = lastRoleFloor(collectFloorsFromChat(chat));
+        const seen = Number(state.lastFloorSeen);
+        if (!Number.isFinite(seen) || seen <= M) return;   // 没缩水：不动（水位由判定轮维护）
+        state.lastFloorSeen = M;
+        const T = M + 1;
+        const g = guideEntryFor(state, T);
+        if (g !== undefined) {
+            if (g === state.lastGuidance && state.guideVoidReason === '') return;   // 已还原过：零动作
+            state.lastGuidance = g;
+            state.guideVoidReason = '';
+            writeSlot(g);
+            pushGuideReplayTrace(state, { target: T, reuse: true, trigger: 'delete', lastFloor: M, text: g });
+        } else {
+            if (state.guideVoidReason === '删楼回退：无原指导记录') return;   // 同一结果已落过（防重复留痕）；失败轮清过线不算——面板要看到作废行
+            voidGuidance(state, '删楼回退：无原指导记录');
+            writeSlot('');
+            pushGuideReplayTrace(state, { target: T, reuse: false, trigger: 'delete', lastFloor: M });
+        }
+    } catch (e) {
+        console.warn('[PlotPlanner] 删楼指导还原失败（账面不动，下一轮判定前会再试）', e);
+    }
+}
+
+// 重做最后一层（宿主出口）：滑动 / 重新生成开始前调——注入槽换回「塑造这层楼的原账」。
+// 酒馆源码核实：GENERATION_STARTED 在提示词组装之前发出，此处改槽来得及影响本次生成；
+// MESSAGE_SWIPED 不挂（翻看旧变体也触发它，那时没有生成、不该动槽）。末楼是用户消息时
+// （重新生成按「生成新楼层」处理）退回缩水还原口径
+export function restoreGuideForRedo() {
+    try {
+        if (!listenerCfg().enabled) return;
+        const state = listenerState();
+        if (state.paused) return;
+        const chat = Array.isArray(getTavernContext().chat) ? getTavernContext().chat : null;
+        if (!chat || !chat.length) return;
+        const last = chat[chat.length - 1];
+        if (!last || last.is_user === true || last.is_system === true) { restoreGuideAfterShrink(); return; }
+        let n = 0;
+        for (let i = 0; i < chat.length - 1; i++) {
+            const m = chat[i];
+            if (m && m.is_system !== true && m.is_user !== true && String(m.mes ?? '')) n++;   // 空楼不占号，同 collectFloorsFromChat 口径
+        }
+        const T = n + 1;   // 被重做那层的楼层号
+        const g = guideEntryFor(state, T);
+        if (g !== undefined) {
+            if (g === state.lastGuidance && state.guideVoidReason === '') return;   // 已还原过：零动作
+            state.lastGuidance = g;
+            state.guideVoidReason = '';
+            writeSlot(g);
+            pushGuideReplayTrace(state, { target: T, reuse: true, trigger: 'regen', text: g });
+        } else {
+            const reason = `重做第${T}层：无原指导记录`;
+            if (state.guideVoidReason === reason) return;   // 同一结果已落过（防重复留痕）
+            voidGuidance(state, reason);
+            writeSlot('');
+            pushGuideReplayTrace(state, { target: T, reuse: false, trigger: 'regen' });
+        }
+    } catch (e) {
+        console.warn('[PlotPlanner] 重做前指导还原失败（不拦生成，按现行槽内容注入）', e);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 宿主接线：触发时机（扮演模型完全输出完毕 = 实践验证过的 MESSAGE_RECEIVED；
 // 楼层签名去重后，编辑/重生成最后一楼（MESSAGE_EDITED）也会触发重判）
 // ---------------------------------------------------------------------------
@@ -1471,10 +1641,25 @@ export function initListener() {
     // 最后一楼被编辑/重生成：内容变了签名就变，自动重判；没变不吃轮
     eventSource.on(event_types.MESSAGE_EDITED, scheduleAnalyze);
 
-    // 删楼（第四十五轮）：楼层被删 → 对账回退锚层越界的节点（去抖合并「连删多楼」的连发事件）
+    // 删楼（第四十五轮）：楼层被删 → 对账回退锚层越界的节点（去抖合并「连删多楼」的连发事件）；
+    // 指导还原（第五十轮）跟在节点对账后面同一拍跑——删到哪层，注入槽就回到「那层那一次」的原账
     eventSource.on(event_types.MESSAGE_DELETED, () => {
         clearTimeout(reconTimer);
-        reconTimer = setTimeout(runLitReconcile, 600);
+        reconTimer = setTimeout(() => {
+            runLitReconcile();
+            restoreGuideAfterShrink();
+        }, 600);
+    });
+
+    // 生成开始前（第五十轮）：滑动/重新生成＝重做最后一层 → 注入槽换回塑造它的原账；
+    // 普通发送只做删楼缩水兜底（删楼事件没接住时补还原）。continue/impersonate/quiet 不碰
+    // （酒馆源码核实 GENERATION_STARTED 在提示词组装之前发出，此处改槽来得及）
+    if (event_types.GENERATION_STARTED) eventSource.on(event_types.GENERATION_STARTED, (type, _opts, dryRun) => {
+        if (dryRun) return;
+        try {
+            if (type === 'send') restoreGuideAfterShrink();
+            else if (type === 'swipe' || type === 'regenerate') restoreGuideForRedo();
+        } catch { /* 还原失败不拦生成 */ }
     });
 
     updateWandDot(listenerState());
