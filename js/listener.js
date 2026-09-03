@@ -456,13 +456,16 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             '',
             '【指导生成】',
             '判定完成后，为下一轮生成微量指导：',
-            '- 结构＝一句目标句（把剧情引向当前待判节点）＋动作提示（点出可做而未做的动作方向）。',
+            '- 结构＝一句目标句（把剧情引向当前待判节点）＋动作提示（点出可做而未做的动作方向）＋角色暗牌（见下条，没有可留空）。',
             '- 下一节点的方向要提前种：当前节点接近收尾、或本轮对话自然抛出了指向下一节点的选择或话题（如 user 问角色想去哪里、接下来做什么——这正是把剧情引向下一节点的机会），指导就按下一节点的标题方向引——让角色生出与它相关的念头、提议或倾向（例：下一节点标题是「动物园」，可让角色说出想去看看熊猫），使剧情在节点到来前就自然走向它，而不是等节点点亮才突然转向。',
             '- 但只种方向、不预演内容：具体情节由节点点亮后正式登场；若单位全文里已写了下一节点的安排，种的方向要与其一致，但指导里不得替它预演具体事件、场景或台词；下一节点之后的节点仍然只字不提。',
+            '- 角色暗牌要随指导同行（第五十一轮）：从单位全文提炼「此刻角色心里已定、已知、楼层里还没说出口的事」——她定好的行程或答案、她的准备与小算盘、她玩牌时自己手里有什么牌与盘算、她藏起来待兑现的计划或玩笑。优先给马上要被用到的：user 一句「想好去哪了吗」「你出什么牌」马上就要落地，扮演模型手里没有这张牌就只能临场另编、把既定安排编歪。单位全文没写她知道的，不许替她编；暗牌随指导一起给，不发指导的轮次自然也没有暗牌。',
+            '- 暗牌的边界：暗牌＝她已知的事实，不是将要发生的情节——后续节点怎么演、结局类信息何时揭晓，仍然不给；兑现还远的远期牌只给「她心里有数」级（例：单位写了她备了礼物——可给「她备了东西、藏着」；礼物是什么、何时送不给，等那个节点轮到自己）。',
             '- 长度不设上限：一轮里多角色且各有负责内容时，该写多长写多长，宁详勿简。',
             '- 每轮重新生成：措辞必须随已推进内容变化，不得复读上一轮指导（哪怕意思相近也要换说法）。',
-            '- 两条红线：不得剧透——下一节点只允许种标题方向、严禁预演其具体情节，下一节点之后的节点严禁编造或暗示；不得催促抢跑——引导，不驱赶。',
-            '- 意思模板（仅示意含义，措辞自定）：目标句如「让两人的对话自然滑向摊牌的边缘」；动作提示如「她可以先把手里那样东西放到桌上」。',
+            '- 措辞用指令式：写「下一拍做什么」，不写「她可以做什么」的建议腔；暗牌写成「她知道什么、被问到时会怎么接」，不写成事件预告。',
+            '- 两条红线：不得剧透——将要发生的情节不给：下一节点只允许种标题方向、严禁预演其具体情节，下一节点之后的节点严禁编造或暗示（角色暗牌里「她已知的事实」不算剧透，按暗牌条放行）；不得催促抢跑——引导，不驱赶。',
+            '- 意思模板（仅示意含义，措辞自定）：目标句如「让两人的对话自然滑向摊牌的边缘」；动作提示如「下一拍她把手里的牌扣在桌上、起身去倒水」；暗牌如「这趟约会她心里定好的是动物园猫科区——user 问去哪时她多半卖关子，不临场另编目的地」。',
             `   介入强度（当前档：${inter.label}）决定发的勤度：${inter.text} 决定不发时必须给原因。`,
             '',
             '【输出】',
@@ -471,11 +474,11 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             '  "judgment": "achieved | not_yet | stuck",',
             '  "evidence": [{"floor": 楼层号, "quote": "该楼原文片段", "note": "为什么这段能作证"}],',
             '  "progress_note": "本轮实际推进了什么，一两句",',
-            '  "guidance": {"goal": "目标句", "action_hint": "动作提示"},',
+            '  "guidance": {"goal": "目标句", "action_hint": "动作提示", "hidden": "角色暗牌：她此刻已知、还没说出口的事；没有则空字符串"},',
             '  "no_guidance_reason": "不发指导时的原因；发了则留空字符串",',
             '  "watch": {"ooc": true/false, "slow_burn": true/false, "fake_completion": true/false, "notes": "边缘情况备注，无则空字符串"}',
             '}',
-            '说明：evidence 至少 1 条、不设上限；guidance 在卡死或按介入档决定静默时整段留空（goal 与 action_hint 均空字符串）并在 no_guidance_reason 写明原因。',
+            '说明：evidence 至少 1 条、不设上限；guidance 在卡死或按介入档决定静默时整段留空（goal、action_hint 与 hidden 均空字符串）并在 no_guidance_reason 写明原因。',
             '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
             '',
             `<剧情上下文（${floorsNote ?? '当前聊天全部未隐藏楼层'}，带楼层号；新楼层追加在本节末尾）>`,
@@ -634,6 +637,7 @@ export function normalizeUnitJudgment(obj) {
     const g = (obj.guidance && typeof obj.guidance === 'object') ? obj.guidance : {};
     const goal = String(g.goal ?? '').trim();
     const actionHint = String(g.action_hint ?? '').trim();
+    const hidden = String(g.hidden ?? '').replace(/\s+/g, ' ').trim();   // 角色暗牌（第五十一轮）：随指导同行的已知信息
     const noReason = String(obj.no_guidance_reason ?? '').trim();
     if (!goal && !noReason) throw new Error('既没有指导也没有静默原因（静默轮必须留痕原因）');
     const w = (obj.watch && typeof obj.watch === 'object') ? obj.watch : {};
@@ -643,6 +647,7 @@ export function normalizeUnitJudgment(obj) {
         progressNote: String(obj.progress_note ?? '').slice(0, 300),
         goal,
         actionHint,
+        hidden,
         noGuidanceReason: noReason,
         watch: {
             ooc: Boolean(w.ooc),
@@ -726,8 +731,12 @@ export function normalizeReentryReport(obj, unit) {
 // 纯逻辑：判定结果落账（进度账只在这里点亮——监听判定是正路；失败路径绝不碰它）
 // ---------------------------------------------------------------------------
 
-export function guidanceText(goal, actionHint) {
-    return [goal, actionHint].filter(Boolean).map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+export function guidanceText(goal, actionHint, hidden = '') {
+    const segs = [goal, actionHint].filter(Boolean).map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    // 角色暗牌段（第五十一轮）：拼进注入/账本/面板共用的指导文本；括注是给扮演模型的使用守则（防主动抖牌）
+    const h = String(hidden ?? '').replace(/\s+/g, ' ').trim();
+    if (h) segs.push(`【角色已知】${h}（角色心里有数、还没说出口的事：不主动抖出来，被问到或时机到了才用）`);
+    return segs.join('\n');
 }
 
 export function applyUnitOutcome(state, report, meta) {
@@ -998,10 +1007,18 @@ export function lastListenerPrompt() {
     return lastPromptText;
 }
 
+// 注入框（第五十一轮 2A）：素条加头尾——头声明这是剧情指导（扮演模型此前拿到的是光秃两句话、
+// 常被当氛围参考），尾教它先接住 user 最新发言再落回方向。账本/留痕/面板存的是不带框的裸文本，
+// 框只在写注入槽这一刻加——删楼/重做还原走同一条 writeSlot，天然只包一层。
+const GUIDE_HEAD = '【剧情指导·本轮】';
+const GUIDE_TAIL = '——本轮扮演按上述方向走；user 最新发言先接住，再自然落回方向。';
+
 function writeSlot(text) {
     const cfg = listenerCfg();
     const d = Number(cfg.depth);
-    setExtensionPrompt(SLOT_KEY, String(text ?? ''), POSITION_IN_PROMPT, Number.isFinite(d) && d >= 0 ? Math.floor(d) : 2, false, ROLE_SYSTEM);
+    const raw = String(text ?? '').trim();
+    const t = raw ? `${GUIDE_HEAD}\n${raw}\n${GUIDE_TAIL}` : '';   // 静默/作废轮写空串，不注入空框
+    setExtensionPrompt(SLOT_KEY, t, POSITION_IN_PROMPT, Number.isFinite(d) && d >= 0 ? Math.floor(d) : 2, false, ROLE_SYSTEM);
 }
 
 export function clearListenerSlot() {
@@ -1230,11 +1247,13 @@ export async function runListenerRound({ manual = false } = {}) {
             // 偏大挂起轮（2026-09-02）：判定与进度账照跑（applyUnitOutcome 里点亮照旧），
             // 唯独指导不进注入槽——挂起期间槽保持空、停进提示在独立槽拦着别硬拉回规划
             const suspended = haltSuspendActive(state, state.unit);
-            let text = guidanceText(report.goal, report.actionHint);
+            // 暗牌只随指导同行：goal/action_hint 都空＝静默轮，模型就算多嘴给了 hidden 也不因此破静默
+            let text = (report.goal || report.actionHint) ? guidanceText(report.goal, report.actionHint, report.hidden) : '';
             if (suspended) {
                 text = '';
                 report.goal = '';   // 照轻量介入闸先例：拦下的指导按静默轮落账，留痕里才看得到挂起原因
                 report.actionHint = '';
+                report.hidden = '';
                 report.noGuidanceReason = '长线偏离挂起中：判定与进度账照跑，指导暂停注入（处置出口见监听页挂起卡的指路行）';
             }
             writeSlot(text);   // 滚动覆写：静默轮写空串（旧指导不留到下一轮）
