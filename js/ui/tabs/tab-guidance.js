@@ -2123,8 +2123,8 @@ function openOtPanel(onChange) {
         <div class="pp-kb-toolrow" style="margin-top:6px">
             <label title="轻量选择带不带最近对话（判断场合用：在家不出门就不选正装）。一层＝一条角色回复"><input type="checkbox" id="pp_gd_ot_usechat" ${draft.useChat ? 'checked' : ''} /> 带最近对话</label>
             <input type="number" class="text_pole" id="pp_gd_ot_chatfloors" min="1" max="50" step="1" value="${draft.chatFloors}" title="带最近几层角色楼（其间夹的用户消息一并保留）" />
-            <select class="text_pole" id="pp_gd_ot_prov" title="轻量选择走哪个连接：绑定清单用绑定时配置的模型（在那边改），这里管的是没绑定（衣库）清单；「默认」＝方案库第一条，没有方案就是主连接">
-                <option value="" ${draft.providerId === '' ? 'selected' : ''}>默认（方案库第一条）</option>
+            <select class="text_pole" id="pp_gd_ot_prov" title="轻量选择走哪个连接：绑定清单用绑定时配置的模型（在那边改），这里管的是没绑定（衣库）清单；「默认」＝跟随设置页「分处模型」区的装扮生成档（那行没选就跟主连接），「主连接」＝强制主连接">
+                <option value="" ${draft.providerId === '' ? 'selected' : ''}>默认（跟随分处模型）</option>
                 <option value="__main__" ${draft.providerId === '__main__' ? 'selected' : ''}>主连接</option>
                 ${profs.map(p => `<option value="${escapeHtml(p.id)}" ${draft.providerId === p.id ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model ?? '')}</option>`).join('')}
             </select>

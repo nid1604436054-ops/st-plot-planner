@@ -545,6 +545,7 @@ async function lfCall({ system, user, provider, signal, mult = 2, onUsage, onDel
             { role: 'system', content: system },
             { role: 'user', content: user },
         ],
+        place: 'longform',   // 分处模型·长线生成档（第四十九轮）；长线页「生成模型」单次选的 provider 优先
         maxTokens: lfMaxTokens(mult),
         ...(provider ? { provider } : {}),
         ...(signal ? { signal } : {}),

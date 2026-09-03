@@ -158,8 +158,8 @@ function outfitCfgHtml(list) {
             <span class="pp-seg-opt${bind ? ' on' : ''}" data-kbind-set="bind">绑定本聊天</span>
         </span>
         ${bind ? `
-        <select class="text_pole" data-kbprov="${escapeHtml(list.id)}" title="这张清单的轻量选择（装扮生成）走哪个连接：主连接或供应商方案；「默认」＝方案库第一条">
-            <option value="" ${!bind.providerId ? 'selected' : ''}>默认（方案库第一条）</option>
+        <select class="text_pole" data-kbprov="${escapeHtml(list.id)}" title="这张清单的轻量选择（装扮生成）走哪个连接：「默认」＝跟随设置页「分处模型」区的装扮生成档（那行没选就跟主连接）；「主连接」＝强制主连接；或选一个供应商方案（选了压过分处模型那行）">
+            <option value="" ${!bind.providerId ? 'selected' : ''}>默认（跟随分处模型）</option>
             <option value="__main__" ${bind.providerId === '__main__' ? 'selected' : ''}>主连接</option>
             ${profs.map(p => `<option value="${escapeHtml(p.id)}" ${bind.providerId === p.id ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model ?? '')}</option>`).join('')}
         </select>` : ''}
@@ -197,8 +197,8 @@ function importHtml(list) {
         return `
         <div class="pp-kb-import">
             <div class="pp-kb-toolrow">
-                <select id="pp_kb_prov" class="text_pole" title="结构化调用走哪个连接：主连接或供应商方案（单次选用，不影响当前正在使用的模型）">
-                    <option value="">主连接</option>
+                <select id="pp_kb_prov" class="text_pole" title="结构化调用走哪个连接：「默认」＝跟随设置页「分处模型」区的知识库结构化档（那行没选就跟主连接）；或选一个供应商方案（单次选用，选了压过分处模型那行）">
+                    <option value="">默认（跟随分处模型）</option>
                     ${profs.map(p => `<option value="${escapeHtml(p.id)}" ${lastProviderId === p.id ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model ?? '')}</option>`).join('')}
                 </select>
                 <span class="menu_button" id="pp_kb_struct" title="把粘贴的原始草稿交给模型，照这张清单的表头（${escapeHtml(list.fields.join('、'))}）整理成条目草稿；草稿逐条审改后才入库，本步不产生入库数据。长草稿自动分批整理（一批一次调用），全部批失败才算失败">结构化导入</span>

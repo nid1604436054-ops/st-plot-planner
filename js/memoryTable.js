@@ -454,6 +454,7 @@ export async function autoTagByVocabulary({ vocab = [], sheetUids = [], overwrit
             `[${r.rid}] ` + r.cells.map((c, j) => `${r.cols[j] ?? j}:${c}`).join(' | ')).join('\n');
         try {
             const request = {
+                place: 'memTag',   // 分处模型·记忆表 AI 打标档（第四十九轮）
                 temperature: 0.2,
                 maxTokens: 4000,
                 messages: [

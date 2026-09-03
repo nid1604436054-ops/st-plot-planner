@@ -486,7 +486,8 @@ export async function structureImport({ list, rawText, provider, onProgress } = 
             { role: 'system', content: structureSystemPrompt(list) },
             { role: 'user', content: chunks.length > 1 ? `（草稿第 ${i + 1}/${chunks.length} 批，只整理这一批，不要虚构其他批次的内容）\n\n${chunks[i]}` : chunks[i] },
         ];
-        const req = { messages, ...(provider ? { provider } : {}) };
+        // place＝分处模型·知识库结构化档（第四十九轮）：单张清单绑定选了方案时 provider 优先于它
+        const req = { messages, place: 'kbStruct', ...(provider ? { provider } : {}) };
         try {
             const { result } = await parseModelJson(await chatCompletion(req), req);
             const arr = Array.isArray(result?.entries) ? result.entries : [];

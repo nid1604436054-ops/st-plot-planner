@@ -21,6 +21,45 @@ function requireConfig(conn) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 分处模型（第四十九轮）：插件里每一处会调用大模型的功能，都可以在设置页最底部
+// 「分处模型」区单独指定一个供应商方案。默认全部「跟随当前配置」（＝上方「大模型
+// 连接」的主连接）；选了方案的走那一套（地址/密钥/模型/格式整套，温度等其余参数
+// 仍全局共用）。两处不进这张表：连通性测试（它测的就是主连接本身）、JSON 修复
+// 回炉（parseModelJson 的第二次调用——跟原请求走同一个模型，不单独配）
+// ---------------------------------------------------------------------------
+
+// 全部可配置档位（设置页「分处模型」区的行与解析共用这一份，防两处漂移）
+export const MODEL_PLACES = [
+    { id: 'planner', label: '剧情规划（向导）', hint: '剧情指导页第 3 步「开始分析」的两遍调用（第一遍出规划＋第二遍对齐审校）——改这里两遍一起换' },
+    { id: 'review', label: '检查报告', hint: '「检查当前剧情」的报告生成调用' },
+    { id: 'research', label: '联网判断', hint: '联网搜索开着时的搜前轻量调用：判断要不要搜、要搜的话取关键词' },
+    { id: 'event', label: '随机事件', hint: '三个入口共用：事件库掷骰后生成 / 大模型随机 / 按意见生成（AI 自主掷骰同）' },
+    { id: 'eventLib', label: '事件建库', hint: '「AI 出条目草稿」按维度批量设计事件条目' },
+    { id: 'reaction', label: '路人反应卡', hint: '反应卡的生成调用' },
+    { id: 'gameplay', label: '玩法咨询', hint: '「AI 玩法创作」把一句思路扩写成完整玩法规则' },
+    { id: 'memTag', label: '记忆表 AI 打标', hint: '记忆表格页按标签词表批量打标签（40 行一批、逐批调用）' },
+    { id: 'kbStruct', label: '知识库结构化', hint: '知识库页把粘贴的原始草稿整理成条目（长稿自动分批）；单张清单另有自己的绑定选择，选了优先' },
+    { id: 'outfit', label: '装扮生成', hint: '换装面板「模型选择」每角色一次的轻量挑选调用；面板当次选择或清单绑定优先' },
+    { id: 'listener', label: '监听判定', hint: '每轮例行判定与重挂对账（回归判定）共用——逐轮都跑，建议放便宜模型；原设置页「监听」区的监听模型选择已挪到本区' },
+    { id: 'longform', label: '长线生成', hint: '长线页全部生成按钮（骨架/卷文本/切章/各修订）；长线页「生成模型」的单次选择优先于本档' },
+    { id: 'mix', label: '混合重编', hint: '剧情指导页「打碎混合」按本次想法重写当前章的调用' },
+];
+
+// 解析某一处的档位：空/方案已删＝null（跟随当前配置＝主连接）。返回 {name, provider}——
+// name 供界面显示、provider 供 chatCompletion 当连接用。解析链整体为：
+// 调用方就近的显式 provider（清单绑定/装扮面板/长线页单次）＞ 分处档 ＞ 主连接
+export function placeProvider(place) {
+    const id = String(settings.placeModels?.[place] ?? '');
+    if (!id) return null;
+    const p = (settings.api.profiles ?? []).find(x => x.id === id);
+    if (!p?.baseUrl || !p?.model) return null;   // 方案被删/残缺：退回主连接，不硬报错
+    return {
+        name: `${p.name} · ${p.model}`,
+        provider: { baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model, format: p.format === 'responses' ? 'responses' : 'chat' },
+    };
+}
+
 // 关闭思考参数（第十七轮起分两路：设置页「关闭思考」总开关只管生成侧；监听侧恒关——
 // 由 chatCompletion 的 thinkingOff:true 按次覆盖、不吃总开关）：各家只认自己的、陌生的
 // 多半忽略——deepseek/GLM 认 thinking、Qwen 认 enable_thinking、OpenAI 系认
@@ -170,9 +209,12 @@ class ThinkingHeaderError extends Error {
  *        流式时请求带 stream_options.include_usage、服务商在末包附上才回调（不附就不回调）
  * @param {boolean} [options.skipPresets]  true 时跳过全局预设注入（仅连通性测试用）
  * @param {{baseUrl:string,apiKey:string,model:string,format?:string}} [options.provider]
- *        独立连接覆盖（监听模型固定项用）：提供时地址/密钥/模型走这一套，
- *        不提供走当前主连接；温度等其余参数全局共用。format 跟着方案走
+ *        就近连接覆盖（清单绑定/装扮面板/长线页单次这一类）：提供时地址/密钥/模型走这一套，
+ *        优先于 place 与主连接；温度等其余参数全局共用。format 跟着方案走
  *        （'responses'＝Responses 接口，缺省 chat 对话补全——第四十四轮）
+ * @param {string} [options.place]  分处模型档位 id（第四十九轮，见 MODEL_PLACES）：
+ *        没给 provider 时按设置页「分处模型」区该档选的方案走（空/方案不在＝主连接）。
+ *        各调用点把自己档位的 id 写死在这里，解析统一收在 placeProvider
  * @param {boolean} [options.thinkingOff] 本次调用显式覆盖「关闭思考」（第十七轮分家）：
  *        true＝带关闭思考参数、false＝不带；缺省跟设置页总开关。监听侧恒传 true——
  *        监听每轮都跑、开了思考成本会爆炸；规划等生成侧继续跟总开关（要聪明自己开思考）
@@ -231,10 +273,11 @@ export async function chatCompletion(options = {}) {
     return text;
 }
 
-async function chatCompletionOnce({ messages, temperature, maxTokens, signal, onDelta, onUsage, onReasoning, skipPresets = false, provider, thinkingOff } = {}, tolerateThinkingHeader = false) {
+async function chatCompletionOnce({ messages, temperature, maxTokens, signal, onDelta, onUsage, onReasoning, skipPresets = false, provider, place, thinkingOff } = {}, tolerateThinkingHeader = false) {
     // 「关闭思考」解析（第十七轮分家）：调用方显式给（监听恒 true）优先，否则跟设置页总开关（生成侧）
     const thinkOff = thinkingOff ?? settings.api.thinkingOff;
-    const conn = provider ?? settings.api;
+    // 连接解析（第四十九轮起三链）：就近显式 provider ＞ 分处模型档（place）＞ 当前主连接
+    const conn = provider ?? (place ? placeProvider(place)?.provider : null) ?? settings.api;
     const responses = conn.format === 'responses';
     requireConfig(conn);
     const url = `${conn.baseUrl.replace(/\/+$/, '')}${responses ? '/responses' : '/chat/completions'}`;

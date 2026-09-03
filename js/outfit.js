@@ -15,7 +15,7 @@
 import { settings, newId } from "./settings.js";
 import { loadChatData, saveChatData } from "./chatdata.js";
 import { getTavernContext } from "./context.js";
-import { chatCompletion, parseModelJson } from "./api.js";
+import { chatCompletion, parseModelJson, placeProvider } from "./api.js";
 import { applyOutfitSlot, revokeOutfitSlot, replyFloorCount } from "./injection.js";
 import { pushTraceRecord } from "./listener.js";
 import { entryText, findList, grabFromList } from "./knowledge.js";
@@ -262,17 +262,23 @@ export function replayOutfitSlot() {
 // 轻量选择（每角色一次小调用，智力不衰减——主生成不带全库）
 // ---------------------------------------------------------------------------
 
-// 模型解析（监听 Provider 同款语义：''＝方案库第一条、'__main__'＝主连接、其他＝按 id 取）
+// 模型解析（第四十九轮重定基）：''＝跟随设置页「分处模型」区的装扮生成档（该档默认＝主连接）；
+// '__main__'＝强制主连接（压过分处档）；方案 id＝整套走它，方案不在了退回默认链。
+// 旧口径「''＝方案库第一条」废弃（用户拍板：默认每一处都跟随当前配置）
 export function resolveOutfitProvider(providerId) {
-    const profs = settings.api.profiles ?? [];
-    let chosen = null;
     const id = String(providerId ?? '');
-    if (id && id !== '__main__') chosen = profs.find(p => p.id === id) ?? null;
-    else if (!id) chosen = profs[0] ?? null;
-    if (chosen?.baseUrl && chosen?.model) {
-        return { name: `${chosen.name} · ${chosen.model}`, provider: { baseUrl: chosen.baseUrl, apiKey: chosen.apiKey, model: chosen.model, format: chosen.format ?? 'chat' } };
+    const main = () => ({ name: settings.api.model ? `主连接 · ${settings.api.model}` : '（未配置）', provider: null });
+    if (id && id !== '__main__') {
+        const p = (settings.api.profiles ?? []).find(x => x.id === id);
+        if (p?.baseUrl && p?.model) {
+            return { name: `${p.name} · ${p.model}`, provider: { baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model, format: p.format ?? 'chat' } };
+        }
     }
-    return { name: settings.api.model ? `主连接 · ${settings.api.model}` : '（未配置）', provider: null };
+    if (id !== '__main__') {
+        const row = placeProvider('outfit');
+        if (row?.provider) return { name: row.name, provider: row.provider };
+    }
+    return main();
 }
 
 // 某张清单该用哪个模型：绑定的清单用绑定时配置的模型（没配＝方案库第一条），衣库清单用面板当次选的
@@ -327,7 +333,8 @@ function normalizeSelectResult(obj, candidates) {
  */
 export async function runOutfitSelect({ name, list, candidates, wbText = '', chatText = '', provider = null }) {
     const messages = outfitSelectMessages({ name, listName: list?.name ?? '', candidates, wbText, chatText });
-    const req = { messages, thinkingOff: true, ...(provider ? { provider } : {}) };
+    // place＝分处模型·装扮生成档（第四十九轮）：面板当次选择/清单绑定的 provider 优先于它
+    const req = { messages, thinkingOff: true, place: 'outfit', ...(provider ? { provider } : {}) };
     const { result } = await parseModelJson(await chatCompletion(req), req);
     return normalizeSelectResult(result, candidates);
 }

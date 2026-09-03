@@ -8,6 +8,7 @@
 // js/longform.js，本文件只管界面；逐轮执行去看「监听」页。
 // 生成走「单次选用」模型（主连接或供应商方案，不影响正在用的模型）。
 import { settings } from "../../settings.js";
+import { placeProvider } from "../../api.js";   // 默认项显示分处模型·长线档（第四十九轮）
 import { escapeHtml, clamp } from "../../utils.js";
 import { storageItemsInEffect } from "../../store.js";
 import { knowledgeLists } from "../../knowledge.js";
@@ -40,7 +41,7 @@ const BUSY_LABEL = {
     skeleton: '生成骨架中', detail: '具体化各卷中', revise: '按意见修订所有卷中', revsk: '按意见修订骨架中',
     chrev: '按意见修订所有章中', volsk: '修订本卷骨架中', voltext: '修订本卷文本中', split: '生成章节中', volsplit: '重切本卷中',
 };
-let providerId = '';        // 单次选用的模型（会话内记住上次选择；空 = 主连接）
+let providerId = '';        // 单次选用的模型（会话内记住上次选择；空 = 跟设置页「分处模型」区的长线档，那行没选就跟主连接——第四十九轮）
 let confirmReset = false;   // 「作废本长线」两步确认
 const delArmVol = new Set();   // 「删除本卷」两步确认（卷号）
 const veArmVol = new Set();    // 「取消」卷文本编辑两步确认（卷号，只在改过内容时启用）
@@ -74,9 +75,13 @@ const STAGE_LABEL = {
     split: ['④ 章/节点就绪', '执行期：按章挂进监听，节点逐轮点亮'],
 };
 
+function lfPlaceName() {
+    return placeProvider('longform')?.name ?? (settings.api.model || '主连接');
+}
+
 function providerOptions(selectedId) {
     const profs = settings.api.profiles ?? [];
-    return `<option value="" ${!selectedId ? 'selected' : ''}>主连接（${escapeHtml(clamp(settings.api.model || '未配置模型', 24))}）</option>`
+    return `<option value="" ${!selectedId ? 'selected' : ''}>默认（${escapeHtml(clamp(lfPlaceName(), 30))}）</option>`
         + profs.map(p => `<option value="${escapeHtml(p.id)}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(clamp(p.name || p.model, 30))}</option>`).join('');
 }
 
@@ -88,7 +93,7 @@ function providerFromId(pid) {
 
 // busy 横幅右侧的模型名（与下拉同源：方案名或主连接模型名）
 function lfModelLabel() {
-    if (!providerId) return clamp(settings.api.model || '主连接', 24);
+    if (!providerId) return clamp(lfPlaceName(), 24);   // 默认＝分处模型·长线档的生效名（第四十九轮）
     const p = (settings.api.profiles ?? []).find(x => x.id === providerId);
     return clamp(p?.name || p?.model || '供应商方案', 24);
 }
@@ -227,7 +232,7 @@ function toolbarHtml(st) {
     <div class="pp-section">
         <div class="pp-lf-toolbar">
             <span class="menu_button pp-lf-go" id="pp_lf_skeleton" title="一次调用产出全书卷结构与楼数预算（骨架＋切块合并做；楼数总和由插件校验；楼数按剧情体量分配、不平均）">生成骨架</span>
-            <label class="pp-lf-prov" title="生成调用走哪个连接：主连接或供应商方案（单次选用，不影响正在使用的模型）——各步共用这一个选择">生成模型
+            <label class="pp-lf-prov" title="本页生成调用走哪个连接（各步共用这一个选择，单次选用、会话内记住、不影响别处）：「默认」＝设置页「分处模型」区的长线生成档（那行没选就跟主连接）">生成模型
                 <select id="pp_lf_prov" class="text_pole">${providerOptions(providerId)}</select>
             </label>
         </div>
@@ -253,7 +258,7 @@ function toolbarHtml(st) {
             : btn('pp_lf_split', '生成章节', '逐卷并行：卷切成章（推进锚是刀口）、章内切节点，一步到位；只切「已具体化且未切章」的卷——单卷带意见重切去各卷「章与节点」页签')}
             ${anyDetail && !allDetail ? btn('pp_lf_detail', '继续具体化（未完成的卷）', '上回具体化有卷没跑完——只补没完成的卷（一次一卷；中途报错已成的卷不丢）；费用＝每卷一次调用') : ''}
             ${anyChapters && splittableLeft ? btn('pp_lf_split', '继续切章（未完成的卷）', '上回切章有卷没跑完或失败——只补「已具体化且未切章」的卷；单卷带意见重切去各卷「章与节点」页签') : ''}
-            <label class="pp-lf-prov" title="生成调用走哪个连接：主连接或供应商方案（单次选用，不影响正在使用的模型）——各步共用这一个选择">生成模型
+            <label class="pp-lf-prov" title="本页生成调用走哪个连接（各步共用这一个选择，单次选用、会话内记住、不影响别处）：「默认」＝设置页「分处模型」区的长线生成档（那行没选就跟主连接）">生成模型
                 <select id="pp_lf_prov" class="text_pole">${providerOptions(providerId)}</select>
             </label>
         </div>

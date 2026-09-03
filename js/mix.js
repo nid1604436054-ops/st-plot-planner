@@ -222,6 +222,7 @@ export async function runMixChapter({ idea = '', windowFloors = 0, materials = '
     });
     const req = {
         messages,
+        place: 'mix',   // 分处模型·混合重编档（第四十九轮）
         maxTokens: mixMaxTokens(),
         ...(provider ? { provider } : {}),
         ...(signal ? { signal } : {}),

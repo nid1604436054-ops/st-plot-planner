@@ -3,7 +3,7 @@
 // 配置直接放在主面板里，魔法棒 → 剧情规划器 → 设置，无需再去扩展面板
 // （「生效中的隐身注入」原住本页底部，2026-08-26 搬去剧情指导页底部工具区——见 tab-events.js）
 import { settings, save, newId, upsertApiProfile, renameApiProfile } from "../../settings.js";
-import { testConnection, fetchModels, searchWeb } from "../../api.js";
+import { testConnection, fetchModels, searchWeb, MODEL_PLACES } from "../../api.js";
 import { commonTaskSystem } from "../../materials.js";
 import { chatDataKey, resetChatDataCache } from "../../chatdata.js";
 import { listenerCfg, setListenerEnabled } from "../../listener.js";
@@ -14,8 +14,8 @@ import { renderWorldbookLibrary } from "./tab-worldbook.js";
 let modelIds = [];
 // true = 手动填模型名（拉取的列表里没有时用），false = 下拉选择
 let manualModel = false;
-// 大区块折叠状态（页签会话内保留）：大模型连接默认展开，其余默认收起
-const secFolds = { conn: true, search: false, listener: false, wb: false, kb: false, advanced: false, backup: false };
+// 大区块折叠状态（页签会话内保留）：大模型连接默认展开，其余默认收起（places＝分处模型，第四十九轮）
+const secFolds = { conn: true, search: false, listener: false, wb: false, kb: false, advanced: false, backup: false, places: false };
 
 // 重建模型下拉框；当前已保存的模型若不在列表里，作为「当前自定义」置顶保留
 function rebuildModelSelect(container) {
@@ -137,12 +137,9 @@ export const settingsTab = {
                         <label class="pp-label" title="监听总开关：开 = 每轮扮演模型输出完毕后自动判定并注入指导；关 = 完全不分析、不注入、不扣发送。监听页签里也有同一个开关">启用监听</label>
                         <input id="pp_set_ls_on" type="checkbox" />
                     </div>
-                    <div>
-                        <label class="pp-label" title="监听模型固定项（2.0 里唯一不逐次选模型的调用）：选一个供应商方案给判定与指导用；默认用方案库第一个；方案库空时退回上面的主连接。逐轮判定建议放便宜模型或主流模型轻量版">监听模型</label>
-                        <select id="pp_set_ls_prov" class="text_pole"></select>
-                    </div>
                 </div>
                 <div class="pp-muted">监听固定关闭思考，不吃高级设置里「关闭思考」总开关——监听每轮都跑、开了思考成本会爆炸；剧情规划等其余调用仍跟总开关走</div>
+                <div class="pp-muted" title="第四十九轮：监听模型的选择从本区搬进页面最底部的「分处模型」区（与其他调用大模型的功能同一处管理）；此前显式选过的方案已自动带过去">监听用哪个模型：去本页最底部「分处模型」区的「监听判定」行选（默认跟随当前配置）</div>
                 <label class="pp-label" title="监听指导注入槽的深度（0 = 紧贴上下文末尾；数字越大越靠前）。默认 2，比 1.0 剧情注入（默认 4）更靠近末端；同轮并存时监听指导在更后面">注入深度</label>
                 <input id="pp_set_ls_depth" class="text_pole textarea_compact" type="number" min="0" max="100" />
                 <hr class="pp-hr" />
@@ -227,7 +224,8 @@ export const settingsTab = {
             </details>
         </div>
         <div class="pp-section" id="pp_set_preset"></div>
-        <div class="pp-section" id="pp_set_backup"></div>`;
+        <div class="pp-section" id="pp_set_backup"></div>
+        <div class="pp-section" id="pp_set_places"></div>`;
 
         const bind = (id, get, set) => {
             const el = container.querySelector(id);
@@ -279,25 +277,13 @@ export const settingsTab = {
         sJudge.addEventListener('change', () => { settings.search.preJudge = sJudge.checked; save(); });
         syncJudgeDisabled();
 
-        // 监听区：总开关 / 模型固定项 / 注入深度 / 换算锚区间 / 附加材料
+        // 监听区：总开关 / 注入深度 / 换算锚区间（监听模型的选用第四十九轮搬去底部「分处模型」区）
         const ls = listenerCfg();
         const lsOn = container.querySelector('#pp_set_ls_on');
         lsOn.checked = ls.enabled === true;
         lsOn.addEventListener('change', () => {
             setListenerEnabled(lsOn.checked);
             if (lsOn.checked) toastr.info('监听已启用：扮演模型每轮输出完毕后自动判定，指导写入独立注入槽');
-        });
-        const lsProvSel = container.querySelector('#pp_set_ls_prov');
-        const rebuildLsProv = () => {
-            const profs = settings.api.profiles ?? [];
-            lsProvSel.innerHTML = `<option value="">方案库第一个（默认）</option>`
-                + `<option value="__main__">主连接（不单独指定）</option>`
-                + profs.map(p => `<option value="${escapeHtml(p.id)}" ${ls.providerId === p.id ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model ?? '')}</option>`).join('');
-        };
-        rebuildLsProv();
-        lsProvSel.addEventListener('change', () => {
-            ls.providerId = lsProvSel.value === '__main__' ? '__main__' : lsProvSel.value;
-            save();
         });
         bindNum('#pp_set_ls_depth', () => ls.depth, v => ls.depth = Math.max(0, v));
         bindNum('#pp_set_ls_pmin', () => ls.progressMin, v => ls.progressMin = Math.max(50, v));
@@ -365,6 +351,7 @@ export const settingsTab = {
             const r = upsertApiProfile(base, key, model, settings.api.format);
             save();
             rebuildProfileSelect(container);
+            renderPlaceModels(container);   // 分处模型的下拉跟着方案库走（第四十九轮）
             profSel.value = r.profile.id;   // 保存后直接选中它，接着「改名」一步到位
             if (r.created) toastr.success(`已保存方案「${r.profile.name}」（点「改名」可自定名字）`);
             else toastr.info(`这个地址+模型已经存过了，就是方案「${r.profile.name}」`);
@@ -376,6 +363,7 @@ export const settingsTab = {
             const [removed] = list.splice(idx, 1);
             save();
             rebuildProfileSelect(container);
+            renderPlaceModels(container);   // 删了方案：分处模型各档下拉同步去掉它（第四十九轮）
             container.querySelector('#pp_set_prof_rename_row').hidden = true;
             toastr.success(`已删除方案「${removed.name}」`);
         });
@@ -480,6 +468,8 @@ export const settingsTab = {
         const wbBody = container.querySelector('#pp_set_wb_body');
         if (wbBody) renderWorldbookLibrary(wbBody);
         renderBackup(container);
+        // 分处模型区（第四十九轮，页面最底部）：放 renderBackup 后，折叠绑定循环才见得到它的 details
+        renderPlaceModels(container);
         // 折叠状态记忆（toggle 事件不冒泡，逐个绑定；备份区在 renderBackup 里渲染，放它后面）
         container.querySelectorAll('details[data-secfold]').forEach(el =>
             el.addEventListener('toggle', () => { secFolds[el.dataset.secfold] = el.open; }));
@@ -545,6 +535,7 @@ function renderBackup(container) {
             resetChatDataCache();
             save();
             rebuildTransferList(container);
+            renderPlaceModels(container);   // 导入的备份可能带另一套方案库/分处选择（第四十九轮）
             toastr.success('备份已导入：全局设置与各聊天数据已恢复，建议刷新一次页面');
         } catch (err) {
             toastr.error(`导入失败：${String(err.message ?? err)}`);
@@ -718,4 +709,52 @@ function renderPreset(container) {
             view.textContent = `${commonTaskSystem()}\n\n## 用户全局预设（启用中的预设按顺序追加在这里——所有模型调用共用这一拼法，规划分析/检查报告/随机事件/路人反应/AI 打标/AI 建库/联网判断都会带上，每条带「### 预设名」小标题）`;
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// 分处模型（第四十九轮，用户拍板「设置页最下面单开一栏，默认每一处都跟随当前配置，
+// 点开以后每一栏可以自己选用什么模型」）：插件里每一处会调用大模型的功能一列到底，
+// 各自可选一个供应商方案。档位表＝api.js MODEL_PLACES（与解析层共用同一份，两处不漂移）；
+// 值存 settings.placeModels。两处不进这张表：连通性测试（测的就是主连接本身）、
+// JSON 修复回炉（parseModelJson 的第二次调用跟原请求走同一个模型）。
+// 监听模型固定项已从上方「监听」区搬进本区（旧值迁移见 settings.js）；
+// 知识库单清单绑定/装扮面板/长线页「生成模型」是更就近的选择，选了压过本区对应档
+// ---------------------------------------------------------------------------
+
+function placeModelsSummary() {
+    const n = MODEL_PLACES.filter(p => String(settings.placeModels?.[p.id] ?? '')).length;
+    return n ? `${n} 处单独指定` : '全部跟随当前配置';
+}
+
+function renderPlaceModels(container) {
+    const el = container.querySelector('#pp_set_places');
+    if (!el) return;
+    const profs = settings.api.profiles ?? [];
+    const cells = MODEL_PLACES.map(p => {
+        const cur = String(settings.placeModels?.[p.id] ?? '');
+        const stale = cur && !profs.some(x => x.id === cur);   // 选过的方案已被删：显示提示、按跟随处理
+        return `
+        <div>
+            <label class="pp-label" title="${escapeHtml(p.hint)}">${escapeHtml(p.label)}</label>
+            <select class="text_pole" data-place="${escapeHtml(p.id)}">
+                <option value="" ${!cur || stale ? 'selected' : ''}>跟随当前配置${stale ? '（原选方案已删）' : ''}</option>
+                ${profs.map(x => `<option value="${escapeHtml(x.id)}" ${cur === x.id ? 'selected' : ''}>${escapeHtml(x.name)} · ${escapeHtml(x.model ?? '')}</option>`).join('')}
+            </select>
+        </div>`;
+    }).join('');
+    el.innerHTML = `
+    <details class="pp-fold" data-secfold="places" ${secFolds.places ? 'open' : ''}>
+        <summary title="插件里每一处会调用大模型的功能（共 ${MODEL_PLACES.length} 处）都在这里单独选模型：默认全部跟随上方「大模型连接」的当前配置，想给某一处换模型就从下拉里选一个供应商方案（方案先在「大模型连接」区「保存」）。换了的是整套连接（地址/密钥/模型/格式），温度等其余参数全局共用；更就近的选择（知识库单清单绑定、装扮面板、长线页「生成模型」）选了压过这里的对应行"><i class="fa-solid fa-shuffle"></i> 分处模型 <span class="pp-muted">${placeModelsSummary()}</span></summary>
+        <div class="pp-muted">默认每一处都跟随上面「大模型连接」的当前配置；想单独换（比如逐轮都跑的「监听判定」放个便宜模型），选一个方案——方案先在「大模型连接」区「保存」成条目</div>
+        ${profs.length ? '' : '<div class="pp-muted">方案库还是空的：先到「大模型连接」区把一套连接「保存」成方案，这里才有得选</div>'}
+        <div class="pp-grid2">${cells}</div>
+    </details>`;
+    el.querySelectorAll('select[data-place]').forEach(sel => sel.addEventListener('change', () => {
+        settings.placeModels ??= {};
+        settings.placeModels[sel.dataset.place] = sel.value;
+        save();
+        el.querySelector('summary .pp-muted').textContent = placeModelsSummary();
+        const label = MODEL_PLACES.find(p => p.id === sel.dataset.place)?.label ?? '';
+        toastr.info(sel.value ? `「${label}」已单独指定方案` : `「${label}」已恢复跟随当前配置`);
+    }));
 }

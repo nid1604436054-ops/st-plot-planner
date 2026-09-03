@@ -45,6 +45,7 @@ export async function generateGameplayDraft({ idea = '', activePlan = '', storag
     ].filter(Boolean).join('\n\n');
 
     const raw = await chatCompletion({
+        place: 'gameplay',   // 分处模型·玩法咨询档（第四十九轮）
         messages: [
             { role: 'system', content: CONSULT_SYSTEM_PROMPT },
             { role: 'user', content: user },

@@ -182,6 +182,7 @@ export async function generateRandomEvent(rule, materials = {}) {
         SEVERITY_HINT[rule.severity] ?? SEVERITY_HINT.light];
 
     const request = {
+        place: 'event',   // 分处模型·随机事件档（第四十九轮，三入口共用）
         messages: [
             { role: 'system', content: commonTaskSystem() },
             { role: 'user', content: [...sections, '## 本任务·随机遭遇生成', EVENT_TASK_PROMPT].join('\n\n') },
@@ -230,6 +231,7 @@ export async function generateFreeRandomEvent({ dimension = null, note = '', mat
     }
 
     const request = {
+        place: 'event',   // 分处模型·随机事件档（第四十九轮，三入口共用）
         messages: [
             { role: 'system', content: commonTaskSystem() },
             { role: 'user', content: [...sections, '## 本任务·随机遭遇生成', taskText].join('\n\n') },
@@ -266,6 +268,7 @@ export async function generateAiChoiceRandomEvent({ dimensions = [], materials =
         dimensions.length ? dimensions.map(d => `- ${d.name}：${d.prompt ?? ''}`).join('\n') : '（清单为空，请即兴生成，dimension 填「即兴」）');
 
     const request = {
+        place: 'event',   // 分处模型·随机事件档（第四十九轮，三入口共用）
         messages: [
             { role: 'system', content: commonTaskSystem() },
             { role: 'user', content: [...sections, '## 本任务·随机遭遇生成', taskText].join('\n\n') },
@@ -297,6 +300,7 @@ export async function generateEventEntries({ dimension, count = 5, note = '' } =
     ].filter(Boolean).join('\n\n');
 
     const request = {
+        place: 'eventLib',   // 分处模型·事件建库档（第四十九轮）
         messages: [
             { role: 'system', content: system },
             { role: 'user', content: user },

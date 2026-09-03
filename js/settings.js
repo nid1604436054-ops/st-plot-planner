@@ -62,7 +62,6 @@ const DEFAULTS = {
     },
     listener: {             // 2.0 监听（全局项；逐轮留痕/挂载单位在 chatdata 的 listener 块按聊天走）
         enabled: false,     // 总开关：关 = 不分析、不注入、不扣发送（默认关，打开前不上路，防意外计费）
-        providerId: '',     // 监听模型固定项：供应商方案 id；空 = 用方案库第一个；方案库空 = 退回主连接
         depth: 2,           // 注入槽深度（0 = 紧贴上下文末尾；默认比 1.0 剧情注入的 4 更靠近末端）
         strictness: 'standard', // 达成判定松紧：loose 宽 / standard 标准 / strict 严
         intervene: 'medium',    // 介入强度：low 低 / medium 中 / high 高（两模式的发与不发都归它管）
@@ -74,6 +73,9 @@ const DEFAULTS = {
         // 全局不再留默认键；旧存档的这三个键由 listenerState 迁移播种读走后删除
     },
     chatData: {},           // 每聊天数据的冷层留底（见 js/chatdata.js）：{ [聊天身份]: { memory/story/picks/reaction/books } }
+    placeModels: {},        // 分处模型（第四十九轮）：{ [档位id]: 方案id }——每一处调用大模型的功能可单独
+                            // 指定供应商方案；空/缺省＝跟随当前配置（主连接）。档位表见 api.js MODEL_PLACES，
+                            // 界面在设置页最底部「分处模型」区；随导出备份的 global 段走
     uiZoom: 100,            // 面板内容缩放百分比（80–160，抽屉头部步进器调）：字与控件等比放大、页面相应变长
     injections: [],         // M4 隐身注入项
     storageItems: [],       // M5 额外存储条目
@@ -115,6 +117,8 @@ function ensureDefaults() {
     store.knowledge ??= { grabCount: 5, cooldownGens: 3, lists: [] };   // 老安装补知识库（§6.9）
     store.knowledge.lists ??= [];
     store.chatData ??= {};            // 老安装补每聊天数据冷层
+    store.placeModels ??= {};         // 老安装补分处模型（第四十九轮）
+    migrateListenerProviderIntoPlaces(store);   // 监听模型固定项（旧键）搬进分处模型的监听档
     // 搜索开关拆分迁移：旧 toolMode（总闸+判断一体）折算成 enabled，preJudge 默认开（保持原行为）
     store.search.enabled ??= store.search.toolMode !== false;
     store.search.preJudge ??= true;
@@ -147,6 +151,18 @@ function ensureDefaults() {
 }
 
 export const settings = ensureDefaults();
+
+// 监听模型固定项迁移（第四十九轮）：旧键 settings.listener.providerId 的语义是
+// ''＝方案库第一条 / '__main__'＝主连接 / 其他＝方案 id。新语义（placeModels.listener）：
+// ''＝跟随当前配置（主连接）、其他＝方案 id。显式选过方案的 id 原样搬走；
+// ''（默认）与 '__main__'（明确选主连接）都归 ''——旧默认「方案库第一条」按新口径
+// 废弃（用户拍板：默认每一处都跟随当前配置）。导出成函数供离线测试台直测
+export function migrateListenerProviderIntoPlaces(store) {
+    store.placeModels ??= {};
+    const old = store.listener?.providerId;
+    if (typeof old === 'string' && old && old !== '__main__') store.placeModels.listener = old;
+    if (store.listener) delete store.listener.providerId;   // 迁移完清残留旧键（§5：旧值不能留在设置文件里）
+}
 
 export function save() {
     saveSettingsDebounced();

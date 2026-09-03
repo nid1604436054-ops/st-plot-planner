@@ -225,6 +225,7 @@ export async function runWebResearch(research = {}, { signal } = {}) {
                 { role: 'system', content: direct ? GATE_DIRECT_PROMPT : GATE_SYSTEM_PROMPT },
                 { role: 'user', content: buildResearchBrief(research) },
             ],
+            place: 'research',   // 分处模型·联网判断档（第四十九轮）
             signal,
             onUsage: u => { gateUsage.promptTokens = u.prompt_tokens ?? 0; gateUsage.completionTokens = u.completion_tokens ?? 0; },
         });
@@ -302,7 +303,7 @@ function raceAbort(promise, signal) {
     return Promise.race([promise, guard]).finally(() => signal.removeEventListener('abort', onAbort));
 }
 
-async function guidanceCompletion(messages, research = {}, { onDelta, onStage, prefetch, signal, onReasoning } = {}) {
+async function guidanceCompletion(messages, research = {}, { onDelta, onStage, prefetch, signal, onReasoning, place = 'planner' } = {}) {
     const total = { promptTokens: 0, completionTokens: 0, streamNoUsage: false };
     const add = u => {
         total.promptTokens += u?.promptTokens ?? u?.prompt_tokens ?? 0;
@@ -339,6 +340,7 @@ async function guidanceCompletion(messages, research = {}, { onDelta, onStage, p
         onStage?.('analysis');
         const text = await chatCompletion({
             messages: withNotes,
+            place,   // 分处模型：向导分析与检查报告各自的档（第四十九轮；联网判断另有自己的档）
             signal,
             onUsage: u => { add(u); analysisBilled = true; },
             ...(onDelta ? { onDelta } : {}),
@@ -584,7 +586,7 @@ export async function runPlotGuidance(options = {}) {
 // 整份 plan 重发＋fixes 清单、比第一遍只长不短，同一上限下第二遍更容易撞顶截断成坏 JSON；
 // ②解析接入 parseModelJson 修复梯子——此前裸 extractJson，坏格式直接整遍判失败，现在与
 // 反应卡/报告卡同款带修复提示回炉一次（重试前缀仍是原对话，缓存口径不变）
-async function alignPass(done, messages, { hasKnowledge = false, onDelta, onStage, signal, onReasoning } = {}) {
+async function alignPass(done, messages, { hasKnowledge = false, place = 'planner', onDelta, onStage, signal, onReasoning } = {}) {
     const draft = done.result.plan;
     const tail = `${alignTailPrompt(hasKnowledge)}\n\n## 第一遍草稿（对齐审校的对象——只改违反要求处，其余原样保留）\n${JSON.stringify(draft, null, 2)}`;
     const lastUser = messages.map(m => m.role === 'user').lastIndexOf(true);
@@ -609,6 +611,7 @@ async function alignPass(done, messages, { hasKnowledge = false, onDelta, onStag
         const base = Number(settings.api?.maxTokens) || 0;
         const opts = {
             maxTokens: base > 0 ? Math.round(base * 1.5) : base,
+            place,   // 分处模型：第二遍对齐与第一遍同档（第四十九轮）
             signal,
             onUsage: u => {
                 alignUsage.promptTokens += u?.prompt_tokens ?? 0;
@@ -685,7 +688,7 @@ export async function runStoryReview({ planText = '', userNote = '', memoryTags 
         userNote,
         planText: String(planText || ''),
     };
-    const stream = { onDelta, onStage, signal, onReasoning };
+    const stream = { onDelta, onStage, signal, onReasoning, place: 'review' };   // place＝分处模型·检查报告档（第四十九轮）
     // 账单跨两次调用累计（首次分析＋坏输出的修复重试），报告页留页展示用
     const acc = { promptTokens: 0, completionTokens: 0, streamNoUsage: false };
     const accAdd = u => {

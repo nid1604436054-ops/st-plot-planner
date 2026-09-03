@@ -8,7 +8,7 @@
 // 注入键 pp:listener 键空间独立（先例：store.js 的 pps:），不进 M4 注入项数组、不与其互相干扰。
 import { eventSource, event_types, setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from "/script.js";
 import { settings, save, newId } from "./settings.js";
-import { chatCompletion, parseModelJson } from "./api.js";
+import { chatCompletion, parseModelJson, placeProvider } from "./api.js";
 import { loadChatData, saveChatData, flushChatData } from "./chatdata.js";
 import { getTavernContext, chatEnabledBookIds } from "./context.js";
 import { scanLorebooks, buildLoreContext, resolveLorePicks } from "./lorebook.js";
@@ -54,7 +54,6 @@ const INTERVENE_LIGHT = {
 export function listenerCfg() {
     const c = settings.listener ??= {};
     c.enabled ??= false;
-    c.providerId ??= '';
     c.depth ??= 2;
     c.strictness ??= 'standard';
     c.intervene ??= 'medium';
@@ -69,19 +68,14 @@ export function listenerCfg() {
     return c;
 }
 
-// 监听模型固定项：方案库选定的方案；没选 = 第一个方案；显式选主连接或方案库空 = 退回主连接（provider:null）
+// 监听模型固定项（第四十九轮起＝设置页最底部「分处模型」区的「监听判定」档，原「监听」区
+// 的下拉已撤）：该档选了方案 = 整套（地址/密钥/模型/格式）走它；空/方案不在 = 跟随当前
+// 配置（主连接）。旧 settings.listener.providerId 由 settings.js 迁移带过来（显式选过的
+// 方案 id 原样保留；旧默认「方案库第一条」语义废弃，未选过 = 主连接）
 export function listenerProvider() {
     listenerCfg();
-    const profs = settings.api.profiles ?? [];
-    let chosen = null;
-    if (settings.listener.providerId && settings.listener.providerId !== '__main__') {
-        chosen = profs.find(p => p.id === settings.listener.providerId) ?? null;
-    } else if (!settings.listener.providerId) {
-        chosen = profs[0] ?? null;
-    }
-    if (chosen?.baseUrl && chosen?.model) {
-        return { name: `${chosen.name} · ${chosen.model}`, fallback: false, provider: { baseUrl: chosen.baseUrl, apiKey: chosen.apiKey, model: chosen.model, format: chosen.format ?? 'chat' } };
-    }
+    const r = placeProvider('listener');
+    if (r?.provider) return { name: r.name, fallback: false, provider: r.provider };
     return { name: settings.api.model ? `主连接 · ${settings.api.model}` : '（未配置）', fallback: true, provider: null };
 }
 

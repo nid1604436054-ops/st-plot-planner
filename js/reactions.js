@@ -77,6 +77,7 @@ export async function generateReactionCard({ note = '', materials = {}, activePl
     ].filter(Boolean).join('\n\n');
 
     const request = {
+        place: 'reaction',   // 分处模型·路人反应卡档（第四十九轮）
         messages: [
             { role: 'system', content: commonTaskSystem() },
             { role: 'user', content: user },
