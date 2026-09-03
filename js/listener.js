@@ -49,9 +49,10 @@ const INTERVENE_UNIT = {
 const INTERVENE_LIGHT = {
     // 2026-08-29 用户修订：轻量模式发现问题就发——输入成本反正已经花了，发现不说就白花；
     // 静默概念属于单位模式的节点推进（节点没到不用催），不允许压掉轻量模式的问题上报
-    low: { label: '低', text: '仅很轻微的发现（OOC 轻微、文风轻微）可不发；中等及以上 OOC、剧情重复、明显文风重复必须发。' },
-    medium: { label: '中', text: '有任何发现就发修正指导，轻微也不例外；仅三项全部无发现时静默。' },
-    high: { label: '高', text: '有任何发现就发修正指导；仅三项全部无发现时静默。' },
+    // 第五十四轮起四项检查（新增「复读 user 的话」——发现就发、无轻重档）
+    low: { label: '低', text: '仅很轻微的发现（OOC 轻微、文风轻微）可不发；中等及以上 OOC、剧情重复、复读 user 的话、明显文风重复必须发。' },
+    medium: { label: '中', text: '有任何发现就发修正指导，轻微也不例外；仅四项全部无发现时静默。' },
+    high: { label: '高', text: '有任何发现就发修正指导；仅四项全部无发现时静默。' },
 };
 
 export function listenerCfg() {
@@ -96,7 +97,7 @@ export function listenerState() {
         failStreak: 0,       // 连续失败计数（L2 失联用）
         paused: false,       // L2 失联后暂停，等用户在面板恢复
         hold: false,         // 手动暂停推进（第五十三轮）：当前节点想停留时用户点「暂停推进」——方向指导
-                             // 与暗牌停发、进度冻结（判定不再点亮），三查照跑照修正；再点恢复。只对单位轮生效
+                             // 与暗牌停发、进度冻结（判定不再点亮），检查项（四查）照跑照修正；再点恢复。只对单位轮生效
         lastGuidance: '',    // 上一轮指导全文（防复读输入线 + 面板显示）
         guideVoidReason: '', // 非空＝上一轮指导已作废（卸下/换挂/接回/关总开关/切聊天）——注入槽已清、面板改显示作废行；下一轮落账清零
         lastFloorSig: '',    // 最后一轮已分析过的楼层签名（去重：滑动/重生成内容没变不重跑）
@@ -471,11 +472,12 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             '- 意思模板（仅示意含义，措辞自定）：目标句如「让两人的对话自然滑向摊牌的边缘」；动作提示如「下一拍她把手里的牌扣在桌上、起身去倒水」；暗牌如「这趟约会她心里定好的是动物园猫科区——user 问去哪时她多半卖关子，不临场另编目的地」。',
             `   介入强度（当前档：${inter.label}）决定发的勤度：${inter.text} 决定不发时必须给原因。`,
             '',
-            '【检查任务】（三项，随判定同行——判定基准与轻量执勤／1.0 剧情检查一致）',
+            '【检查任务】（四项，随判定同行——判定基准与轻量执勤／1.0 剧情检查一致）',
             '1. OOC——只判角色（char）自身的问题：用户（user）在对话里明确指示、纠正或要求改变走向时（包括括号指令与作者式安排），角色照做不算 OOC，用户指示优先于人设与既有走向；只有用户没有指示、角色自行脱离人设/事实/关系/世界观时才判，evidence 引用具体楼层号与原文。',
             '2. 剧情重复——同一剧情线的自然延续不算重复；只有把已完结、已发生并被交代过的情节当作新剧情原样重演，或复刻已有桥段的流程，才判重复。',
             '3. 文风重复——只针对角色（char）的扮演文本：先检查用户近期输入是否自己在重复动作、场景或指令，角色跟进不算；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判轻微/明显，note 写明用户是否先重复、角色重复了什么。',
-            '- 这三项与 watch 分开：watch 标边缘情况（用户元对话、慢热、假装完成），三项检查只看角色扮演文本的质量问题；三项每轮都报（无发现就 found=false／level=无、items 空），发现不写进 goal/action_hint——修正由系统按门槛另行拼装。',
+            '4. 复读 user 的话——只判角色（char）把用户（user）当轮或近期说过的话复述进自己的回复文本：整句或大段原样复读、把 user 的原话嵌进旁白或对白再说一遍、逐条重述 user 刚提到的内容都算；角色正常回应接话、只引用其中一两个词展开、为剧情转述给第三方不算，user 一次说多件事、角色逐件处理也不算。note 引被复读的原句片段与楼层号。',
+            '- 这四项与 watch 分开：watch 标边缘情况（用户元对话、慢热、假装完成），四项检查只看角色扮演文本的质量问题；四项每轮都报（无发现就 found=false／level=无、items 空），发现不写进 goal/action_hint——修正由系统按门槛另行拼装。',
             '- 发现必须带可执行的修正：fix 写成「下一拍怎么改」的直接指令——文风重复写换什么句式／开头／结构（例：「下一拍起改用动作直入或对白起句，停用『从……的位置』式介词开头」），剧情重复写往哪个新走向带，OOC 写拉回哪条人设事实。禁止只复述现象（「高频使用某句式」是现象不是修正）、禁止「避免重复」「注意多样性」式口号；给不出具体改法的项不判（found=false／level=无）。',
             '',
             '【输出】',
@@ -489,9 +491,10 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             '  "ooc": { "found": true/false, "items": [{ "aspect": "性格|事实|关系|世界观|口吻", "evidence": "具体楼层与原文依据", "severity": "轻微|中等|严重", "fix": "修正建议：下一拍怎么改的直接指令" }] },',
             '  "plot_repeat": { "found": true/false, "note": "重演/复刻之处；没有则空字符串", "fix": "下一拍往哪个新走向带（直接指令）；没有发现则空字符串" },',
             '  "style_repeat": { "level": "无|轻微|明显", "note": "仅判角色自发重复：用户是否先重复、角色重复了什么", "fix": "下一拍换什么句式/开头/结构（直接指令）；level=无则空字符串" },',
+            '  "user_echo": { "found": true/false, "note": "复读了 user 哪些话（引原句片段与楼层号）；没有则空字符串", "fix": "下一拍怎么改：删掉复读、直接以角色的反应接住这句话（直接指令）；没有发现则空字符串" },',
             '  "watch": {"ooc": true/false, "slow_burn": true/false, "fake_completion": true/false, "notes": "边缘情况备注，无则空字符串"}',
             '}',
-            '说明：evidence 至少 1 条、不设上限；guidance 在卡死或按介入档决定静默时整段留空（goal、action_hint 与 hidden 均空字符串）并在 no_guidance_reason 写明原因；三项检查每轮都报，无发现时 found=false／level=无、items 空数组。',
+            '说明：evidence 至少 1 条、不设上限；guidance 在卡死或按介入档决定静默时整段留空（goal、action_hint 与 hidden 均空字符串）并在 no_guidance_reason 写明原因；四项检查每轮都报，无发现时 found=false／level=无、items 空数组。',
             '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
             '',
             `<剧情上下文（${floorsNote ?? '当前聊天全部未隐藏楼层'}，带楼层号；新楼层追加在本节末尾）>`,
@@ -524,15 +527,16 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
             '- 「楼层」＝一条角色回复（用户消息不计楼层）。',
             '- 修正指导只影响扮演模型下一轮的写法，不改变既有人设、事实与关系。',
             '',
-            '【检查任务】（三项，判定基准与 1.0 剧情检查一致）',
+            '【检查任务】（四项，判定基准与 1.0 剧情检查一致）',
             '1. OOC——只判角色（char）自身的问题：用户（user）在对话里明确指示、纠正或要求改变走向时（包括括号指令与作者式安排），角色照做不算 OOC，用户指示优先于人设与既有走向；只有用户没有指示、角色自行脱离人设/事实/关系/世界观时才判，evidence 引用具体楼层号与原文。',
             '2. 剧情重复——同一剧情线的自然延续不算重复；只有把已完结、已发生并被交代过的情节当作新剧情原样重演，或复刻已有桥段的流程，才判重复。',
             '3. 文风重复——只针对角色（char）的扮演文本：先检查用户近期输入是否自己在重复动作、场景或指令，角色跟进不算；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判轻微/明显，note 写明用户是否先重复、角色重复了什么。',
+            '4. 复读 user 的话——只判角色（char）把用户（user）当轮或近期说过的话复述进自己的回复文本：整句或大段原样复读、把 user 的原话嵌进旁白或对白再说一遍、逐条重述 user 刚提到的内容都算；角色正常回应接话、只引用其中一两个词展开、为剧情转述给第三方不算，user 一次说多件事、角色逐件处理也不算。note 引被复读的原句片段与楼层号。',
             '- 发现必须带可执行的修正：fix 写成「下一拍怎么改」的直接指令——文风重复写换什么句式／开头／结构（例：「下一拍起改用动作直入或对白起句，停用『从……的位置』式介词开头」），剧情重复写往哪个新走向带，OOC 写拉回哪条人设事实。禁止只复述现象（「高频使用某句式」是现象不是修正）、禁止「避免重复」「注意多样性」式口号；给不出具体改法的项不判（found=false／level=无）。',
             '',
             '【修正指导】',
-            '- 三项检查有任何发现时，生成一段修正指导：点明往哪个方向修（如拉回人设的事实依据、绕开重复的新走法），结构＝一句目标句＋动作提示；长度不设上限、宁详勿简；措辞每轮变化、不复读上一轮修正指导。',
-            '- 三项全部无发现时，不发指导——no_guidance_reason 写一两句本轮质量印象（例：「节奏稳定、人设无漂移；第 12 楼起略有原地打转苗头，暂不需干预」），禁用「均无发现」「一切正常」这类空话。正常轮次静默是这个模式的常态，不是异常。',
+            '- 四项检查有任何发现时，生成一段修正指导：点明往哪个方向修（如拉回人设的事实依据、绕开重复的新走法、删掉复读直接接角色反应），结构＝一句目标句＋动作提示；长度不设上限、宁详勿简；措辞每轮变化、不复读上一轮修正指导。',
+            '- 四项全部无发现时，不发指导——no_guidance_reason 写一两句本轮质量印象（例：「节奏稳定、人设无漂移；第 12 楼起略有原地打转苗头，暂不需干预」），禁用「均无发现」「一切正常」这类空话。正常轮次静默是这个模式的常态，不是异常。',
             '',
             `【介入强度】（当前档：${inter.label}）`,
             inter.text,
@@ -543,6 +547,7 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
             '  "ooc": { "found": true/false, "items": [{ "aspect": "性格|事实|关系|世界观|口吻", "evidence": "具体楼层与原文依据", "severity": "轻微|中等|严重", "fix": "修正建议：下一拍怎么改的直接指令" }] },',
             '  "plot_repeat": { "found": true/false, "note": "重演/复刻之处；没有则空字符串", "fix": "下一拍往哪个新走向带（直接指令）；没有发现则空字符串" },',
             '  "style_repeat": { "level": "无|轻微|明显", "note": "仅判角色自发重复：用户是否先重复、角色重复了什么", "fix": "下一拍换什么句式/开头/结构（直接指令）；level=无则空字符串" },',
+            '  "user_echo": { "found": true/false, "note": "复读了 user 哪些话（引原句片段与楼层号）；没有则空字符串", "fix": "下一拍怎么改：删掉复读、直接以角色的反应接住这句话（直接指令）；没有发现则空字符串" },',
             '  "guidance": { "goal": "目标句", "action_hint": "动作提示" },',
             '  "no_guidance_reason": "不发指导时的原因；发了则留空字符串"',
             '}',
@@ -636,7 +641,7 @@ export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, 
 // 纯逻辑：输出契约规约（模型输出不可信，字段全部收敛到合法形状；违契约抛错走 L1）
 // ---------------------------------------------------------------------------
 
-// 三查解析（第五十二轮起两套模式共用）：OOC 逐条（维度/依据/轻重/修正建议）＋剧情重复＋文风重复，
+// 检查项解析（第五十二轮起两套模式共用；第五十四轮起四项）：OOC 逐条（维度/依据/轻重/修正建议）＋剧情重复＋文风重复＋复读 user 的话，
 // 形状收敛与轻量旧解析逐字段同款；found=false 时 items 也保留（次级观察要进留痕，found 仍是介入闸唯一依据）
 function parseFindings(obj) {
     const o = (obj.ooc && typeof obj.ooc === 'object') ? obj.ooc : {};
@@ -648,11 +653,14 @@ function parseFindings(obj) {
     }));
     const p = (obj.plot_repeat && typeof obj.plot_repeat === 'object') ? obj.plot_repeat : {};
     const s = (obj.style_repeat && typeof obj.style_repeat === 'object') ? obj.style_repeat : {};
+    const e = (obj.user_echo && typeof obj.user_echo === 'object') ? obj.user_echo : {};
     return {
         ooc: { found: Boolean(o.found) && items.length > 0, items },
         // fix（第五十三轮）＝「下一拍怎么改」的可执行指令：拼装优先用 fix，旧输出没有该字段回落 note
         plotRepeat: { found: Boolean(p.found), note: String(p.note ?? '').slice(0, 300), fix: String(p.fix ?? '').slice(0, 300) },
         styleRepeat: { level: ['无', '轻微', '明显'].includes(s.level) ? s.level : '无', note: String(s.note ?? '').slice(0, 300), fix: String(s.fix ?? '').slice(0, 300) },
+        // 复读 user 的话（第五十四轮，用户开工令「角色重复 user 的话就输出指导制止」）：无轻重档，found＝发现与否
+        userEcho: { found: Boolean(e.found), note: String(e.note ?? '').slice(0, 300), fix: String(e.fix ?? '').slice(0, 300) },
     };
 }
 
@@ -707,6 +715,7 @@ export function normalizeLightReport(obj) {
         ooc: findings.ooc,
         plotRepeat: findings.plotRepeat,
         styleRepeat: findings.styleRepeat,
+        userEcho: findings.userEcho,   // 复读 user 的话（第五十四轮）：与单位模式共用 parseFindings
         goal,
         actionHint,
         noGuidanceReason: noReason,
@@ -718,8 +727,10 @@ export function lightShouldIntervene(r, level) {
     const sev = r.ooc.found ? Math.max(...r.ooc.items.map(it => ({ '轻微': 1, '中等': 2, '严重': 3 }[it.severity] ?? 2))) : 0;
     const style = { '无': 0, '轻微': 1, '明显': 2 }[r.styleRepeat.level] ?? 0;
     const plot = r.plotRepeat.found ? 2 : 0;   // 剧情重复没有轻重档，按中等权重计
-    const worst = Math.max(sev, style, plot);
-    if (level === 'low') return worst >= 2;    // 仅很轻微的发现（OOC／文风轻微）不发；剧情重复、中等及以上都发
+    // 复读 user 的话（第五十四轮，用户口径「发现就输出指导」）：无轻重档、按中等权重计——低/中/高三档全过闸
+    const echo = r.userEcho?.found ? 2 : 0;
+    const worst = Math.max(sev, style, plot, echo);
+    if (level === 'low') return worst >= 2;    // 仅很轻微的发现（OOC／文风轻微）不发；剧情重复、复读、中等及以上都发
     if (level === 'medium') return worst >= 1; // 有任何发现就发（轻微也发）
     return worst > 0;                          // high：与中同——档位差异体现在单位模式的发送频率
 }
@@ -739,6 +750,7 @@ export function findingsFixText(r, level) {
     // 写的「下一拍怎么改」；旧输出没有 fix 字段时回落 note（note 只描述现象，拼出来没有修正力）
     if (r.plotRepeat?.found) lines.push(`剧情重复——${clean(r.plotRepeat.fix) || clean(r.plotRepeat.note)}`);
     if (r.styleRepeat && r.styleRepeat.level !== '无') lines.push(`文风重复·${r.styleRepeat.level}——${clean(r.styleRepeat.fix) || clean(r.styleRepeat.note)}`);
+    if (r.userEcho?.found) lines.push(`复读 user 的话——${clean(r.userEcho.fix) || clean(r.userEcho.note)}`);   // 第五十四轮
     return lines.length ? `【检查修正】本轮扮演按下列发现修正：\n${lines.join('\n')}` : '';
 }
 
@@ -820,7 +832,7 @@ export function applyUnitOutcome(state, report, meta) {
         guidance: meta.guidance,
         noGuidanceReason: report.goal ? '' : report.noGuidanceReason,
         suspended: Boolean(meta.suspended),   // 偏大挂起轮（2026-09-02）：判定与进度账照跑、指导没注入
-        hold: Boolean(meta.hold),             // 手动暂停推进轮（第五十三轮）：方向停发、点亮冻结，三查照跑
+        hold: Boolean(meta.hold),             // 手动暂停推进轮（第五十三轮）：方向停发、点亮冻结，检查项照跑
         retried: Boolean(meta.retried),
         ...(meta.tokens ? { tokens: meta.tokens } : {}),
         ...(meta.materials ? { materials: meta.materials } : {}),
@@ -854,6 +866,7 @@ export function applyLightOutcome(state, report, meta) {
             ooc: report.ooc,
             plotRepeat: report.plotRepeat,
             styleRepeat: report.styleRepeat,
+            userEcho: report.userEcho,   // 复读 user 的话（第五十四轮）
         },
         guidance: meta.guidance,
         // 以实际发没发为准：介入档拦下的轮次留原因（页内静默轮要显示全文）
@@ -863,13 +876,14 @@ export function applyLightOutcome(state, report, meta) {
         ...(meta.materials ? { materials: meta.materials } : {}),
     };
     state.trace.unshift(rec);
-    const hasFinding = report.ooc.found || report.plotRepeat.found || report.styleRepeat.level !== '无';
+    const hasFinding = report.ooc.found || report.plotRepeat.found || report.styleRepeat.level !== '无' || report.userEcho?.found;
     if (hasFinding) {
         state.dot = true;
         state.dotReason = `第${meta.round}轮轻量检查有发现：${[
             report.ooc.found ? `OOC×${report.ooc.items.length}` : '',
             report.plotRepeat.found ? '剧情重复' : '',
             report.styleRepeat.level !== '无' ? `文风重复（${report.styleRepeat.level}）` : '',
+            report.userEcho?.found ? '复读 user 的话' : '',
         ].filter(Boolean).join('、')}`;
     }
     return rec;
@@ -1299,14 +1313,14 @@ export async function runListenerRound({ manual = false } = {}) {
             // 唯独指导不进注入槽——挂起期间槽保持空、停进提示在独立槽拦着别硬拉回规划
             const suspended = haltSuspendActive(state, state.unit);
             // 手动暂停推进（第五十三轮，用户开工令「当前节点暂缓不推进、检测面板正常运行」）：
-            // 方向指导与暗牌停发、点亮冻结（applyUnitOutcome），三查照跑照修正。与挂起的分工——
+            // 方向指导与暗牌停发、点亮冻结（applyUnitOutcome），检查项照跑照修正。与挂起的分工——
             // 挂起＝偏大等处置、指导一概不进槽；暂停＝用户要在当前节点停留、只停推进不停质量修正
             const hold = Boolean(state.hold);
             // 暗牌只随指导同行：goal/action_hint 都空＝静默轮，模型就算多嘴给了 hidden 也不因此破静默
             let text = !hold && (report.goal || report.actionHint) ? guidanceText(report.goal, report.actionHint, report.hidden) : '';
-            // 三查修正（第五十二轮）：达门槛的发现自动并进指导——节点方向静默的轮也照发（全程自动化）；
-            // 挂起轮拦下（挂起＝等用户处理，指导一概不进槽）；暂停轮照发（三查修正不属于节点推进）。
-            // 两种轮的三查报告都照常落账给人看
+            // 检查修正（第五十二轮立、第五十四轮起四项）：达门槛的发现自动并进指导——节点方向静默的轮也照发（全程自动化）；
+            // 挂起轮拦下（挂起＝等用户处理，指导一概不进槽）；暂停轮照发（检查修正不属于节点推进）。
+            // 两种轮的检查报告都照常落账给人看
             if (!suspended) {
                 const fix = findingsFixText(report.findings, cfg.intervene);
                 if (fix) text = text ? `${text}\n${fix}` : fix;
@@ -1315,7 +1329,7 @@ export async function runListenerRound({ manual = false } = {}) {
                 report.goal = '';   // 照挂起轮同款：拦下的方向按静默轮落账，留痕里才看得到暂停原因
                 report.actionHint = '';
                 report.hidden = '';
-                report.noGuidanceReason = '暂停推进中（手动）：节点方向与暗牌停发、进度冻结；三查照常（报告见监听页「检查报告」区，达门槛的修正照发）';
+                report.noGuidanceReason = '暂停推进中（手动）：节点方向与暗牌停发、进度冻结；四项检查照常（报告见监听页「检查报告」区，达门槛的修正照发）';
             }
             if (suspended) {
                 text = '';
@@ -1872,5 +1886,5 @@ export function listenerModeLabel(state) {
     if (!listenerProvider().provider && listenerProvider().fallback && !settings.api.baseUrl) return { key: 'suspend', label: '⏸挂起', hint: '监听模型未配置（方案库与主连接都空）' };
     if (state.unit && state.unit.nodeIdx < state.unit.nodes.length) return { key: 'unit', label: '●单位执勤', hint: '挂载了剧情单位，逐轮判定节点进度' };
     if (state.unit) return { key: 'unit-done', label: '●单位执勤·已演完', hint: '末节点已点亮，等手动接续（无自动档）；期间按轻量口径检查' };
-    return { key: 'light', label: '●轻量执勤', hint: '无挂载单位：OOC/剧情重复/文风重复三项检查' };
+    return { key: 'light', label: '●轻量执勤', hint: '无挂载单位：OOC/剧情重复/文风重复/复读 user 的话四项检查' };
 }
