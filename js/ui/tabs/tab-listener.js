@@ -7,10 +7,10 @@ import { resolveLorePicks, scanLorebooks, buildLoreContext } from "../../loreboo
 import { chatEnabledBookIds, chatBookEnabled, setChatBookEnabled, collectRecentChat, formatChatLog } from "../../context.js";
 import { memoryState } from "../../memoryTable.js";   // 判定材料区的记忆挑选器（第三十七轮）：读镜像表与标签
 // 监听槽一动就对一次长线账本（listener.js 不能反向引 longform.js——longform 已经引了监听，只能在界面层搭桥）
-import { syncLfProgress, scheduleReentryFor } from "../../longform.js";
+import { syncLfProgress, scheduleReentryFor, rollbackLfChapterOf } from "../../longform.js";
 import {
     listenerState, listenerCfg, listenerProvider, listenerModeLabel, persistListener,
-    runListenerRound, resumeListener, setListenerEnabled, setListenerHold, manualLitCurrentNode,
+    runListenerRound, resumeListener, setListenerEnabled, setListenerHold, manualLitCurrentNode, rollbackOneNode,
     opUnmountUnit, opRecallSidelined, opDiscardSidelined, lastListenerPrompt,
     clearListenerHalt, haltHintText, limitFloors, formatFloors,
 } from "../../listener.js";
@@ -21,6 +21,9 @@ let traceWinOpen = false;   // 留痕悬浮窗开着（跨页签会话记忆）
 let reportOpen = false;     // 「检查报告」折叠区开着（会话内记忆——新一轮重渲染不强迫收起，用户点开的就保持）
 
 const SOURCE_BADGE = { manual: '手动导入', plan10: '剧情规划导入', longform: '长线章' };
+// 「返回上一节点」按钮的提示与渲染（第五十六轮）：误判达成的手动纠错口，在岗（未演完）与已演完两个分支共用
+const NODEBACK_TIP = '误判达成的手动纠错：把最近点亮的节点退回待判——模型把还没演到的节点错判成达成、或手滑点了「标记达成」时用。点了以后节点数减一、注入槽里的旧方向清空，下一轮判定对这个节点重新跑；剧情重新演到它会再次点亮。可连点退多步（一次一个节点）。长线章会同步把长线页的进度账倒回去';
+const NODEBACK_BTN = `<span id="pp_ls_nodeback" class="menu_button" title="${NODEBACK_TIP}">返回上一节点</span>`;
 // 留痕来源标签（2026-09-02 三来源；同日混合重编入池）：换装记录来自 outfit.js、混合重编来自 mix.js；
 // 判定轮的标签在 listener.js 落账时写
 const TRACE_SRC_LABEL = { plan: '普通剧情规划', longform: '长线剧情', outfit: '换装', mix: '混合重编' };
@@ -96,6 +99,7 @@ function traceSummary(rec) {
     if (rec.mode === 'rollback') {
         const r = rec.rollback ?? {};
         if (r.guide) return r.guide.reuse ? `第 ${r.guide.target} 层重做 · 沿用原指导` : `第 ${r.guide.target} 层重做 · 无原账（裸跑）`;
+        if (r.kind === 'manual') return `节点回退 · ${r.from ?? '?'}→${r.to ?? '?'} · 手动纠正误判`;   // 第五十六轮
         return `删楼回退 · ${r.from ?? '?'}→${r.to ?? '?'} 节点 · 现存最后一层 ${r.lastFloor ?? 0}`;
     }
     const f = rec.findings ?? {};
@@ -185,11 +189,13 @@ function renderTab(container) {
             </div>
             <div class="pp-item-ops">
                 ${unit.nodeIdx >= unit.nodes.length
-                    ? `<span id="pp_ls_next" class="menu_button" title="末节点已点亮后的手动衔接（无自动档）：退位槽有单位就接回，没有就去下面导入下一个">接续下一单位</span>`
+                    ? `<span id="pp_ls_next" class="menu_button" title="末节点已点亮后的手动衔接（无自动档）：退位槽有单位就接回，没有就去下面导入下一个">接续下一单位</span>
+                    ${unit.nodeIdx > 0 ? NODEBACK_BTN : ''}`
                     : `${state.hold
                         ? `<span id="pp_ls_hold" class="menu_button" title="暂停推进中（你点的）：节点方向指导与角色暗牌停发、点亮冻结——判定照跑、四查（OOC/剧情重复/文风重复/复读 user 的话）照常出报告、达门槛的修正照发。当前事件演完点这里恢复，恢复时会立刻补一轮判定把方向指导写回来">▶ 恢复推进（暂停中）</span>`
                         : `<span id="pp_ls_hold" class="menu_button" title="想在当前节点停留（插个话题/动作自由演绎）时点这个：停发节点方向指导并清掉注入槽里的旧指导、进度冻结（判定不再点亮），免得它一直拉模型去下一个节点；四查与检查报告照常运行。当前事件演完再点一下恢复">⏸ 暂停推进</span>`}
-                    <span id="pp_ls_lit" class="menu_button" title="人工拍板：不等模型判定，直接把当前待判节点记为达成（两本账里用户显式操作可改进度账）${state.hold ? '；暂停推进中也能点——手动点亮是用户显式操作，不算自动推进' : ''}">标记达成</span>`}
+                    <span id="pp_ls_lit" class="menu_button" title="人工拍板：不等模型判定，直接把当前待判节点记为达成（两本账里用户显式操作可改进度账）${state.hold ? '；暂停推进中也能点——手动点亮是用户显式操作，不算自动推进' : ''}">标记达成</span>
+                    ${unit.nodeIdx > 0 ? NODEBACK_BTN : ''}`}
                 <span id="pp_ls_unmount" class="menu_button" title="卸下当前单位（进退位槽，进度原样保留，可再接回）；卸下后本聊天按轻量口径执勤">卸下</span>
             </div>
         </div>
@@ -374,6 +380,16 @@ function bindTab(container) {
 
     container.querySelector('#pp_ls_lit')?.addEventListener('click', () => {
         if (manualLitCurrentNode()) toastr.success('当前节点已手动记为达成（进度账·用户显式操作）');
+    });
+
+    // 返回上一节点（第五十六轮，用户开工令）：误判达成的纠错口——纯账本回退＋清槽，
+    // 不立刻补判（原楼层还在，马上重判大概率原样再点亮）；长线章的进度账同步倒回
+    container.querySelector('#pp_ls_nodeback')?.addEventListener('click', () => {
+        const r = rollbackOneNode();
+        if (r === false) { toastr.info('没有已点亮的节点，退无可退'); return; }
+        if (r.src === 'longform') rollbackLfChapterOf(r.unit);
+        renderTab(container);
+        toastr.info(`已回退「${r.label.slice(0, 30)}」：第 ${r.from} → ${r.to} 节点——退回的节点重新待判，下一轮判定对它重跑`);
     });
 
     // 暂停推进两态键（第五十三轮，用户开工令）：暂停＝清槽冻结（四查照跑）；恢复＝立刻补一轮判定，
@@ -1000,7 +1016,7 @@ function refreshTraceWindow() {
         : rec.mode === 'mix'
         ? `<b>混合重编</b> · ${fmtTime(rec.at)} · 「${escapeHtml(rec.mix?.title ?? '')}」`
         : rec.mode === 'rollback'
-        ? `<b>${rec.rollback?.guide ? '指导沿用' : '删楼回退'}</b> · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}`
+        ? `<b>${rec.rollback?.guide ? '指导沿用' : rec.rollback?.kind === 'manual' ? '节点回退' : '删楼回退'}</b> · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}`
         : `<b>#${rec.round}</b> ${rec.mode === 'unit' ? '单位' : rec.mode === 'reentry' ? '回归' : '轻量'} · ${fmtTime(rec.at)} · ${escapeHtml(traceSummary(rec))}`;
     return `
     <details class="pp-fold pp-ls-trace-item">
@@ -1046,10 +1062,15 @@ function refreshTraceWindow() {
             <div>${rec.rollback.guide.trigger === 'delete' ? `删楼后重做第 ${rec.rollback.guide.target} 层` : `滑动/重新生成第 ${rec.rollback.guide.target} 层`}：${rec.rollback.guide.reuse ? '注入槽已换回那一轮的原指导' : '那一轮没有原指导记录（升级前生成/超出留存/单位换过主人），本次不注入指导'}${rec.rollback.lastFloor != null ? `（现存最后一层 ${rec.rollback.lastFloor}）` : ''}</div>
             <div class="pp-muted">只换注入内容：重做落地后判定轮照常重跑、节点可再次点亮</div>
         ` : ''}
-        ${rec.mode === 'rollback' && rec.ok && !rec.rollback?.guide ? `
+        ${rec.mode === 'rollback' && rec.ok && !rec.rollback?.guide && rec.rollback?.kind !== 'manual' ? `
             <div>「${escapeHtml(rec.rollback?.label ?? '')}」：第 ${rec.rollback?.from} → ${rec.rollback?.to} 节点（现存最后一层 ${rec.rollback?.lastFloor}）</div>
             ${(rec.rollback?.unlit ?? []).map(u => `<div class="pp-ls-ev">熄灭：${escapeHtml(u.title)}${u.anchor ? `（锚定第 ${u.anchor} 层——该楼已删）` : ''}</div>`).join('')}
             <div class="pp-muted">纯账本回退、不调用模型；被删楼层里的剧情后续重新演出会再次点亮</div>
+        ` : ''}
+        ${rec.mode === 'rollback' && rec.ok && rec.rollback?.kind === 'manual' ? `
+            <div>「${escapeHtml(rec.rollback?.label ?? '')}」：第 ${rec.rollback?.from} → ${rec.rollback?.to} 节点（手动回退，误判达成的纠错）</div>
+            ${(rec.rollback?.unlit ?? []).map(u => `<div class="pp-ls-ev">退回待判：${escapeHtml(u.title)}${u.anchor ? `（原点亮锚定第 ${u.anchor} 层）` : ''}</div>`).join('')}
+            <div class="pp-muted">纯账本回退、不调用模型，注入槽里的旧方向已清空；退回的节点下一轮判定重新对它跑，剧情演到会再次点亮</div>
         ` : ''}
         ${rec.guidance ? `<div class="pp-ls-guidance">${escapeHtml(rec.guidance)}</div>` : (rec.ok && rec.mode !== 'reentry' && rec.mode !== 'outfit' && rec.mode !== 'rollback' ? `<div class="pp-muted">静默原因：${escapeHtml(rec.noGuidanceReason || '未给原因')}</div>` : '')}
         ${rec.materials ? `<div class="pp-muted" title="本轮实际喂给监听模型的材料清单">材料：${escapeHtml(materialsLine(rec.materials))}</div>` : ''}

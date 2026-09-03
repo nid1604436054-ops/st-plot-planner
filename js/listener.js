@@ -1845,6 +1845,32 @@ export function manualLitCurrentNode() {
     return true;
 }
 
+// 手动回退一个节点（第五十六轮）：误判达成的纠错口——模型把还没演到的节点错判成达成、
+// 或手滑点了「标记达成」后，这里把最近点亮的节点退回待判（nodeIdx-1、锚层账同缩）。
+// 纯账本零调用（同删楼回退口径）、也不立刻补判：原楼层还在，马上重判大概率原样再点亮、等于白退；
+// 注入槽里的旧方向是给「误判后位置」写的，照暂停推进的配方清槽＋对未生成楼层记空账（宁可裸跑），
+// 下一轮例行判定自然对回退后的节点重新跑。长线章的账本倒回由面板侧调 longform 的显式路径。
+export function rollbackOneNode() {
+    const state = listenerState();
+    const unit = state.unit;
+    if (!unit || !(Number(unit.nodeIdx) > 0)) return false;
+    const from = Number(unit.nodeIdx);
+    const anchor = Array.isArray(unit.litFloors) ? unit.litFloors[from - 1] ?? null : null;
+    const unlit = [{ title: unit.nodes[from - 1]?.title ?? `节点${from}`, anchor }];
+    unit.nodeIdx = from - 1;
+    unit.litFloors = Array.isArray(unit.litFloors) ? unit.litFloors.slice(0, from - 1) : [];
+    const capped = Math.max(1, Math.floor(Number(listenerCfg().traceRounds) || 50));
+    state.trace.unshift({ at: Date.now(), round: state.round, mode: 'rollback', src: unit.source === 'longform' ? 'longform' : 'plan', ok: true,
+        rollback: { kind: 'manual', label: String(unit.title ?? ''), from, to: from - 1, unlit } });
+    if (state.trace.length > capped) state.trace.length = capped;
+    writeSlot('');
+    recordGuide(state, Math.max(1, Number(state.lastFloorSeen) || 0) + 1, '');   // 未生成楼层记空账（防还原路径灌回旧方向）
+    voidGuidance(state, '节点回退');   // 旧指导是给回退前位置写的，不作数也不当防复读参照
+    persistListener();
+    notifyPanel();
+    return { unit, label: String(unit.title ?? ''), src: unit.source === 'longform' ? 'longform' : 'plan', from, to: from - 1, unlit };
+}
+
 // 挂载/卸下/接回/丢弃的操作出口（面板调用；带持久化与失败提示）。
 // 换主人的三个操作（挂/卸/接回）同步清注入槽：旧指导是给旧主人写的，不清就会注入进下一轮生成。
 // 停进提示随行（2026-09-02）：挂载/接回＝撤（新剧情接管或恢复推进）；卸下长线章＝发（暂停收尾）

@@ -1188,6 +1188,21 @@ export function syncLfProgress() {
     return st;
 }
 
+// 单个长线章的账本显式倒回（第五十六轮手动节点回退用）：与删楼对账器同一套守卫——
+// 节点表对得上才倒（重切过不碰，防错账）。「只进不退」总口径不破：倒回只发生在显式路径上，
+// syncLfProgress 的通用比较永远不倒账
+export function rollbackLfChapterOf(unit) {
+    if (!unit || unit.source !== 'longform' || !unit.lfRef) return false;
+    const st = lfState();
+    const ch = st.volumes[unit.lfRef.vol]?.chapters?.[unit.lfRef.ch];
+    if (!(ch && ch.unitId === unit.id && ch.nodes.length === unit.nodes.length && unit.nodeIdx < ch.lit)) return false;
+    ch.lit = unit.nodeIdx;
+    ch.litFloors = (Array.isArray(ch.litFloors) ? ch.litFloors : []).slice(0, ch.lit);
+    if (ch.lit < ch.nodes.length) ch.done = false;
+    persistLf();
+    return true;
+}
+
 // 删楼回退对账器（第四十五轮；index.js 注册进监听的删楼事件与轮首兜底）：
 // 监听两账（活动单位＋退位槽）先倒、留痕落账，再对真被锚层回退的长线章**显式**把账本倒回去——
 // 不借道 syncLfProgress 的通用比较，「只进不退」（第三十一轮：旧副本不倒账）原样保留。
@@ -1197,21 +1212,7 @@ export function reconcileLfFloors() {
     if (!chat.length) return null;   // chatdata 未载完不硬对账（就绪窗口坑：空聊天不当「全删」处理）
     const rolled = rollbackListenerFloors(lastRoleFloor(collectFloorsFromChat(chat)));
     if (!rolled) return null;
-    const st = lfState();
-    let touched = false;
-    for (const r of rolled) {
-        const u = r.unit;
-        if (!u || u.source !== 'longform' || !u.lfRef) continue;
-        const ch = st.volumes[u.lfRef.vol]?.chapters?.[u.lfRef.ch];
-        // 节点表对得上才倒（重切过不碰，防错账——与冻结落账同一守卫）
-        if (ch && ch.unitId === u.id && ch.nodes.length === u.nodes.length && u.nodeIdx < ch.lit) {
-            ch.lit = u.nodeIdx;
-            ch.litFloors = (Array.isArray(ch.litFloors) ? ch.litFloors : []).slice(0, ch.lit);
-            if (ch.lit < ch.nodes.length) ch.done = false;
-            touched = true;
-        }
-    }
-    if (touched) persistLf();
+    for (const r of rolled) rollbackLfChapterOf(r.unit);
     return rolled;
 }
 
