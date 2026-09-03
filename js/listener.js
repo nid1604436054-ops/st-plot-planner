@@ -468,6 +468,12 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             '- 意思模板（仅示意含义，措辞自定）：目标句如「让两人的对话自然滑向摊牌的边缘」；动作提示如「下一拍她把手里的牌扣在桌上、起身去倒水」；暗牌如「这趟约会她心里定好的是动物园猫科区——user 问去哪时她多半卖关子，不临场另编目的地」。',
             `   介入强度（当前档：${inter.label}）决定发的勤度：${inter.text} 决定不发时必须给原因。`,
             '',
+            '【检查任务】（三项，随判定同行——判定基准与轻量执勤／1.0 剧情检查一致）',
+            '1. OOC——只判角色（char）自身的问题：用户（user）在对话里明确指示、纠正或要求改变走向时（包括括号指令与作者式安排），角色照做不算 OOC，用户指示优先于人设与既有走向；只有用户没有指示、角色自行脱离人设/事实/关系/世界观时才判，evidence 引用具体楼层号与原文。',
+            '2. 剧情重复——同一剧情线的自然延续不算重复；只有把已完结、已发生并被交代过的情节当作新剧情原样重演，或复刻已有桥段的流程，才判重复。',
+            '3. 文风重复——只针对角色（char）的扮演文本：先检查用户近期输入是否自己在重复动作、场景或指令，角色跟进不算；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判轻微/明显，note 写明用户是否先重复、角色重复了什么。',
+            '- 这三项与 watch 分开：watch 标边缘情况（用户元对话、慢热、假装完成），三项检查只看角色扮演文本的质量问题；三项每轮都报（无发现就 found=false／level=无、items 空），发现不写进 goal/action_hint——修正由系统按门槛另行拼装。',
+            '',
             '【输出】',
             '只输出一个 JSON 对象，不输出任何其他文字：',
             '{',
@@ -476,9 +482,12 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             '  "progress_note": "本轮实际推进了什么，一两句",',
             '  "guidance": {"goal": "目标句", "action_hint": "动作提示", "hidden": "角色暗牌：她此刻已知、还没说出口的事；没有则空字符串"},',
             '  "no_guidance_reason": "不发指导时的原因；发了则留空字符串",',
+            '  "ooc": { "found": true/false, "items": [{ "aspect": "性格|事实|关系|世界观|口吻", "evidence": "具体楼层与原文依据", "severity": "轻微|中等|严重", "fix": "修正建议" }] },',
+            '  "plot_repeat": { "found": true/false, "note": "重演/复刻之处；没有则空字符串" },',
+            '  "style_repeat": { "level": "无|轻微|明显", "note": "仅判角色自发重复：用户是否先重复、角色重复了什么" },',
             '  "watch": {"ooc": true/false, "slow_burn": true/false, "fake_completion": true/false, "notes": "边缘情况备注，无则空字符串"}',
             '}',
-            '说明：evidence 至少 1 条、不设上限；guidance 在卡死或按介入档决定静默时整段留空（goal、action_hint 与 hidden 均空字符串）并在 no_guidance_reason 写明原因。',
+            '说明：evidence 至少 1 条、不设上限；guidance 在卡死或按介入档决定静默时整段留空（goal、action_hint 与 hidden 均空字符串）并在 no_guidance_reason 写明原因；三项检查每轮都报，无发现时 found=false／level=无、items 空数组。',
             '字符串值里不要出现英文双引号（引用一律写中文「」），也不要在值内换行。',
             '',
             `<剧情上下文（${floorsNote ?? '当前聊天全部未隐藏楼层'}，带楼层号；新楼层追加在本节末尾）>`,
@@ -622,6 +631,25 @@ export function buildReentryPrompt({ unit, windowLabel, windowText, floorsText, 
 // 纯逻辑：输出契约规约（模型输出不可信，字段全部收敛到合法形状；违契约抛错走 L1）
 // ---------------------------------------------------------------------------
 
+// 三查解析（第五十二轮起两套模式共用）：OOC 逐条（维度/依据/轻重/修正建议）＋剧情重复＋文风重复，
+// 形状收敛与轻量旧解析逐字段同款；found=false 时 items 也保留（次级观察要进留痕，found 仍是介入闸唯一依据）
+function parseFindings(obj) {
+    const o = (obj.ooc && typeof obj.ooc === 'object') ? obj.ooc : {};
+    const items = (Array.isArray(o.items) ? o.items : []).map(it => (it && typeof it === 'object' ? it : {})).map(it => ({
+        aspect: String(it.aspect ?? '').slice(0, 40),
+        evidence: String(it.evidence ?? '').slice(0, 300),
+        severity: ['轻微', '中等', '严重'].includes(it.severity) ? it.severity : '中等',
+        fix: String(it.fix ?? '').slice(0, 300),
+    }));
+    const p = (obj.plot_repeat && typeof obj.plot_repeat === 'object') ? obj.plot_repeat : {};
+    const s = (obj.style_repeat && typeof obj.style_repeat === 'object') ? obj.style_repeat : {};
+    return {
+        ooc: { found: Boolean(o.found) && items.length > 0, items },
+        plotRepeat: { found: Boolean(p.found), note: String(p.note ?? '').slice(0, 300) },
+        styleRepeat: { level: ['无', '轻微', '明显'].includes(s.level) ? s.level : '无', note: String(s.note ?? '').slice(0, 300) },
+    };
+}
+
 export function normalizeUnitJudgment(obj) {
     if (!obj || typeof obj !== 'object') throw new Error('输出不是一个 JSON 对象');
     const j = String(obj.judgment ?? '').trim().toLowerCase();
@@ -641,6 +669,7 @@ export function normalizeUnitJudgment(obj) {
     const noReason = String(obj.no_guidance_reason ?? '').trim();
     if (!goal && !noReason) throw new Error('既没有指导也没有静默原因（静默轮必须留痕原因）');
     const w = (obj.watch && typeof obj.watch === 'object') ? obj.watch : {};
+    const findings = parseFindings(obj);   // 三查（第五十二轮）：随单位判定同行，报告进面板折叠区、达门槛的发现并进指导
     return {
         judgment: j,
         evidence,
@@ -649,6 +678,7 @@ export function normalizeUnitJudgment(obj) {
         actionHint,
         hidden,
         noGuidanceReason: noReason,
+        findings,
         watch: {
             ooc: Boolean(w.ooc),
             slowBurn: Boolean(w.slow_burn),
@@ -660,26 +690,17 @@ export function normalizeUnitJudgment(obj) {
 
 export function normalizeLightReport(obj) {
     if (!obj || typeof obj !== 'object') throw new Error('输出不是一个 JSON 对象');
-    const o = (obj.ooc && typeof obj.ooc === 'object') ? obj.ooc : {};
-    const items = (Array.isArray(o.items) ? o.items : []).map(it => (it && typeof it === 'object' ? it : {})).map(it => ({
-        aspect: String(it.aspect ?? '').slice(0, 40),
-        evidence: String(it.evidence ?? '').slice(0, 300),
-        severity: ['轻微', '中等', '严重'].includes(it.severity) ? it.severity : '中等',
-        fix: String(it.fix ?? '').slice(0, 300),
-    }));
-    const p = (obj.plot_repeat && typeof obj.plot_repeat === 'object') ? obj.plot_repeat : {};
-    const s = (obj.style_repeat && typeof obj.style_repeat === 'object') ? obj.style_repeat : {};
+    const findings = parseFindings(obj);
     const g = (obj.guidance && typeof obj.guidance === 'object') ? obj.guidance : {};
     const goal = String(g.goal ?? '').trim();
     const actionHint = String(g.action_hint ?? '').trim();
     const noReason = String(obj.no_guidance_reason ?? '').trim();
     if (!goal && !noReason) throw new Error('既没有修正指导也没有静默原因（静默轮必须留痕原因）');
-    const found = Boolean(o.found) && items.length > 0;
     return {
         // found=false 时 items 也保留：模型给的次级观察要进留痕显示，不丢（found 仍是介入闸的唯一依据）
-        ooc: { found, items },
-        plotRepeat: { found: Boolean(p.found), note: String(p.note ?? '').slice(0, 300) },
-        styleRepeat: { level: ['无', '轻微', '明显'].includes(s.level) ? s.level : '无', note: String(s.note ?? '').slice(0, 300) },
+        ooc: findings.ooc,
+        plotRepeat: findings.plotRepeat,
+        styleRepeat: findings.styleRepeat,
         goal,
         actionHint,
         noGuidanceReason: noReason,
@@ -695,6 +716,22 @@ export function lightShouldIntervene(r, level) {
     if (level === 'low') return worst >= 2;    // 仅很轻微的发现（OOC／文风轻微）不发；剧情重复、中等及以上都发
     if (level === 'medium') return worst >= 1; // 有任何发现就发（轻微也发）
     return worst > 0;                          // high：与中同——档位差异体现在单位模式的发送频率
+}
+
+// 三查修正段（第五十二轮，用户开工令「把轻量模式的判断也塞到单位模式里」）：单位轮的三查发现达到
+// 轻量同款介入门槛（lightShouldIntervene＋同一枚「介入」旋钮）时，机械拼装成修正段并进指导——
+// 哪怕节点方向静默也照发（偏离不严重只出报告不干预、够严重全程自动化，都是用户原话定的口径）。
+// 拼装走机械路线不走模型改写：发现与修正建议模型已经在三查字段里给了，转述一道只会加软口径风险。
+export function findingsFixText(r, level) {
+    if (!r || typeof r !== 'object' || !lightShouldIntervene(r, level)) return '';
+    const clean = v => String(v ?? '').replace(/\s+/g, ' ').trim();
+    const lines = [];
+    for (const it of (r.ooc?.found ? r.ooc.items : [])) {
+        lines.push(`OOC·${clean(it.aspect) || '问题'}·${it.severity}——${clean(it.fix) || clean(it.evidence)}`);
+    }
+    if (r.plotRepeat?.found) lines.push(`剧情重复——${clean(r.plotRepeat.note)}`);
+    if (r.styleRepeat && r.styleRepeat.level !== '无') lines.push(`文风重复·${r.styleRepeat.level}——${clean(r.styleRepeat.note)}`);
+    return lines.length ? `【检查修正】本轮扮演按下列发现修正：\n${lines.join('\n')}` : '';
 }
 
 // 回归判定契约（第三十三轮）：reached 与 level 是硬字段（错值即违契约，走 L1 重试），
@@ -768,6 +805,8 @@ export function applyUnitOutcome(state, report, meta) {
         evidence: report.evidence,
         progressNote: report.progressNote,
         watch: report.watch,
+        // 三查报告（第五十二轮）：随判定落账——留痕卡一行小结、面板「检查报告」折叠区看最近一轮明细
+        ...(report.findings ? { findings: report.findings } : {}),
         guidance: meta.guidance,
         noGuidanceReason: report.goal ? '' : report.noGuidanceReason,
         suspended: Boolean(meta.suspended),   // 偏大挂起轮（2026-09-02）：判定与进度账照跑、指导没注入
@@ -1249,6 +1288,12 @@ export async function runListenerRound({ manual = false } = {}) {
             const suspended = haltSuspendActive(state, state.unit);
             // 暗牌只随指导同行：goal/action_hint 都空＝静默轮，模型就算多嘴给了 hidden 也不因此破静默
             let text = (report.goal || report.actionHint) ? guidanceText(report.goal, report.actionHint, report.hidden) : '';
+            // 三查修正（第五十二轮）：达门槛的发现自动并进指导——节点方向静默的轮也照发（全程自动化）；
+            // 挂起轮拦下（挂起＝等用户处理，指导一概不进槽），三查报告照常落账给人看
+            if (!suspended) {
+                const fix = findingsFixText(report.findings, cfg.intervene);
+                if (fix) text = text ? `${text}\n${fix}` : fix;
+            }
             if (suspended) {
                 text = '';
                 report.goal = '';   // 照轻量介入闸先例：拦下的指导按静默轮落账，留痕里才看得到挂起原因

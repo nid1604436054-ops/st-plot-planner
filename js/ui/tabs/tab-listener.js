@@ -18,6 +18,7 @@ import { collectFloorsFromChat } from "../../listener.js";
 import { outfitState, outfitRemaining, setOutfitMode, setOutfitFloors, withdrawOutfit } from "../../outfit.js";
 
 let traceWinOpen = false;   // 留痕悬浮窗开着（跨页签会话记忆）
+let reportOpen = false;     // 「检查报告」折叠区开着（会话内记忆——新一轮重渲染不强迫收起，用户点开的就保持）
 
 const SOURCE_BADGE = { manual: '手动导入', plan10: '剧情规划导入', longform: '长线章' };
 // 留痕来源标签（2026-09-02 三来源；同日混合重编入池）：换装记录来自 outfit.js、混合重编来自 mix.js；
@@ -234,6 +235,22 @@ function renderTab(container) {
         <div class="pp-muted">账面进度不变；下一轮扮演输出后照常例行判定。</div>
     </div>`) : ''}
 
+    ${/* 检查报告折叠区（第五十二轮，用户开工令）：最近一轮判定的三查明细——OOC 逐条/剧情重复/文风重复。
+        默认收起（点开才看报告）；不达介入门槛只出报告不干预，达门槛的发现已自动并进下方「本轮指导」 */ ''}
+    ${rec?.ok && rec.findings ? `
+    <div class="pp-section">
+        <details class="pp-fold" id="pp_ls_report" ${reportOpen ? 'open' : ''}>
+            <summary><b>检查报告</b><span class="pp-muted" title="轻量三查（OOC／剧情重复／文风重复）随单位判定同行：默认收起、只出报告不干预；发现达到「介入」旋钮门槛时修正自动并入下方「本轮指导」">第 ${rec.round} 轮 · ${rec.mode === 'unit' ? '单位' : '轻量'} · ${escapeHtml(lightChecksLine(rec.findings))}</span></summary>
+            <div class="pp-ls-trace-body">
+                ${(rec.findings.ooc?.items ?? []).map(it => `<div class="pp-ls-ev"><b>OOC·${escapeHtml(it.aspect)}·${escapeHtml(it.severity)}</b> ${escapeHtml(clamp(it.evidence, 100))}<span class="pp-muted">建议：${escapeHtml(clamp(it.fix, 80))}</span></div>`).join('')}
+                ${(rec.findings.plotRepeat && (rec.findings.plotRepeat.found || rec.findings.plotRepeat.note)) ? `<div class="pp-ls-ev"><b>剧情重复${rec.findings.plotRepeat.found ? '' : '·无'}</b> ${escapeHtml(rec.findings.plotRepeat.note)}</div>` : ''}
+                ${(rec.findings.styleRepeat && (rec.findings.styleRepeat.level !== '无' || rec.findings.styleRepeat.note)) ? `<div class="pp-ls-ev"><b>文风重复·${escapeHtml(rec.findings.styleRepeat.level)}</b> ${escapeHtml(rec.findings.styleRepeat.note)}</div>` : ''}
+                ${!rec.findings.ooc?.found && !rec.findings.plotRepeat?.found && (!rec.findings.styleRepeat || rec.findings.styleRepeat.level === '无') ? '<div class="pp-muted">本轮三项无发现。</div>' : ''}
+                <div class="pp-muted">门槛＝「介入」旋钮同一档口径：低＝仅轻微发现（OOC／文风轻微）只出报告不修正，中／高＝有发现就修正。修正段以【检查修正】开头并进指导。</div>
+            </div>
+        </details>
+    </div>` : ''}
+
     ${/* 第三十七轮（用户立规「功能按钮不与生成文本混排」）：指导区只留纯文本——两个按钮分别搬去
         留痕行（看提示词全文）与判定材料区（世界书自选）；轮号按甲案挪到留痕行「已判定 N 轮」、作废期间隐藏 */ ''}
     <div class="pp-section">
@@ -276,7 +293,7 @@ function renderTab(container) {
                     <option value="strict" ${cfg.strictness === 'strict' ? 'selected' : ''}>严</option>
                 </select>
             </label>
-            <label title="介入强度——管指导发多勤（接管全部频控行为）。单位模式：低＝仅明显偏航或停滞时发；中＝例行轻推，允许静默轮；高＝每轮都发（卡死除外）。轻量模式：发现问题就发——低＝仅很轻微的不发（OOC 轻微／文风轻微静默），中／高＝有任何发现就发（轻微也发）">
+            <label title="介入强度——管指导发多勤（接管全部频控行为）。单位模式：低＝仅明显偏航或停滞时发；中＝例行轻推，允许静默轮；高＝每轮都发（卡死除外）。单位模式三查修正（第五十二轮起）：同一档口径——低＝仅轻微发现（OOC／文风轻微）只出报告不修正，中／高＝有发现就把【检查修正】并进指导。轻量模式：发现问题就发——低＝仅很轻微的不发（OOC 轻微／文风轻微静默），中／高＝有任何发现就发（轻微也发）">
                 <span>介入</span>
                 <select id="pp_ls_inter" class="text_pole">
                     <option value="low" ${cfg.intervene === 'low' ? 'selected' : ''}>低</option>
@@ -334,6 +351,7 @@ function bindTab(container) {
         }
     });
 
+    container.querySelector('#pp_ls_report')?.addEventListener('toggle', e => { reportOpen = e.target.open; });
     container.querySelector('#pp_ls_prompt')?.addEventListener('click', () => {
         const pre = container.querySelector('#pp_ls_prompt_pre');
         if (!pre) return;
@@ -988,6 +1006,7 @@ function refreshTraceWindow() {
             ${rec.progressNote ? `<div class="pp-muted">${escapeHtml(rec.progressNote)}</div>` : ''}
             ${(rec.evidence ?? []).map(e => `<div class="pp-ls-ev">${e.floor != null ? `<b>[楼层${e.floor}]</b> ` : ''}「${escapeHtml(clamp(e.quote, 120))}」<span class="pp-muted">${escapeHtml(clamp(e.note, 80))}</span></div>`).join('')}
             ${(rec.watch && (rec.watch.ooc || rec.watch.slowBurn || rec.watch.fakeCompletion || rec.watch.notes)) ? `<div class="pp-muted">watch：${[rec.watch.ooc ? 'OOC元对话' : '', rec.watch.slowBurn ? '慢热' : '', rec.watch.fakeCompletion ? '疑似假装完成' : '', rec.watch.notes ? escapeHtml(clamp(rec.watch.notes, 80)) : ''].filter(Boolean).join('｜')}</div>` : ''}
+            ${(rec.findings && (rec.findings.ooc?.found || rec.findings.plotRepeat?.found || (rec.findings.styleRepeat && rec.findings.styleRepeat.level !== '无'))) ? `<div class="pp-muted">三查：${escapeHtml(lightChecksLine(rec.findings))}（明细在监听页「检查报告」区，达门槛的修正已并入本轮指导）</div>` : ''}
         ` : ''}
         ${rec.mode === 'reentry' && rec.ok ? `
             <div>${escapeHtml(DEV_LABEL[rec.reentry?.deviation] ?? '')} · 走到第 ${rec.reentry?.applied ?? 0}/${rec.reentry?.nodesTotal ?? '?'} 节点（挂载时账面 ${rec.reentry?.before ?? 0}${rec.reentry?.anchorFloor ? ` · 新点亮锚定第 ${rec.reentry.anchorFloor} 层` : ''}）</div>
