@@ -95,6 +95,8 @@ export function listenerState() {
         trace: [],           // 留痕（最新在前，滚动清旧）
         failStreak: 0,       // 连续失败计数（L2 失联用）
         paused: false,       // L2 失联后暂停，等用户在面板恢复
+        hold: false,         // 手动暂停推进（第五十三轮）：当前节点想停留时用户点「暂停推进」——方向指导
+                             // 与暗牌停发、进度冻结（判定不再点亮），三查照跑照修正；再点恢复。只对单位轮生效
         lastGuidance: '',    // 上一轮指导全文（防复读输入线 + 面板显示）
         guideVoidReason: '', // 非空＝上一轮指导已作废（卸下/换挂/接回/关总开关/切聊天）——注入槽已清、面板改显示作废行；下一轮落账清零
         lastFloorSig: '',    // 最后一轮已分析过的楼层签名（去重：滑动/重生成内容没变不重跑）
@@ -122,6 +124,7 @@ export function listenerState() {
     state.unit = normalizeUnit(state.unit);
     state.sidelined = normalizeUnit(state.sidelined);
     if (!Array.isArray(state.trace)) state.trace = [];
+    state.hold = Boolean(state.hold);   // 手动暂停推进（第五十三轮）：旧聊天块没有该键 → false（默认不暂停）
     state.halt = normalizeHalt(state.halt);
     // 指导账本形状收敛（第五十轮）：键＝正整数楼层号、值须带字符串 t；e 缺损归 0（旧账按第 0 代血脉算，不丢）
     state.guideEra = Number.isFinite(Number(state.guideEra)) ? Math.max(0, Math.floor(Number(state.guideEra))) : 0;
@@ -473,6 +476,7 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             '2. 剧情重复——同一剧情线的自然延续不算重复；只有把已完结、已发生并被交代过的情节当作新剧情原样重演，或复刻已有桥段的流程，才判重复。',
             '3. 文风重复——只针对角色（char）的扮演文本：先检查用户近期输入是否自己在重复动作、场景或指令，角色跟进不算；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判轻微/明显，note 写明用户是否先重复、角色重复了什么。',
             '- 这三项与 watch 分开：watch 标边缘情况（用户元对话、慢热、假装完成），三项检查只看角色扮演文本的质量问题；三项每轮都报（无发现就 found=false／level=无、items 空），发现不写进 goal/action_hint——修正由系统按门槛另行拼装。',
+            '- 发现必须带可执行的修正：fix 写成「下一拍怎么改」的直接指令——文风重复写换什么句式／开头／结构（例：「下一拍起改用动作直入或对白起句，停用『从……的位置』式介词开头」），剧情重复写往哪个新走向带，OOC 写拉回哪条人设事实。禁止只复述现象（「高频使用某句式」是现象不是修正）、禁止「避免重复」「注意多样性」式口号；给不出具体改法的项不判（found=false／level=无）。',
             '',
             '【输出】',
             '只输出一个 JSON 对象，不输出任何其他文字：',
@@ -482,9 +486,9 @@ export function buildUnitPrompt({ cfg, unit, floorsText, picksText = '', floorsN
             '  "progress_note": "本轮实际推进了什么，一两句",',
             '  "guidance": {"goal": "目标句", "action_hint": "动作提示", "hidden": "角色暗牌：她此刻已知、还没说出口的事；没有则空字符串"},',
             '  "no_guidance_reason": "不发指导时的原因；发了则留空字符串",',
-            '  "ooc": { "found": true/false, "items": [{ "aspect": "性格|事实|关系|世界观|口吻", "evidence": "具体楼层与原文依据", "severity": "轻微|中等|严重", "fix": "修正建议" }] },',
-            '  "plot_repeat": { "found": true/false, "note": "重演/复刻之处；没有则空字符串" },',
-            '  "style_repeat": { "level": "无|轻微|明显", "note": "仅判角色自发重复：用户是否先重复、角色重复了什么" },',
+            '  "ooc": { "found": true/false, "items": [{ "aspect": "性格|事实|关系|世界观|口吻", "evidence": "具体楼层与原文依据", "severity": "轻微|中等|严重", "fix": "修正建议：下一拍怎么改的直接指令" }] },',
+            '  "plot_repeat": { "found": true/false, "note": "重演/复刻之处；没有则空字符串", "fix": "下一拍往哪个新走向带（直接指令）；没有发现则空字符串" },',
+            '  "style_repeat": { "level": "无|轻微|明显", "note": "仅判角色自发重复：用户是否先重复、角色重复了什么", "fix": "下一拍换什么句式/开头/结构（直接指令）；level=无则空字符串" },',
             '  "watch": {"ooc": true/false, "slow_burn": true/false, "fake_completion": true/false, "notes": "边缘情况备注，无则空字符串"}',
             '}',
             '说明：evidence 至少 1 条、不设上限；guidance 在卡死或按介入档决定静默时整段留空（goal、action_hint 与 hidden 均空字符串）并在 no_guidance_reason 写明原因；三项检查每轮都报，无发现时 found=false／level=无、items 空数组。',
@@ -524,6 +528,7 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
             '1. OOC——只判角色（char）自身的问题：用户（user）在对话里明确指示、纠正或要求改变走向时（包括括号指令与作者式安排），角色照做不算 OOC，用户指示优先于人设与既有走向；只有用户没有指示、角色自行脱离人设/事实/关系/世界观时才判，evidence 引用具体楼层号与原文。',
             '2. 剧情重复——同一剧情线的自然延续不算重复；只有把已完结、已发生并被交代过的情节当作新剧情原样重演，或复刻已有桥段的流程，才判重复。',
             '3. 文风重复——只针对角色（char）的扮演文本：先检查用户近期输入是否自己在重复动作、场景或指令，角色跟进不算；只有用户没有重复而角色自发重复描写套路、桥段或句式时，才判轻微/明显，note 写明用户是否先重复、角色重复了什么。',
+            '- 发现必须带可执行的修正：fix 写成「下一拍怎么改」的直接指令——文风重复写换什么句式／开头／结构（例：「下一拍起改用动作直入或对白起句，停用『从……的位置』式介词开头」），剧情重复写往哪个新走向带，OOC 写拉回哪条人设事实。禁止只复述现象（「高频使用某句式」是现象不是修正）、禁止「避免重复」「注意多样性」式口号；给不出具体改法的项不判（found=false／level=无）。',
             '',
             '【修正指导】',
             '- 三项检查有任何发现时，生成一段修正指导：点明往哪个方向修（如拉回人设的事实依据、绕开重复的新走法），结构＝一句目标句＋动作提示；长度不设上限、宁详勿简；措辞每轮变化、不复读上一轮修正指导。',
@@ -535,9 +540,9 @@ export function buildLightPrompt({ cfg, floorsText, picksText = '', floorsNote, 
             '【输出】',
             '只输出一个 JSON 对象，不输出任何其他文字：',
             '{',
-            '  "ooc": { "found": true/false, "items": [{ "aspect": "性格|事实|关系|世界观|口吻", "evidence": "具体楼层与原文依据", "severity": "轻微|中等|严重", "fix": "修正建议" }] },',
-            '  "plot_repeat": { "found": true/false, "note": "重演/复刻之处；没有则空字符串" },',
-            '  "style_repeat": { "level": "无|轻微|明显", "note": "仅判角色自发重复：用户是否先重复、角色重复了什么" },',
+            '  "ooc": { "found": true/false, "items": [{ "aspect": "性格|事实|关系|世界观|口吻", "evidence": "具体楼层与原文依据", "severity": "轻微|中等|严重", "fix": "修正建议：下一拍怎么改的直接指令" }] },',
+            '  "plot_repeat": { "found": true/false, "note": "重演/复刻之处；没有则空字符串", "fix": "下一拍往哪个新走向带（直接指令）；没有发现则空字符串" },',
+            '  "style_repeat": { "level": "无|轻微|明显", "note": "仅判角色自发重复：用户是否先重复、角色重复了什么", "fix": "下一拍换什么句式/开头/结构（直接指令）；level=无则空字符串" },',
             '  "guidance": { "goal": "目标句", "action_hint": "动作提示" },',
             '  "no_guidance_reason": "不发指导时的原因；发了则留空字符串"',
             '}',
@@ -645,8 +650,9 @@ function parseFindings(obj) {
     const s = (obj.style_repeat && typeof obj.style_repeat === 'object') ? obj.style_repeat : {};
     return {
         ooc: { found: Boolean(o.found) && items.length > 0, items },
-        plotRepeat: { found: Boolean(p.found), note: String(p.note ?? '').slice(0, 300) },
-        styleRepeat: { level: ['无', '轻微', '明显'].includes(s.level) ? s.level : '无', note: String(s.note ?? '').slice(0, 300) },
+        // fix（第五十三轮）＝「下一拍怎么改」的可执行指令：拼装优先用 fix，旧输出没有该字段回落 note
+        plotRepeat: { found: Boolean(p.found), note: String(p.note ?? '').slice(0, 300), fix: String(p.fix ?? '').slice(0, 300) },
+        styleRepeat: { level: ['无', '轻微', '明显'].includes(s.level) ? s.level : '无', note: String(s.note ?? '').slice(0, 300), fix: String(s.fix ?? '').slice(0, 300) },
     };
 }
 
@@ -729,8 +735,10 @@ export function findingsFixText(r, level) {
     for (const it of (r.ooc?.found ? r.ooc.items : [])) {
         lines.push(`OOC·${clean(it.aspect) || '问题'}·${it.severity}——${clean(it.fix) || clean(it.evidence)}`);
     }
-    if (r.plotRepeat?.found) lines.push(`剧情重复——${clean(r.plotRepeat.note)}`);
-    if (r.styleRepeat && r.styleRepeat.level !== '无') lines.push(`文风重复·${r.styleRepeat.level}——${clean(r.styleRepeat.note)}`);
+    // 剧情/文风的行文优先用 fix（第五十三轮用户实测反馈「只报现象没有任何指导性」）：fix 是模型按硬口径
+    // 写的「下一拍怎么改」；旧输出没有 fix 字段时回落 note（note 只描述现象，拼出来没有修正力）
+    if (r.plotRepeat?.found) lines.push(`剧情重复——${clean(r.plotRepeat.fix) || clean(r.plotRepeat.note)}`);
+    if (r.styleRepeat && r.styleRepeat.level !== '无') lines.push(`文风重复·${r.styleRepeat.level}——${clean(r.styleRepeat.fix) || clean(r.styleRepeat.note)}`);
     return lines.length ? `【检查修正】本轮扮演按下列发现修正：\n${lines.join('\n')}` : '';
 }
 
@@ -778,7 +786,9 @@ export function guidanceText(goal, actionHint, hidden = '') {
 
 export function applyUnitOutcome(state, report, meta) {
     let litFloor = null;
-    if (report.judgment === 'achieved' && state.unit && state.unit.nodeIdx < state.unit.nodes.length) {
+    // meta.hold（第五十三轮手动暂停推进）：判定如实记（judgment 原样落账），但点亮被冻结——
+    // 用户暂停期间模型判 achieved 也不推进，恢复后下一轮判定自然点亮
+    if (report.judgment === 'achieved' && !meta.hold && state.unit && state.unit.nodeIdx < state.unit.nodes.length) {
         // 锚层（第四十五轮）：点亮时记下本轮最后一层角色楼，删楼回退按锚点熄灭；0＝异常楼层态→无锚不回退
         litFloor = Math.max(1, Number(meta.lastFloor) || 0) || null;
         if (!Array.isArray(state.unit.litFloors)) state.unit.litFloors = [];   // 直接调用方（测试台）可能手工造单位
@@ -800,7 +810,7 @@ export function applyUnitOutcome(state, report, meta) {
         floors: meta.floorCount,
         ok: true,
         judgment: report.judgment,
-        litNode: report.judgment === 'achieved' ? state.unit?.nodes[Math.max(0, state.unit.nodeIdx - 1)]?.title ?? '' : '',
+        litNode: report.judgment === 'achieved' && !meta.hold ? state.unit?.nodes[Math.max(0, state.unit.nodeIdx - 1)]?.title ?? '' : '',
         litFloor,
         evidence: report.evidence,
         progressNote: report.progressNote,
@@ -810,13 +820,15 @@ export function applyUnitOutcome(state, report, meta) {
         guidance: meta.guidance,
         noGuidanceReason: report.goal ? '' : report.noGuidanceReason,
         suspended: Boolean(meta.suspended),   // 偏大挂起轮（2026-09-02）：判定与进度账照跑、指导没注入
+        hold: Boolean(meta.hold),             // 手动暂停推进轮（第五十三轮）：方向停发、点亮冻结，三查照跑
         retried: Boolean(meta.retried),
         ...(meta.tokens ? { tokens: meta.tokens } : {}),
         ...(meta.materials ? { materials: meta.materials } : {}),
     };
     state.trace.unshift(rec);
-    // 红点口径：卡死要人拍板、watch 抓到 OOC/假完成值得看一眼
-    if (report.judgment === 'stuck') {
+    // 红点口径：卡死要人拍板、watch 抓到 OOC/假完成值得看一眼。暂停推进轮不亮卡死红点——
+    // 无推进是用户自己冻的（第五十三轮），不是剧情卡死
+    if (report.judgment === 'stuck' && !meta.hold) {
         state.dot = true;
         state.dotReason = `第${meta.round}轮判定卡死（连续无推进无有效对话），需要你人工拍板`;
     } else if (report.watch.ooc || report.watch.fakeCompletion) {
@@ -1286,13 +1298,24 @@ export async function runListenerRound({ manual = false } = {}) {
             // 偏大挂起轮（2026-09-02）：判定与进度账照跑（applyUnitOutcome 里点亮照旧），
             // 唯独指导不进注入槽——挂起期间槽保持空、停进提示在独立槽拦着别硬拉回规划
             const suspended = haltSuspendActive(state, state.unit);
+            // 手动暂停推进（第五十三轮，用户开工令「当前节点暂缓不推进、检测面板正常运行」）：
+            // 方向指导与暗牌停发、点亮冻结（applyUnitOutcome），三查照跑照修正。与挂起的分工——
+            // 挂起＝偏大等处置、指导一概不进槽；暂停＝用户要在当前节点停留、只停推进不停质量修正
+            const hold = Boolean(state.hold);
             // 暗牌只随指导同行：goal/action_hint 都空＝静默轮，模型就算多嘴给了 hidden 也不因此破静默
-            let text = (report.goal || report.actionHint) ? guidanceText(report.goal, report.actionHint, report.hidden) : '';
+            let text = !hold && (report.goal || report.actionHint) ? guidanceText(report.goal, report.actionHint, report.hidden) : '';
             // 三查修正（第五十二轮）：达门槛的发现自动并进指导——节点方向静默的轮也照发（全程自动化）；
-            // 挂起轮拦下（挂起＝等用户处理，指导一概不进槽），三查报告照常落账给人看
+            // 挂起轮拦下（挂起＝等用户处理，指导一概不进槽）；暂停轮照发（三查修正不属于节点推进）。
+            // 两种轮的三查报告都照常落账给人看
             if (!suspended) {
                 const fix = findingsFixText(report.findings, cfg.intervene);
                 if (fix) text = text ? `${text}\n${fix}` : fix;
+            }
+            if (hold && !suspended) {
+                report.goal = '';   // 照挂起轮同款：拦下的方向按静默轮落账，留痕里才看得到暂停原因
+                report.actionHint = '';
+                report.hidden = '';
+                report.noGuidanceReason = '暂停推进中（手动）：节点方向与暗牌停发、进度冻结；三查照常（报告见监听页「检查报告」区，达门槛的修正照发）';
             }
             if (suspended) {
                 text = '';
@@ -1303,7 +1326,7 @@ export async function runListenerRound({ manual = false } = {}) {
             }
             writeSlot(text);   // 滚动覆写：静默轮写空串（旧指导不留到下一轮）
             recordGuide(state, lastFloor + 1, text);   // 指导账本（第五十轮）：记到「它塑造的那层楼」名下
-            applyUnitOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, lastFloor, guidance: text, suspended, retried: parsed.retried, tokens, materials });
+            applyUnitOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, lastFloor, guidance: text, suspended, hold, retried: parsed.retried, tokens, materials });
         } else {
             const report = normalizeLightReport(parsed.result);
             const intervene = lightShouldIntervene(report, cfg.intervene) && report.goal;
@@ -1739,6 +1762,26 @@ export function resumeListener() {
     persistListener();
     updateWandDot(state);
     notifyPanel();
+}
+
+// 手动暂停推进的按钮出口（第五十三轮，用户开工令「我在监听期间点一下，当前节点暂缓不推进，
+// 检测面板正常运行；事件结束再点一下恢复正常」）：只对单位轮生效（轻量执勤没有节点推进可停）。
+// 开＝清注入槽＋给「暂停后要塑造的下一层楼」记空账——旧方向指导既不再注入、也不会被删楼/重做
+// 的还原出口灌回去（第五十轮账本按楼层取数，空账＝还原后照旧裸跑/只有当轮修正）；
+// 关＝不动槽，由 UI 侧紧接着自动补一轮判定，把方向指导立刻写回来（不用等下一条消息落地）
+export function setListenerHold(on) {
+    const state = listenerState();
+    const next = Boolean(on);
+    if (state.hold !== next) {
+        state.hold = next;
+        persistListener();
+        if (next) {
+            writeSlot('');
+            recordGuide(state, Math.max(1, Number(state.lastFloorSeen) || 0) + 1, '');
+        }
+        notifyPanel();
+    }
+    return state.hold;
 }
 
 export function setListenerEnabled(on) {

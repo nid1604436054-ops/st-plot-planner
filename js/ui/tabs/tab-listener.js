@@ -10,7 +10,7 @@ import { memoryState } from "../../memoryTable.js";   // 判定材料区的记�
 import { syncLfProgress, scheduleReentryFor } from "../../longform.js";
 import {
     listenerState, listenerCfg, listenerProvider, listenerModeLabel, persistListener,
-    runListenerRound, resumeListener, setListenerEnabled, manualLitCurrentNode,
+    runListenerRound, resumeListener, setListenerEnabled, setListenerHold, manualLitCurrentNode,
     opUnmountUnit, opRecallSidelined, opDiscardSidelined, lastListenerPrompt,
     clearListenerHalt, haltHintText, limitFloors, formatFloors,
 } from "../../listener.js";
@@ -184,14 +184,17 @@ function renderTab(container) {
             <div class="pp-item-ops">
                 ${unit.nodeIdx >= unit.nodes.length
                     ? `<span id="pp_ls_next" class="menu_button" title="末节点已点亮后的手动衔接（无自动档）：退位槽有单位就接回，没有就去下面导入下一个">接续下一单位</span>`
-                    : `<span id="pp_ls_lit" class="menu_button" title="人工拍板：不等模型判定，直接把当前待判节点记为达成（两本账里用户显式操作可改进度账）">标记达成</span>`}
+                    : `${state.hold
+                        ? `<span id="pp_ls_hold" class="menu_button" title="暂停推进中（你点的）：节点方向指导与角色暗牌停发、点亮冻结——判定照跑、三查（OOC/剧情重复/文风重复）照常出报告、达门槛的修正照发。当前事件演完点这里恢复，恢复时会立刻补一轮判定把方向指导写回来">▶ 恢复推进（暂停中）</span>`
+                        : `<span id="pp_ls_hold" class="menu_button" title="想在当前节点停留（插个话题/动作自由演绎）时点这个：停发节点方向指导并清掉注入槽里的旧指导、进度冻结（判定不再点亮），免得它一直拉模型去下一个节点；三查与检查报告照常运行。当前事件演完再点一下恢复">⏸ 暂停推进</span>`}
+                    <span id="pp_ls_lit" class="menu_button" title="人工拍板：不等模型判定，直接把当前待判节点记为达成（两本账里用户显式操作可改进度账）${state.hold ? '；暂停推进中也能点——手动点亮是用户显式操作，不算自动推进' : ''}">标记达成</span>`}
                 <span id="pp_ls_unmount" class="menu_button" title="卸下当前单位（进退位槽，进度原样保留，可再接回）；卸下后本聊天按轻量口径执勤">卸下</span>
             </div>
         </div>
         <div class="pp-ls-nodes">
             ${unit.nodes.map((n, i) => `
             <div class="pp-ls-node ${i < unit.nodeIdx ? 'pp-ls-node-lit' : ''} ${i === unit.nodeIdx ? 'pp-ls-node-cur' : ''}">
-                <span class="pp-ls-node-state">${i < unit.nodeIdx ? '✓' : (i === unit.nodeIdx ? (stuckShown ? '⚠卡死' : '待判') : '未到')}</span>
+                <span class="pp-ls-node-state">${i < unit.nodeIdx ? '✓' : (i === unit.nodeIdx ? (state.hold ? '⏸暂停' : (stuckShown ? '⚠卡死' : '待判')) : '未到')}</span>
                 <span class="pp-ls-node-title" title="${escapeHtml(n.criterion)}">${escapeHtml(n.title)}</span>
                 <span class="pp-muted pp-ls-node-crit">${escapeHtml(clamp(n.criterion, 44))}</span>
             </div>`).join('')}
@@ -243,8 +246,8 @@ function renderTab(container) {
             <summary><b>检查报告</b><span class="pp-muted" title="轻量三查（OOC／剧情重复／文风重复）随单位判定同行：默认收起、只出报告不干预；发现达到「介入」旋钮门槛时修正自动并入下方「本轮指导」">第 ${rec.round} 轮 · ${rec.mode === 'unit' ? '单位' : '轻量'} · ${escapeHtml(lightChecksLine(rec.findings))}</span></summary>
             <div class="pp-ls-trace-body">
                 ${(rec.findings.ooc?.items ?? []).map(it => `<div class="pp-ls-ev"><b>OOC·${escapeHtml(it.aspect)}·${escapeHtml(it.severity)}</b> ${escapeHtml(clamp(it.evidence, 100))}<span class="pp-muted">建议：${escapeHtml(clamp(it.fix, 80))}</span></div>`).join('')}
-                ${(rec.findings.plotRepeat && (rec.findings.plotRepeat.found || rec.findings.plotRepeat.note)) ? `<div class="pp-ls-ev"><b>剧情重复${rec.findings.plotRepeat.found ? '' : '·无'}</b> ${escapeHtml(rec.findings.plotRepeat.note)}</div>` : ''}
-                ${(rec.findings.styleRepeat && (rec.findings.styleRepeat.level !== '无' || rec.findings.styleRepeat.note)) ? `<div class="pp-ls-ev"><b>文风重复·${escapeHtml(rec.findings.styleRepeat.level)}</b> ${escapeHtml(rec.findings.styleRepeat.note)}</div>` : ''}
+                ${(rec.findings.plotRepeat && (rec.findings.plotRepeat.found || rec.findings.plotRepeat.note)) ? `<div class="pp-ls-ev"><b>剧情重复${rec.findings.plotRepeat.found ? '' : '·无'}</b> ${escapeHtml(rec.findings.plotRepeat.note)}${rec.findings.plotRepeat.fix ? `<span class="pp-muted">改法：${escapeHtml(clamp(rec.findings.plotRepeat.fix, 100))}</span>` : ''}</div>` : ''}
+                ${(rec.findings.styleRepeat && (rec.findings.styleRepeat.level !== '无' || rec.findings.styleRepeat.note)) ? `<div class="pp-ls-ev"><b>文风重复·${escapeHtml(rec.findings.styleRepeat.level)}</b> ${escapeHtml(rec.findings.styleRepeat.note)}${rec.findings.styleRepeat.fix ? `<span class="pp-muted">改法：${escapeHtml(clamp(rec.findings.styleRepeat.fix, 100))}</span>` : ''}</div>` : ''}
                 ${!rec.findings.ooc?.found && !rec.findings.plotRepeat?.found && (!rec.findings.styleRepeat || rec.findings.styleRepeat.level === '无') ? '<div class="pp-muted">本轮三项无发现。</div>' : ''}
                 <div class="pp-muted">门槛＝「介入」旋钮同一档口径：低＝仅轻微发现（OOC／文风轻微）只出报告不修正，中／高＝有发现就修正。修正段以【检查修正】开头并进指导。</div>
             </div>
@@ -368,6 +371,20 @@ function bindTab(container) {
 
     container.querySelector('#pp_ls_lit')?.addEventListener('click', () => {
         if (manualLitCurrentNode()) toastr.success('当前节点已手动记为达成（进度账·用户显式操作）');
+    });
+
+    // 暂停推进两态键（第五十三轮，用户开工令）：暂停＝清槽冻结（三查照跑）；恢复＝立刻补一轮判定，
+    // 方向指导马上回注入槽——不等下一条消息落地（用户点恢复的时机就是「这段演完了」）
+    container.querySelector('#pp_ls_hold')?.addEventListener('click', async () => {
+        const on = setListenerHold(!listenerState().hold);
+        renderTab(container);
+        if (on) {
+            toastr.info('已暂停推进：方向指导停发、注入槽已清、进度冻结；检查报告与修正照常。演完这段后点「恢复推进」');
+        } else {
+            const r = await runListenerRound({ manual: true });   // 补判：把方向指导写回槽
+            if (r?.ok) toastr.success('已恢复推进：方向指导已写回注入槽');
+            else if (r?.skipped) toastr.warning(`已恢复推进（本轮补判没跑：${({ disabled: '总开关没开', paused: '监听处于失联暂停', 'no-chat': '当前聊天没有楼层', busy: '上一轮还在跑' })[r.skipped] ?? r.skipped}）——下一轮扮演输出后自动续跑`);
+        }
     });
 
     container.querySelector('#pp_ls_next')?.addEventListener('click', () => {
@@ -1003,6 +1020,7 @@ function refreshTraceWindow() {
         ${rec.mode === 'unit' && rec.ok ? `
             <div>判定：<b>${escapeHtml(rec.judgment)}</b>${rec.litNode ? ` · 点亮节点：${escapeHtml(rec.litNode)}${rec.litFloor ? `（第 ${rec.litFloor} 层点亮）` : ''}` : ''}</div>
             ${rec.suspended ? '<div class="pp-muted">挂起轮：判定与进度账照跑、指导未注入（偏大挂起中）</div>' : ''}
+            ${rec.hold ? '<div class="pp-muted">暂停推进轮（手动）：节点方向与暗牌停发、点亮冻结；三查照跑、达门槛的修正照发</div>' : ''}
             ${rec.progressNote ? `<div class="pp-muted">${escapeHtml(rec.progressNote)}</div>` : ''}
             ${(rec.evidence ?? []).map(e => `<div class="pp-ls-ev">${e.floor != null ? `<b>[楼层${e.floor}]</b> ` : ''}「${escapeHtml(clamp(e.quote, 120))}」<span class="pp-muted">${escapeHtml(clamp(e.note, 80))}</span></div>`).join('')}
             ${(rec.watch && (rec.watch.ooc || rec.watch.slowBurn || rec.watch.fakeCompletion || rec.watch.notes)) ? `<div class="pp-muted">watch：${[rec.watch.ooc ? 'OOC元对话' : '', rec.watch.slowBurn ? '慢热' : '', rec.watch.fakeCompletion ? '疑似假装完成' : '', rec.watch.notes ? escapeHtml(clamp(rec.watch.notes, 80)) : ''].filter(Boolean).join('｜')}</div>` : ''}
@@ -1017,8 +1035,8 @@ function refreshTraceWindow() {
         ` : ''}
         ${rec.mode === 'light' && rec.ok ? `
             ${(rec.findings?.ooc?.items ?? []).map(it => `<div class="pp-ls-ev"><b>OOC·${escapeHtml(it.aspect)}·${escapeHtml(it.severity)}</b> ${escapeHtml(clamp(it.evidence, 100))}<span class="pp-muted">建议：${escapeHtml(clamp(it.fix, 80))}</span></div>`).join('')}
-            ${(rec.findings?.plotRepeat && (rec.findings.plotRepeat.found || rec.findings.plotRepeat.note)) ? `<div class="pp-ls-ev"><b>剧情重复${rec.findings.plotRepeat.found ? '' : '·无'}</b> ${escapeHtml(rec.findings.plotRepeat.note)}</div>` : ''}
-            ${(rec.findings?.styleRepeat && (rec.findings.styleRepeat.level !== '无' || rec.findings.styleRepeat.note)) ? `<div class="pp-ls-ev"><b>文风重复·${escapeHtml(rec.findings.styleRepeat.level)}</b> ${escapeHtml(rec.findings.styleRepeat.note)}</div>` : ''}
+            ${(rec.findings?.plotRepeat && (rec.findings.plotRepeat.found || rec.findings.plotRepeat.note)) ? `<div class="pp-ls-ev"><b>剧情重复${rec.findings.plotRepeat.found ? '' : '·无'}</b> ${escapeHtml(rec.findings.plotRepeat.note)}${rec.findings.plotRepeat.fix ? `<span class="pp-muted">改法：${escapeHtml(clamp(rec.findings.plotRepeat.fix, 100))}</span>` : ''}</div>` : ''}
+            ${(rec.findings?.styleRepeat && (rec.findings.styleRepeat.level !== '无' || rec.findings.styleRepeat.note)) ? `<div class="pp-ls-ev"><b>文风重复·${escapeHtml(rec.findings.styleRepeat.level)}</b> ${escapeHtml(rec.findings.styleRepeat.note)}${rec.findings.styleRepeat.fix ? `<span class="pp-muted">改法：${escapeHtml(clamp(rec.findings.styleRepeat.fix, 100))}</span>` : ''}</div>` : ''}
         ` : ''}
         ${rec.mode === 'rollback' && rec.ok && rec.rollback?.guide ? `
             <div>${rec.rollback.guide.trigger === 'delete' ? `删楼后重做第 ${rec.rollback.guide.target} 层` : `滑动/重新生成第 ${rec.rollback.guide.target} 层`}：${rec.rollback.guide.reuse ? '注入槽已换回那一轮的原指导' : '那一轮没有原指导记录（升级前生成/超出留存/单位换过主人），本次不注入指导'}${rec.rollback.lastFloor != null ? `（现存最后一层 ${rec.rollback.lastFloor}）` : ''}</div>
