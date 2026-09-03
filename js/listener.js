@@ -14,8 +14,14 @@ import { getTavernContext, chatEnabledBookIds } from "./context.js";
 import { scanLorebooks, buildLoreContext, resolveLorePicks } from "./lorebook.js";
 import { buildMemoryContext, memoryState } from "./memoryTable.js";
 
-const POSITION_IN_PROMPT = extension_prompt_types?.IN_PROMPT ?? 0;
+// 第五十八轮（注入端位置根治＋身份可选）：酒馆注入接口的 position 参数传 IN_PROMPT＝「绝对位」
+// 落系统提示词区（聊天补全侧进 systemPrompts 段、文本补全侧进故事串锚点），随传的 depth 被无视
+// ——「注入深度」设置此前从未生效（用户实测改 0 无效的真因，扮演模型自述「指导在系统提示词」属实）。
+// 传 IN_CHAT 才是「按深度插进聊天末端」：聊天补全 populateDepthInjection 与文本补全 doChatInject
+// 两条管线都按 depth 切进消息序列、且尊重 role（SYSTEM/USER/ASSISTANT 三档）。
+const POSITION_IN_CHAT = extension_prompt_types?.IN_CHAT ?? 1;
 const ROLE_SYSTEM = extension_prompt_roles?.SYSTEM ?? 0;
+const ROLE_CHAR = extension_prompt_roles?.ASSISTANT ?? 2;   // 设置「注入身份」选「角色」时用（assistant 消息）
 const SLOT_KEY = 'pp:listener';
 const HALT_KEY = 'pp:halt';   // 停进提示槽（2026-09-02 暂停收尾）：独立于指导槽——指导槽每轮滚动覆写，
                              // 停进提示要在「没有指导的轮次」里也活着，只能自己一个键。与监听总开关无关
@@ -59,6 +65,7 @@ export function listenerCfg() {
     const c = settings.listener ??= {};
     c.enabled ??= false;
     c.depth ??= 2;
+    c.role ??= 'system';   // 第五十八轮：指导注入身份——system（旁白口径）/ char（assistant 消息）
     c.strictness ??= 'standard';
     c.intervene ??= 'medium';
     c.traceRounds ??= 50;
@@ -69,6 +76,7 @@ export function listenerCfg() {
     // （state.matRoutine / state.matReentry，见 listenerState 迁移播种）——全局键不再在这里补默认
     if (!STRICTNESS_LEVELS[c.strictness]) c.strictness = 'standard';
     if (!INTERVENE_UNIT[c.intervene]) c.intervene = 'medium';
+    if (c.role !== 'system' && c.role !== 'char') c.role = 'system';
     return c;
 }
 
@@ -1100,20 +1108,35 @@ export function lastListenerPrompt() {
 // 「先接住」对复读惯性的扮演模型是诱发语（「接住」被读成「复述一遍」），修正轮把「接住＝回应、
 // 不是复述」说死。按文本内容选尾令是确定性的：同一裸文本永远包同一层框，还原路径一字不差不破。
 const GUIDE_HEAD = '【剧情指导·本轮】';
-const GUIDE_TAIL = '——本轮扮演按上述方向走；user 最新发言先接住，再自然落回方向。';
+// 第五十八轮（用户拍板「先照着四尝试改一下」）：普通轮尾令硬化——原「再自然落回方向」没有期限，
+// 扮演模型接住 user 的临时提议后整轮顺着跑也不算违约（用户实测「旁边有酒店」插入事件后丢失主线）。
+// 改法＝把「插入事件」与「改道」说死：接住后本轮内必须回到方向；只有 user 明确要求改变剧情走向
+// 才算改道（逃逸口不能省——判定标准里「用户明确指示」本就最高优先，指导不能凌驾于用户之上）。
+// 「先接住」三字保留：R55 查实的复读诱发是修正轮的「接住」措辞，普通轮的「先接住」没背过案底。
+const GUIDE_TAIL = '——本轮扮演按上述方向走；user 最新发言先接住，再落回上述方向。他的临时提议是插入事件：接住后本轮内回到方向，不得整轮顺着它跑；只有他明确要求改变剧情走向时才改道。';
 const GUIDE_FIX_TAIL = '——user 最新发言先用角色的反应接住（回应、反问或行动，不复述他的原话），再按上述修正与方向走；被点名的行为本轮不得再出现。';
+
+let lastSlotRaw = '';   // 最近一次写槽的裸文本（内存级）——设置页改注入深度/身份后可立即按新口径重写原文本
 
 function writeSlot(text) {
     const cfg = listenerCfg();
     const d = Number(cfg.depth);
     const raw = String(text ?? '').trim();
+    lastSlotRaw = raw;
     const tail = raw.includes('【检查修正】') ? GUIDE_FIX_TAIL : GUIDE_TAIL;
     const t = raw ? `${GUIDE_HEAD}\n${raw}\n${tail}` : '';   // 静默/作废轮写空串，不注入空框
-    setExtensionPrompt(SLOT_KEY, t, POSITION_IN_PROMPT, Number.isFinite(d) && d >= 0 ? Math.floor(d) : 2, false, ROLE_SYSTEM);
+    const role = cfg.role === 'char' ? ROLE_CHAR : ROLE_SYSTEM;   // 身份选项只管指导槽；停进提示恒系统
+    setExtensionPrompt(SLOT_KEY, t, POSITION_IN_CHAT, Number.isFinite(d) && d >= 0 ? Math.floor(d) : 2, false, role);
+}
+
+// 设置页改「注入深度/注入身份」后的即时生效口：按新配置重写当前槽内容（裸文本原样、只换框外参数；
+// 页面刷新后 lastSlotRaw 为空串——写空等于清空本就空的槽，下一轮判定照常滚动覆写）
+export function refreshListenerSlot() {
+    writeSlot(lastSlotRaw);
 }
 
 export function clearListenerSlot() {
-    setExtensionPrompt(SLOT_KEY, '', POSITION_IN_PROMPT, 2, false, ROLE_SYSTEM);
+    setExtensionPrompt(SLOT_KEY, '', POSITION_IN_CHAT, 2, false, ROLE_SYSTEM);
 }
 
 // ---------------------------------------------------------------------------
@@ -1142,8 +1165,8 @@ function haltDepth() {
 
 export function syncHaltSlot() {
     const h = listenerState().halt;
-    if (h) setExtensionPrompt(HALT_KEY, haltSlotText(h), POSITION_IN_PROMPT, haltDepth(), false, ROLE_SYSTEM);
-    else setExtensionPrompt(HALT_KEY, '', POSITION_IN_PROMPT, 2, false, ROLE_SYSTEM);
+    if (h) setExtensionPrompt(HALT_KEY, haltSlotText(h), POSITION_IN_CHAT, haltDepth(), false, ROLE_SYSTEM);
+    else setExtensionPrompt(HALT_KEY, '', POSITION_IN_CHAT, 2, false, ROLE_SYSTEM);
 }
 
 // 内部写点：直接改 state.halt（纯逻辑区）＋由调用方负责 persist 与 syncHaltSlot

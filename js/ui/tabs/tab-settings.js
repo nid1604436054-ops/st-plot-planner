@@ -6,7 +6,7 @@ import { settings, save, newId, upsertApiProfile, renameApiProfile } from "../..
 import { testConnection, fetchModels, searchWeb, MODEL_PLACES } from "../../api.js";
 import { commonTaskSystem } from "../../materials.js";
 import { chatDataKey, resetChatDataCache } from "../../chatdata.js";
-import { listenerCfg, setListenerEnabled } from "../../listener.js";
+import { listenerCfg, setListenerEnabled, refreshListenerSlot, syncHaltSlot } from "../../listener.js";
 import { escapeHtml, clamp, readFileAsText } from "../../utils.js";
 import { renderWorldbookLibrary } from "./tab-worldbook.js";
 
@@ -140,8 +140,13 @@ export const settingsTab = {
                 </div>
                 <div class="pp-muted">监听固定关闭思考，不吃高级设置里「关闭思考」总开关——监听每轮都跑、开了思考成本会爆炸；剧情规划等其余调用仍跟总开关走</div>
                 <div class="pp-muted" title="第四十九轮：监听模型的选择从本区搬进页面最底部的「分处模型」区（与其他调用大模型的功能同一处管理）；此前显式选过的方案已自动带过去">监听用哪个模型：去本页最底部「分处模型」区的「监听判定」行选（默认跟随当前配置）</div>
-                <label class="pp-label" title="监听指导注入槽的深度（0 = 紧贴上下文末尾；数字越大越靠前）。默认 2，比 1.0 剧情注入（默认 4）更靠近末端；同轮并存时监听指导在更后面">注入深度</label>
+                <label class="pp-label" title="监听指导注入槽的深度（0 = 紧贴上下文末尾；数字越大越靠前）。默认 2，比 1.0 剧情注入（默认 4）更靠近末端；同轮并存时监听指导在更后面。第五十八轮起真正按深度插进聊天末端（此前落系统提示词区、深度不生效）；改完立即按新深度重写当前指导">注入深度</label>
                 <input id="pp_set_ls_depth" class="text_pole textarea_compact" type="number" min="0" max="100" />
+                <label class="pp-label" title="指导以什么身份进上下文（第五十八轮）：系统＝旁白/后台口径的系统消息（默认，指导历来口径）；角色＝以角色自己那侧的消息（assistant）出现——部分模型对「自己这侧」的服从性更强，可对比试。只影响指导槽；停进提示恒为系统口径">注入身份</label>
+                <select id="pp_set_ls_role" class="text_pole">
+                    <option value="system">系统（旁白口径，默认）</option>
+                    <option value="char">角色（assistant 消息）</option>
+                </select>
                 <hr class="pp-hr" />
                 <div class="pp-grid2">
                     <div>
@@ -285,7 +290,17 @@ export const settingsTab = {
             setListenerEnabled(lsOn.checked);
             if (lsOn.checked) toastr.info('监听已启用：扮演模型每轮输出完毕后自动判定，指导写入独立注入槽');
         });
-        bindNum('#pp_set_ls_depth', () => ls.depth, v => ls.depth = Math.max(0, v));
+        // 第五十八轮：深度/身份改动即时生效——按新口径重写当前指导与停进提示（裸文本原样，只换位置/身份参数）
+        const lsSlotRefresh = () => { refreshListenerSlot(); syncHaltSlot(); };
+        bindNum('#pp_set_ls_depth', () => ls.depth, v => { ls.depth = Math.max(0, v); lsSlotRefresh(); });
+        const lsRole = container.querySelector('#pp_set_ls_role');
+        lsRole.value = ls.role === 'char' ? 'char' : 'system';
+        lsRole.addEventListener('change', () => {
+            listenerCfg().role = lsRole.value === 'char' ? 'char' : 'system';
+            save();
+            lsSlotRefresh();
+            toastr.info(lsRole.value === 'char' ? '指导已改为以角色身份注入（下一轮起口径不变，当前指导已按新身份重写）' : '指导已改回系统身份注入');
+        });
         bindNum('#pp_set_ls_pmin', () => ls.progressMin, v => ls.progressMin = Math.max(50, v));
         bindNum('#pp_set_ls_pmax', () => ls.progressMax, v => ls.progressMax = Math.max(ls.progressMin + 50, v));
         // 第三十七轮：监听楼层数/附带世界书检索/附带记忆表格三控件随材料单搬进监听页「判定材料」区，这里不再绑定
