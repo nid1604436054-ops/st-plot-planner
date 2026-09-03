@@ -10,7 +10,7 @@ import { loadChatData, saveChatData, flushChatData } from "./chatdata.js";
 import { chatCompletion, parseModelJson } from "./api.js";
 import { materialSections } from "./materials.js";
 import { storyState, activeStory } from "./story.js";
-import { listenerState, opMountUnit, runReentryRound, collectFloorsFromChat, lastRoleFloor, rollbackListenerFloors } from "./listener.js";
+import { listenerState, opMountUnit, runReentryRound, rollbackListenerFloors, roleFloorCeil } from "./listener.js";
 import { getTavernContext } from "./context.js";
 import { storageItemsInEffect } from "./store.js";
 import { knowledgeLists, payloadFromIds, entryText } from "./knowledge.js";
@@ -1210,7 +1210,7 @@ export function rollbackLfChapterOf(unit) {
 export function reconcileLfFloors() {
     const chat = Array.isArray(getTavernContext().chat) ? getTavernContext().chat : [];
     if (!chat.length) return null;   // chatdata 未载完不硬对账（就绪窗口坑：空聊天不当「全删」处理）
-    const rolled = rollbackListenerFloors(lastRoleFloor(collectFloorsFromChat(chat)));
+    const rolled = rollbackListenerFloors(roleFloorCeil(chat));   // 第五十七轮：删楼判别基准改「含隐藏的总楼数」——藏楼不动账，真删才回退
     if (!rolled) return null;
     for (const r of rolled) rollbackLfChapterOf(r.unit);
     return rolled;

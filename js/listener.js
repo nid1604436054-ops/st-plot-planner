@@ -356,6 +356,10 @@ export function discardSidelined(state) {
 
 // ---------------------------------------------------------------------------
 // 纯逻辑：楼层收集与格式化（全部未隐藏楼层带楼层号；楼层号只数角色回复，与全插件口径一致）
+// 楼层号口径（第五十七轮）＝全聊天绝对号：非空角色楼按出现顺序占号，「对 AI 隐藏」的楼层
+// 照样占号但不显示正文（藏在哪层号就空在哪）；空楼不占号。此前隐藏楼不占号＝相对号——
+// 藏一批头部楼层后全体楼号前移、锚层账与水位全部错位，轮首对账把「还在只是藏了」当删楼
+// 熄灭节点（用户实测藏楼后节点回退到最开始）。绝对号下藏/取消隐藏不动任何号，删楼才缩号。
 // ---------------------------------------------------------------------------
 
 export function collectFloorsFromChat(chat) {
@@ -363,16 +367,26 @@ export function collectFloorsFromChat(chat) {
     const out = [];
     let floor = 0;
     for (const m of chat) {
-        if (m?.is_system === true) continue;   // 「对 AI 隐藏」的楼层不进输入也不计楼层
+        const hidden = m?.is_system === true;   // 「对 AI 隐藏」的楼层：不进输入；角色楼照样占号（绝对号）
         if (m?.is_user) {
             const text = String(m?.mes ?? '');
-            if (text) out.push({ floor: null, name: '{{user}}', isUser: true, text });
+            if (text && !hidden) out.push({ floor: null, name: '{{user}}', isUser: true, text });
         } else {
             const text = String(m?.mes ?? '');
-            if (text) out.push({ floor: ++floor, name: String(m?.name ?? '角色'), isUser: false, text });   // 空楼不进输入也不占号：模型要按可见楼层引证
+            if (text) floor++;   // 空楼不进输入也不占号；隐藏楼占号不显示（模型按可见楼层引证，号有跳空属正常）
+            if (text && !hidden) out.push({ floor, name: String(m?.name ?? '角色'), isUser: false, text });
         }
     }
     return out;
+}
+
+// 现存非空角色楼总数（含隐藏楼；第五十七轮）＝现存最大楼层号。删楼判别基准：
+// 「楼层还在只是被隐藏」总数不变，真删楼总数才缩水——对账回退用它，不再被藏楼误触发
+export function roleFloorCeil(chat) {
+    if (!Array.isArray(chat)) return 0;
+    let n = 0;
+    for (const m of chat) if (m && m.is_user !== true && String(m.mes ?? '') !== '') n++;
+    return n;
 }
 
 export function formatFloors(list) {
@@ -381,14 +395,15 @@ export function formatFloors(list) {
         : `[楼层${m.floor}] ${m.name}: ${m.text}`).join('\n\n');
 }
 
-// 最后一楼签名：楼数 + 最后一条角色楼内容指纹。滑动/重生成内容没变 → 签名不变 → 不重跑
+// 最后一楼签名：可见楼数（含用户楼，第五十七轮——藏/取消隐藏用户楼也要能触发重判）＋最后一条角色楼
+// 内容指纹。滑动/重生成内容没变 → 签名不变 → 不重跑
 export function floorsSignature(chat) {
     const list = collectFloorsFromChat(chat);
     const last = [...list].reverse().find(m => !m.isUser);
     if (!last) return '';
     let h = 5381;
     for (let i = 0; i < last.text.length; i++) h = ((h << 5) + h + last.text.charCodeAt(i)) >>> 0;
-    return `${list.filter(m => !m.isUser).length}:${h.toString(16)}`;
+    return `${list.length}:${h.toString(16)}`;
 }
 
 // 列表里最后一个带楼层号的角色楼（楼层号为全聊天绝对号）；没有角色楼＝0。
@@ -1247,6 +1262,7 @@ export async function runListenerRound({ manual = false } = {}) {
     const floorSig = floorsSignature(chat);
     const allFloors = collectFloorsFromChat(chat);
     const lastFloor = lastRoleFloor(allFloors);   // 锚层：本轮最后一层角色楼（点亮锚在这上面）
+    const nextFloor = roleFloorCeil(chat) + 1;   // 下一层将生成的楼层号（第五十七轮）：隐藏楼仍在数组、新楼排其后——指导账记它名下（藏尾楼时 lastFloor+1 会记错楼）
     syncGuideLineForJudgment(state, lastFloor);   // 判定输入线校正（第五十轮）：有删楼没接住时「上一轮指导」按原账换线
     state.lastFloorSeen = lastFloor;              // 楼层水位（第五十轮）：删楼缩水的判定基准，正常轮随抬
     const floors = limitFloors(allFloors, Number(state.matRoutine.floors) || 0);   // 日常监听材料单（第三十七轮）：成功与失败留痕同一个口径
@@ -1262,7 +1278,7 @@ export async function runListenerRound({ manual = false } = {}) {
     try {
         let messages;
         const floorsText = formatFloors(floors);
-        const floorsNote = state.matRoutine.floors > 0 ? `最近 ${state.matRoutine.floors} 层角色楼（楼层号为全聊天绝对号）` : undefined;
+        const floorsNote = state.matRoutine.floors > 0 ? `最近 ${state.matRoutine.floors} 层角色楼（楼层号为全聊天绝对号；被隐藏的楼层保留楼层号但不显示正文，号有跳空属正常）` : undefined;
         // 关键词激活窗口（第三十八轮，用户拍板「单独一个楼层数、与正文的分开」）：扫描文本与正文窗口
         // 各裁各的——正文楼层数只管「剧情上下文」带几层，「世界书检索」往回看几层归 scanFloors（0＝全聊天）
         const scanText = formatFloors(limitFloors(allFloors, Number(state.matRoutine.scanFloors) || 0));
@@ -1350,7 +1366,7 @@ export async function runListenerRound({ manual = false } = {}) {
                 report.noGuidanceReason = '长线偏离挂起中：判定与进度账照跑，指导暂停注入（处置出口见监听页挂起卡的指路行）';
             }
             writeSlot(text);   // 滚动覆写：静默轮写空串（旧指导不留到下一轮）
-            recordGuide(state, lastFloor + 1, text);   // 指导账本（第五十轮）：记到「它塑造的那层楼」名下
+            recordGuide(state, nextFloor, text);   // 指导账本（第五十轮）：记到「它塑造的那层楼」名下
             applyUnitOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, lastFloor, guidance: text, suspended, hold, retried: parsed.retried, tokens, materials });
         } else {
             const report = normalizeLightReport(parsed.result);
@@ -1363,7 +1379,7 @@ export async function runListenerRound({ manual = false } = {}) {
             if (fix) text = text ? `${text}\n${fix}` : fix;
             if (!intervene && report.goal) report.noGuidanceReason = `介入档（${INTERVENE_LIGHT[cfg.intervene].label}）不够格：${report.noGuidanceReason || '本轮发现未达发送门槛'}`;
             writeSlot(text);
-            recordGuide(state, lastFloor + 1, text);   // 指导账本（第五十轮）：轻量轮同记账
+            recordGuide(state, nextFloor, text);   // 指导账本（第五十轮）：轻量轮同记账
             applyLightOutcome(state, report, { round, at, floorSig, floorCount: floors.filter(f => !f.isUser).length, lastFloor, guidance: text, retried: parsed.retried, tokens, materials });
         }
         const capped = Math.max(1, Math.floor(Number(cfg.traceRounds) || 50));
@@ -1385,7 +1401,7 @@ export async function runListenerRound({ manual = false } = {}) {
             error: err?.message ?? String(err),
         });
         writeSlot('');   // 失败轮注入槽清空（判断点 10：宁可裸跑也不喂旧指导）
-        recordGuide(state, lastFloor + 1, '');   // 失败也记账（第五十轮）：这层楼当时就是裸跑生成的，重做同样裸跑
+        recordGuide(state, nextFloor, '');   // 失败也记账（第五十轮）：这层楼当时就是裸跑生成的，重做同样裸跑
         const capped = Math.max(1, Math.floor(Number(cfg.traceRounds) || 50));
         if (state.trace.length > capped) state.trace.length = capped;
         persistListener();
@@ -1613,6 +1629,7 @@ export function restoreGuideAfterShrink() {
         const M = lastRoleFloor(collectFloorsFromChat(chat));
         const seen = Number(state.lastFloorSeen);
         if (!Number.isFinite(seen) || seen <= M) return;   // 没缩水：不动（水位由判定轮维护）
+        if (seen <= roleFloorCeil(chat)) return;   // 只是藏楼不是删楼（第五十七轮）：水位与现存末楼之间的楼层还在数组里（is_system），还原/作废都不做
         state.lastFloorSeen = M;
         const T = M + 1;
         const g = guideEntryFor(state, T);
@@ -1649,7 +1666,7 @@ export function restoreGuideForRedo() {
         let n = 0;
         for (let i = 0; i < chat.length - 1; i++) {
             const m = chat[i];
-            if (m && m.is_system !== true && m.is_user !== true && String(m.mes ?? '')) n++;   // 空楼不占号，同 collectFloorsFromChat 口径
+            if (m && m.is_user !== true && String(m.mes ?? '')) n++;   // 非空角色楼占号（隐藏楼也占，第五十七轮绝对号口径）
         }
         const T = n + 1;   // 被重做那层的楼层号
         const g = guideEntryFor(state, T);
@@ -1768,6 +1785,15 @@ export function initListener() {
         }, 600);
     });
 
+    // 藏楼/取消藏楼自动重判（第五十七轮，用户开工令）：酒馆的隐藏按钮只改 is_system＋存档、
+    // 全程不发事件（源码核实 hideChatMessageRange）——document 级点击委托补个眼线，点了就去抖
+    // 跑一轮判定（签名闸兜底：楼层没真变不跑、不花调用）。与酒馆自己的事件委托同款，只读不碰它的 DOM。
+    // 斜杠/脚本等无点击入口的藏楼兜底在下一触点：任何原因跑起判定轮时签名变了照跑，且轮首
+    // 对账已改按「含隐藏的总楼数」判删楼，藏楼不再误回退
+    document.addEventListener('click', e => {
+        if (e.target?.closest?.('.mes_hide, .mes_unhide')) scheduleAnalyze();
+    });
+
     // 生成开始前（第五十轮）：滑动/重新生成＝重做最后一层 → 注入槽换回塑造它的原账；
     // 普通发送只做删楼缩水兜底（删楼事件没接住时补还原）。continue/impersonate/quiet 不碰
     // （酒馆源码核实 GENERATION_STARTED 在提示词组装之前发出，此处改槽来得及）
@@ -1807,7 +1833,7 @@ export function setListenerHold(on) {
         persistListener();
         if (next) {
             writeSlot('');
-            recordGuide(state, Math.max(1, Number(state.lastFloorSeen) || 0) + 1, '');
+            recordGuide(state, roleFloorCeil(getTavernContext().chat) + 1, '');   // 给「下一层将生成的楼」记空账（绝对号口径，藏尾楼也对）
         }
         notifyPanel();
     }
@@ -1864,7 +1890,7 @@ export function rollbackOneNode() {
         rollback: { kind: 'manual', label: String(unit.title ?? ''), from, to: from - 1, unlit } });
     if (state.trace.length > capped) state.trace.length = capped;
     writeSlot('');
-    recordGuide(state, Math.max(1, Number(state.lastFloorSeen) || 0) + 1, '');   // 未生成楼层记空账（防还原路径灌回旧方向）
+    recordGuide(state, roleFloorCeil(getTavernContext().chat) + 1, '');   // 未生成楼层记空账（防还原路径灌回旧方向；绝对号口径，藏尾楼也对）
     voidGuidance(state, '节点回退');   // 旧指导是给回退前位置写的，不作数也不当防复读参照
     persistListener();
     notifyPanel();
