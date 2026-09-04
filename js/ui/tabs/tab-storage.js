@@ -15,6 +15,7 @@ import { escapeHtml, clamp, downloadJson, readFileAsText } from "../../utils.js"
 
 let stFold = false;   // 根折叠区展开状态（跨重渲染保留）
 const stParts = { add: false, consult: false, list: true };   // 三个子折叠区各自记忆（默认只开「已有玩法」）
+const stOpenRows = new Set();   // 展开详情的条目行 id（第六十二轮：条目行收起只留标题，点行展开）
 let consultBusy = false;   // 玩法咨询生成在途标志（瞬时态，不落存储）
 
 // 渲染游戏玩法折叠区（添加表单 + 条目列表 + 导入导出），追加到剧情指导页底部的折叠区容器
@@ -267,10 +268,16 @@ function renderList(root) {
         list.innerHTML = '<div class="pp-muted">暂无条目</div>';
         return;
     }
-    list.innerHTML = settings.storageItems.map(i => `
-        <div class="pp-item">
+    list.innerHTML = settings.storageItems.map(i => {
+        const open = stOpenRows.has(i.id);   // 收起＝只留标题一行（同知识库清单行的做法）
+        return `
+        <div class="pp-item pp-st-erow" data-strow="${i.id}" title="点这一行展开/收起详情">
+            <span class="menu_button pp-kb-chev fa-solid ${open ? 'fa-chevron-down' : 'fa-chevron-right'}" title="展开/收起详情"></span>
+            <span class="pp-item-title" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</span>
+        </div>
+        ${open ? `
+        <div class="pp-st-edet">
             <div class="pp-item-main">
-                <span class="pp-item-title">${escapeHtml(i.name)}</span>
                 <span class="pp-muted">
                     ${i.constant ? '常驻' : `触发词：${escapeHtml((i.keys ?? []).join('、') || '无')}`}
                     · 深度 ${i.depth ?? 6}
@@ -308,7 +315,32 @@ function renderList(root) {
                     <span class="menu_button" data-st-cancel title="放弃未保存的改动，收起编辑框">取消</span>
                 </div>
             </div>
-        </div>`).join('');
+        </div>` : ''}`;
+    }).join('');
+
+    // 条目行点行展开/收起（第六十二轮）：收起＝只留标题。编辑框开着且有未保存改动时先拦一道
+    //（当场比对框里值与存量，不做脏标记跟踪——同长线 R23 防手滑丢字口径）
+    list.querySelectorAll('[data-strow]').forEach(el => el.addEventListener('click', () => {
+        const id = el.dataset.strow;
+        if (stOpenRows.has(id)) {
+            const box = list.querySelector(`[data-st-editbox="${id}"]`);
+            if (box && !box.hidden) {
+                const item = settings.storageItems.find(x => x.id === id);
+                const dirty = item && (
+                    box.querySelector('[data-st-name]').value !== item.name
+                    || box.querySelector('[data-st-keys]').value !== (item.keys ?? []).join(',')
+                    || box.querySelector('[data-st-depth]').value !== String(item.depth ?? 6)
+                    || box.querySelector('[data-st-const]').checked !== item.constant
+                    || box.querySelector('[data-st-content]').value !== item.content
+                );
+                if (dirty) { toastr.warning('这条的修改还没保存，先点编辑框里的「保存」或「取消」'); return; }
+            }
+            stOpenRows.delete(id);
+        } else {
+            stOpenRows.add(id);
+        }
+        renderList(root);
+    }));
 
     list.querySelectorAll('[data-st-en]').forEach(el => el.addEventListener('change', () => {
         const item = settings.storageItems.find(x => x.id === el.dataset.stEn);
@@ -351,6 +383,7 @@ function renderList(root) {
         box.querySelector('[data-st-cancel]').addEventListener('click', () => { box.hidden = true; });
     });
     list.querySelectorAll('[data-st-del]').forEach(el => el.addEventListener('click', () => {
+        stOpenRows.delete(el.dataset.stDel);   // 行展开状态随条目一并清掉
         removeItem(el.dataset.stDel);
         renderList(root);
     }));

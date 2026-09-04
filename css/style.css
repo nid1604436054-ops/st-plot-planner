@@ -964,6 +964,30 @@
     margin: 2px 0 10px 22px;
 }
 
+/* 游戏玩法条目行（第六十二轮，用户点名可折叠）：收起只留标题一行、点行展开详情——
+   同清单行的做法：不折行、标题超长省略（全文在悬浮说明） */
+.pp-drawer .pp-st-erow {
+    flex-wrap: nowrap;
+    align-items: center;
+    cursor: pointer;
+}
+
+.pp-drawer .pp-st-erow .pp-item-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 条目详情展开区：跟在自家条目行正下方，缩进一点表明从属（同清单展开区口径） */
+.pp-drawer .pp-st-edet {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 2px 0 10px 22px;
+}
+
 /* 抓取面板「自选」方式下未勾选行灰显（采用方式二选一：全部采用＝整把发送让模型挑、自选＝勾谁发谁——2026-08-30 真机反馈第四轮定形；未勾＝留在面板不随材料发送）。
    三作用域：知识库页签在抽屉里、抓取面板在查看器里、监听页世界书自选悬浮窗（第三十四轮） */
 .pp-drawer .pp-kb-erow.pp-kb-unsel,
