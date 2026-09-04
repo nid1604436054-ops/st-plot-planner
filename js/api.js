@@ -350,10 +350,9 @@ async function chatCompletionOnce({ messages, temperature, maxTokens, signal, on
                 attempt = {};   // 最后手段：全部去掉重发（原行为，只在梯子走完仍被拒时才到这）
             }
         }
-        if (res.ok && thinkOff
-            && !(sent.thinking || sent.enable_thinking === false || sent.reasoning_effort || sent.chat_template_kwargs || sent.reasoning)) {
-            toastr.warning('关闭思考的参数被这个端点拒绝、已全部去掉后重发——本次模型可能照常思考（生成任务在运行页看「思考」计数、可点「中断」止损）');
-        }
+        // 第五十九轮（用户点名删除）：这里原来在「请求成功但关闭思考参数被端点剥光」时每次调用弹一条
+        // 黄警告——监听每轮发调等于每轮弹，已删。剥光的信号不灭：流式思考增量照常上运行条
+        // （「思考」计数当场可见），只是不再弹窗。
     } catch (err) {
         if (err.name === 'AbortError') throw err;
         // 网络层失败最常见的原因是 CORS 拦截或地址写错

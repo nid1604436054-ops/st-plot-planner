@@ -22,7 +22,7 @@
 
 | 文件 | 行数 | 职责 | 关键导出 |
 |---|---|---|---|
-| api.js | ~530 | 模型通道＋联网搜索；预设/思考关闭/标头重试/JSON 修复/接口格式双轨（第四十四轮 chat↔responses：请求形状、流事件、usage 归一、思考映射）全在这；**分处模型（第四十九轮）：MODEL_PLACES 十三档档位表〔设置页「分处模型」区渲染与解析共用一份〕＋placeProvider 按档取方案（空/方案被删＝null 走主连接）＋chatCompletion 的 place 参数三链解析〔就近 provider＞分档＞主连接〕**；报错带原生返回（流式中断带等待秒数/已收字数/底层报错、200 非 JSON 带原文片段——第二十九轮） | chatCompletion、parseModelJson、globalPresetBlock、withGlobalPresets、searchWeb、MODEL_PLACES、placeProvider |
+| api.js | ~627 | 模型通道＋联网搜索；预设/思考关闭/标头重试/JSON 修复/接口格式双轨（第四十四轮 chat↔responses：请求形状、流事件、usage 归一、思考映射）全在这；**分处模型（第四十九轮）：MODEL_PLACES 十三档档位表〔设置页「分处模型」区渲染与解析共用一份〕＋placeProvider 按档取方案（空/方案被删＝null 走主连接）＋chatCompletion 的 place 参数三链解析〔就近 provider＞分档＞主连接〕**；报错带原生返回（流式中断带等待秒数/已收字数/底层报错、200 非 JSON 带原文片段——第二十九轮）；**第五十九轮：删「关闭思考参数被端点剥光」逐次黄条（监听每轮发调＝每轮弹，用户点名删；重试梯子与思考计数照旧）** | chatCompletion、parseModelJson、globalPresetBlock、withGlobalPresets、searchWeb、MODEL_PLACES、placeProvider |
 | settings.js | ~190 | 设置单例＋默认值＋老安装迁移（补键都在 ensureDefaults）；供应商方案两纯函数（第四十轮起 upsertApiProfile〔同地址多模型各存一条、自动名域名·模型名〕＋renameApiProfile 改名〔空名/重名拒〕；第四十四轮去重键扩成 地址＋密钥＋模型＋格式 四件套）；**分处模型（第四十九轮）：新键 placeModels＝{ 档位id: 方案id }＋migrateListenerProviderIntoPlaces（旧 listener.providerId 迁进 placeModels.listener、显式选过的方案带走、旧「方案库第一条」默认废弃、旧键删除）** | settings、save、newId、upsertApiProfile、renameApiProfile、migrateListenerProviderIntoPlaces |
 | chatdata.js | ~140 | 每聊天数据冷热双层（chatMetadata 热层 ↔ settings.chatData 冷层留底） | loadChatData、saveChatData、flushChatData |
 | context.js | ~85 | getContext() 唯一依赖点：聊天记录＋角色卡摘要＋世界书按聊天书单三助手（第四十三轮：chatBookEnabled/setChatBookEnabled/bindNewBookToChat——书单界面在监听页、写入在这）；collectPlanningContext 已撤世界书检索（一次性生成只带勾选） | collectPlanningContext、characterSummary、chatEnabledBookIds、chatBookEnabled、setChatBookEnabled、bindNewBookToChat |
