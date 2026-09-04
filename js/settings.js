@@ -77,6 +77,10 @@ const DEFAULTS = {
                             // 指定供应商方案；空/缺省＝跟随当前配置（主连接）。档位表见 api.js MODEL_PLACES，
                             // 界面在设置页最底部「分处模型」区；随导出备份的 global 段走
     uiZoom: 100,            // 面板内容缩放百分比（80–160，抽屉头部步进器调）：字与控件等比放大、页面相应变长
+    bustRpCache: false,     // 打散扮演请求的前缀缓存（第六十轮）：勾上后每个发往扮演模型的请求在最前面
+                            // 塞一段每次都不同的短标记（[pp-sid:随机]），前缀缓存从第一个词就对不上＝整个
+                            // 请求不吃缓存（Kiro 逆向端点吃缓存会注意力劣化，用户实测）。标记只进请求体
+                            // 不进聊天记录；插件自己的调用（监听/规划）不经此路、照常吃缓存
     injections: [],         // M4 隐身注入项
     storageItems: [],       // M5 额外存储条目
     storageScanLayers: 20,  // M5 玩法触发词扫描窗口：触发词在最近几层对话里出现过才算命中；0 = 不限（扫全部对话）
@@ -112,6 +116,7 @@ function ensureDefaults() {
     store.guidance.minBeats ??= 5;   // 老安装补规划节点下限（第七轮，默认 5）
     store.guidance.alignPass ??= true;   // 老安装补第二遍对齐审校开关（第十二轮，默认开）
     store.storageScanLayers ??= 20;   // 老安装补玩法触发词扫描窗口（沿用此前写死的 20）
+    store.bustRpCache ??= false;      // 老安装补扮演请求缓存打散开关（第六十轮，默认关）
     store.storageConsult ??= { idea: '', usePlan: false, useGp: false, draft: null };   // 玩法咨询的思路/材料勾选/草案（随全局设置留底）
     store.lorebookTrash ??= [];       // 老安装补世界书回收站
     store.knowledge ??= { grabCount: 5, cooldownGens: 3, lists: [] };   // 老安装补知识库（§6.9）

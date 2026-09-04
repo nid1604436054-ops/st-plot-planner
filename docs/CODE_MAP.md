@@ -8,7 +8,7 @@
 
 ## 0. 全景：加载与分层
 
-- 入口＝仓库根 `index.js`（manifest 指定）。装配顺序：initDrawer（主面板＋页签注册）→ initWandMenu（魔法棒入口）→ initListener（监听引擎，总开关默认关）→ registerLitReconciler(reconcileLfFloors)（第四十五轮：删楼回退对账器注册——监听侧管触发时机〔删楼事件＋轮首兜底〕、长线侧管章账本显式倒回，listener←longform 单向依赖不破）→ 挂三个酒馆事件（CHAT_CHANGED / MESSAGE_RECEIVED / MESSAGE_EDITED，各自做什么见 index.js 注释；删楼事件 MESSAGE_DELETED 与生成开始事件 GENERATION_STARTED 在 listener.js 里订阅）。
+- 入口＝仓库根 `index.js`（manifest 指定）。装配顺序：initDrawer（主面板＋页签注册）→ initWandMenu（魔法棒入口）→ initListener（监听引擎，总开关默认关）→ registerLitReconciler(reconcileLfFloors)（第四十五轮：删楼回退对账器注册——监听侧管触发时机〔删楼事件＋轮首兜底〕、长线侧管章账本显式倒回，listener←longform 单向依赖不破）→ installCacheBust(eventSource, event_types)（第六十轮：扮演请求前缀缓存打散——在酒馆发往扮演模型的请求最前面塞每次都不同的随机标记，全局勾选 settings.bustRpCache 默认关、独立于监听总开关；cachbust.js 纯函数＋注入式挂载，不直接碰酒馆全局）→ 挂三个酒馆事件（CHAT_CHANGED / MESSAGE_RECEIVED / MESSAGE_EDITED，各自做什么见 index.js 注释；删楼事件 MESSAGE_DELETED 与生成开始事件 GENERATION_STARTED 在 listener.js 里订阅）。
 - **分层**（自上而下调用，尽量别跨层）：
   1. **UI 层**：`index.js` ＋ `js/ui/**`（drawer / wandMenu / tabs/*）——只管界面、勾选、按钮；模型调用与数据规则一律下沉业务层。
   2. **业务层**：planner / listener / knowledge / randomEvents / reactions / memoryTable / lorebook / store / injection / units / story / gameplayConsult / materials。
@@ -23,7 +23,8 @@
 | 文件 | 行数 | 职责 | 关键导出 |
 |---|---|---|---|
 | api.js | ~627 | 模型通道＋联网搜索；预设/思考关闭/标头重试/JSON 修复/接口格式双轨（第四十四轮 chat↔responses：请求形状、流事件、usage 归一、思考映射）全在这；**分处模型（第四十九轮）：MODEL_PLACES 十三档档位表〔设置页「分处模型」区渲染与解析共用一份〕＋placeProvider 按档取方案（空/方案被删＝null 走主连接）＋chatCompletion 的 place 参数三链解析〔就近 provider＞分档＞主连接〕**；报错带原生返回（流式中断带等待秒数/已收字数/底层报错、200 非 JSON 带原文片段——第二十九轮）；**第五十九轮：删「关闭思考参数被端点剥光」逐次黄条（监听每轮发调＝每轮弹，用户点名删；重试梯子与思考计数照旧）** | chatCompletion、parseModelJson、globalPresetBlock、withGlobalPresets、searchWeb、MODEL_PLACES、placeProvider |
-| settings.js | ~190 | 设置单例＋默认值＋老安装迁移（补键都在 ensureDefaults）；供应商方案两纯函数（第四十轮起 upsertApiProfile〔同地址多模型各存一条、自动名域名·模型名〕＋renameApiProfile 改名〔空名/重名拒〕；第四十四轮去重键扩成 地址＋密钥＋模型＋格式 四件套）；**分处模型（第四十九轮）：新键 placeModels＝{ 档位id: 方案id }＋migrateListenerProviderIntoPlaces（旧 listener.providerId 迁进 placeModels.listener、显式选过的方案带走、旧「方案库第一条」默认废弃、旧键删除）** | settings、save、newId、upsertApiProfile、renameApiProfile、migrateListenerProviderIntoPlaces |
+| settings.js | ~215 | 设置单例＋默认值＋老安装迁移（补键都在 ensureDefaults）；供应商方案两纯函数（第四十轮起 upsertApiProfile〔同地址多模型各存一条、自动名域名·模型名〕＋renameApiProfile 改名〔空名/重名拒〕；第四十四轮去重键扩成 地址＋密钥＋模型＋格式 四件套）；**分处模型（第四十九轮）：新键 placeModels＝{ 档位id: 方案id }＋migrateListenerProviderIntoPlaces（旧 listener.providerId 迁进 placeModels.listener、显式选过的方案带走、旧「方案库第一条」默认废弃、旧键删除）**；**第六十轮：顶层新键 bustRpCache（扮演请求缓存打散开关，默认关）** | settings、save、newId、upsertApiProfile、renameApiProfile、migrateListenerProviderIntoPlaces |
+| cachbust.js | ~55 | 扮演请求前缀缓存打散（第六十轮）：makeBustMarker 每请求随机标记〔[pp-sid:8位十六进制]〕＋bustChatPayload（messages 前插标记 system 消息，换新数组不原地改）＋bustTextPayload（prompt 字符串前拼；聊天式在同门发的是数组、字符串闸天然跳过不双标）；installCacheBust 由 index.js 注入 eventSource/event_types（五门规），挂 CHAT_COMPLETION_SETTINGS_READY＋GENERATE_AFTER_DATA 两扇门（酒馆发请求前的最后关口，改 generate_data 原对象即改线上请求）、开关 settings.bustRpCache、文本门干跑跳过 | makeBustMarker、bustChatPayload、bustTextPayload、installCacheBust |
 | chatdata.js | ~140 | 每聊天数据冷热双层（chatMetadata 热层 ↔ settings.chatData 冷层留底） | loadChatData、saveChatData、flushChatData |
 | context.js | ~85 | getContext() 唯一依赖点：聊天记录＋角色卡摘要＋世界书按聊天书单三助手（第四十三轮：chatBookEnabled/setChatBookEnabled/bindNewBookToChat——书单界面在监听页、写入在这）；collectPlanningContext 已撤世界书检索（一次性生成只带勾选） | collectPlanningContext、characterSummary、chatEnabledBookIds、chatBookEnabled、setChatBookEnabled、bindNewBookToChat |
 | utils.js | ~170 | 转义/截断/容错 JSON（extractJson）/指纹/文件读写/token 粗估 | extractJson、escapeHtml |

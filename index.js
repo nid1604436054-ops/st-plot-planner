@@ -10,6 +10,7 @@ import { scanAndApplyStorage } from "./js/store.js";
 import { syncMemory, mergeMirrorFromSource, persistMemory } from "./js/memoryTable.js";
 import { flushChatData } from "./js/chatdata.js";
 import { initListener, registerLitReconciler } from "./js/listener.js";
+import { installCacheBust } from "./js/cachbust.js";
 import { reconcileLfFloors } from "./js/longform.js";
 import { resetGuidance } from "./js/ui/tabs/tab-guidance.js";
 import { resetWorldbook } from "./js/ui/tabs/tab-worldbook.js";
@@ -37,6 +38,10 @@ jQuery(() => {
     initWandMenu();
     initListener();   // 2.0 监听：楼层落地→逐轮判定；总开关默认关（settings.listener.enabled）
     registerLitReconciler(reconcileLfFloors);   // 删楼回退对账（第四十五轮）：监听侧管触发时机、长线侧管章账本回写
+    // 第六十轮：扮演请求前缀缓存打散——在酒馆发往扮演模型的请求最前面塞一段每次都不同的短标记，
+    // 令前缀缓存永不命中（Kiro 逆向端点吃缓存注意力劣化）；全局勾选 settings.bustRpCache 默认关、
+    // 独立于监听总开关。cachbust.js 不碰酒馆全局（五门规），eventSource/event_types 由这里注入
+    installCacheBust(eventSource, event_types);
 
     // 聊天切换：先把上一轮热层里的脏数据冲写进设置文件，再按 scope 重放/清理 M4 注入，
     // 重算 M5 储存条目，同步记忆表格镜像，清掉剧情向导的进行中进度

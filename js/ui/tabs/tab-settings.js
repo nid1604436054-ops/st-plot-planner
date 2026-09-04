@@ -147,6 +147,8 @@ export const settingsTab = {
                     <option value="system">系统（旁白口径，默认）</option>
                     <option value="char">角色（assistant 消息）</option>
                 </select>
+                <label class="pp-label" title="勾上后，每个发往扮演模型的请求都会在最前面塞一小段每次都不同的随机标记——前缀缓存按「从请求开头逐词相同」记账，开头一变整个请求必定不吃缓存。适用于吃缓存后注意力变差（只顾前几轮的指令、忘了本轮要干什么）的端点；正常端点别开——吃不到缓存会变慢变贵。标记只进发出去的请求、不写聊天记录，监听判定读不到它；插件自己的调用（监听/规划）仍照常吃缓存。立即生效，覆盖正常发言/滑动变体/重新生成/继续写等全部扮演请求，每次发标在浏览器控制台（F12）打一行标记可核对">打散扮演请求缓存</label>
+                <input id="pp_set_bust" type="checkbox" />
                 <hr class="pp-hr" />
                 <div class="pp-grid2">
                     <div>
@@ -303,6 +305,11 @@ export const settingsTab = {
         });
         bindNum('#pp_set_ls_pmin', () => ls.progressMin, v => ls.progressMin = Math.max(50, v));
         bindNum('#pp_set_ls_pmax', () => ls.progressMax, v => ls.progressMax = Math.max(ls.progressMin + 50, v));
+        // 第六十轮：打散扮演请求缓存——每个发往扮演模型的请求最前面塞一段随机标记，前缀缓存
+        // 永远不命中（逆向端点吃缓存会注意力劣化）；全局开关、独立于监听总开关，勾选立即生效
+        const lsBust = container.querySelector('#pp_set_bust');
+        lsBust.checked = settings.bustRpCache === true;
+        lsBust.addEventListener('change', () => { settings.bustRpCache = lsBust.checked; save(); });
         // 第三十七轮：监听楼层数/附带世界书检索/附带记忆表格三控件随材料单搬进监听页「判定材料」区，这里不再绑定
 
         // 知识库区：每清单抓取条数 / 冷却生成次数（清单与条目在「知识库」页签管理）
