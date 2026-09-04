@@ -2,6 +2,8 @@
 // + 按触发词/常驻注入主对话 + AI 咨询（一句思路→完整玩法规则，本区生成与入库，
 // 不进向导第 1 步运行区）+ 导入导出。折叠区追加挂载进剧情指导页底部的折叠区容器
 // （与「事件库设置」「AI 建库」同容器，三个根折叠区边距统一合并、间距一致）。
+// 根折叠区内部分三个子折叠区（第六十一轮，用户点名三功能分开别挤）：手动添加 /
+// AI 玩法创作 / 已有玩法（条目列表＋扫描窗口＋重扫导入导出），各开各收、状态各自记忆。
 // 条目本身仍随消息事件自动扫描注入（store.js）；生效中的条目在分步向导第 1 步默认勾选、
 // 作为「游戏玩法」材料随规划分析一起发给模型，检查报告（runStoryReview）也自动附带。
 import { settings, save, newId } from "../../settings.js";
@@ -11,7 +13,8 @@ import { generateGameplayDraft } from "../../gameplayConsult.js";
 import { currentLorePicks } from "../../materials.js";
 import { escapeHtml, clamp, downloadJson, readFileAsText } from "../../utils.js";
 
-let stFold = false;   // 折叠区展开状态（跨重渲染保留）
+let stFold = false;   // 根折叠区展开状态（跨重渲染保留）
+const stParts = { add: false, consult: false, list: true };   // 三个子折叠区各自记忆（默认只开「已有玩法」）
 let consultBusy = false;   // 玩法咨询生成在途标志（瞬时态，不落存储）
 
 // 渲染游戏玩法折叠区（添加表单 + 条目列表 + 导入导出），追加到剧情指导页底部的折叠区容器
@@ -23,49 +26,61 @@ export function renderStorageTools(container) {
     if (stFold) fold.open = true;
     fold.innerHTML = `
         <summary title="条目库 · 按触发注入主对话"><i class="fa-solid fa-gamepad"></i> 游戏玩法</summary>
-        <div class="pp-grid2">
-            <div>
-                <label class="pp-label">名称</label>
-                <input id="pp_st_name" class="text_pole textarea_compact" />
+        <details class="pp-fold" data-stfold="add" ${stParts.add ? 'open' : ''}>
+            <summary title="自己写规则存进条目库：触发词命中或勾常驻时自动注入主对话，生效中的条目在向导第 1 步默认勾选">手动添加</summary>
+            <div class="pp-grid2">
+                <div>
+                    <label class="pp-label">名称</label>
+                    <input id="pp_st_name" class="text_pole textarea_compact" />
+                </div>
+                <div>
+                    <label class="pp-label" title="多个词用逗号分隔。留空时自动勾上常驻；有触发词时常驻可自行勾选或取消">触发词（逗号分隔）</label>
+                    <input id="pp_st_keys" class="text_pole textarea_compact" />
+                </div>
             </div>
-            <div>
-                <label class="pp-label" title="多个词用逗号分隔。留空时自动勾上常驻；有触发词时常驻可自行勾选或取消">触发词（逗号分隔）</label>
-                <input id="pp_st_keys" class="text_pole textarea_compact" />
+            <div class="pp-grid2">
+                <div>
+                    <label class="pp-label">注入深度</label>
+                    <input id="pp_st_depth" class="text_pole textarea_compact" type="number" min="0" max="16" value="6" />
+                </div>
+                <div style="align-self:end">
+                    <label title="无条件注入"><input type="checkbox" id="pp_st_const" /> 常驻</label>
+                </div>
             </div>
-        </div>
-        <div class="pp-grid2">
-            <div>
-                <label class="pp-label">注入深度</label>
-                <input id="pp_st_depth" class="text_pole textarea_compact" type="number" min="0" max="16" value="6" />
+            <textarea id="pp_st_content" class="text_pole textarea_compact" rows="5"></textarea>
+            <div class="pp-btn-row">
+                <div id="pp_st_add" class="menu_button">添加</div>
             </div>
-            <div style="align-self:end">
-                <label title="无条件注入"><input type="checkbox" id="pp_st_const" /> 常驻</label>
+        </details>
+        <details class="pp-fold" data-stfold="consult" ${stParts.consult ? 'open' : ''}>
+            <summary title="填一句大概思路，花一次模型调用扩写成完整可执行的玩法规则，草案可改，入库后出现在「已有玩法」里。材料固定带角色摘要、最近对话与世界书自选（第四十三轮起只带「剧情指导」页第 1 步「世界书自选」面板里勾的条目〔含常驻〕，不再自动检索命中），下面两个勾选按需追加——记忆表格那类既往事件流水对玩法设计没用，一律不带；思路与草案随全局设置留底，刷新不丢">AI 玩法创作</summary>
+            <textarea id="pp_st_c_idea" class="text_pole textarea_compact" rows="2"></textarea>
+            <div class="pp-gd-selp">
+                <label title="带上进行中剧情全文：生成的玩法贴合当前剧情阶段、不与其走向冲突"><input type="checkbox" id="pp_st_c_plan" /> 附进行中剧情</label>
+                <label title="带当前注入生效中的玩法条目：新玩法与现有规则不冲突、能衔接"><input type="checkbox" id="pp_st_c_gp" /> 附生效中的玩法</label>
             </div>
-        </div>
-        <textarea id="pp_st_content" class="text_pole textarea_compact" rows="5"></textarea>
-        <div class="pp-btn-row">
-            <div id="pp_st_add" class="menu_button">添加</div>
-            <div id="pp_st_replay" class="menu_button" title="立刻按最近对话重查各条目的触发词：命中的注入、未命中的撤下。平时切对话/收到新消息会自动做；自己编辑或删除消息后用它手动对齐">立即重扫注入</div>
-            <div id="pp_st_export" class="menu_button">导出</div>
-            <label class="menu_button" for="pp_st_import">导入</label>
-            <input id="pp_st_import" type="file" accept=".json,application/json" hidden />
-        </div>
-        <label class="pp-label" title="AI 玩法创作：填一句大概思路，花一次模型调用扩写成完整可执行的玩法规则，草案可改，入库后出现在下方条目列表。材料固定带角色摘要、最近对话与世界书自选（第四十三轮起只带「剧情指导」页第 1 步「世界书自选」面板里勾的条目〔含常驻〕，不再自动检索命中），下面两个勾选按需追加——记忆表格那类既往事件流水对玩法设计没用，一律不带；思路与草案随全局设置留底，刷新不丢">AI 玩法创作</label>
-        <textarea id="pp_st_c_idea" class="text_pole textarea_compact" rows="2"></textarea>
-        <div class="pp-gd-selp">
-            <label title="带上进行中剧情全文：生成的玩法贴合当前剧情阶段、不与其走向冲突"><input type="checkbox" id="pp_st_c_plan" /> 附进行中剧情</label>
-            <label title="带当前注入生效中的玩法条目：新玩法与现有规则不冲突、能衔接"><input type="checkbox" id="pp_st_c_gp" /> 附生效中的玩法</label>
-        </div>
-        <div class="pp-muted" id="pp_st_c_loren" title="第四十三轮起 AI 玩法创作不再自动带检索命中——世界书材料只跟「剧情指导」页第 1 步「世界书自选」面板的勾选走（含常驻）；一条没勾＝本次不带世界书材料，模型不会报错但看不到这些设定"></div>
-        <div class="pp-btn-row"><span id="pp_st_c_gen" class="menu_button">生成玩法草案</span></div>
-        <div id="pp_st_c_card"></div>
-        <label class="pp-label" title="玩法条目的触发词要在最近几层对话里出现过才算命中（常驻条目不受影响）；0 = 不限（扫全部对话）。改动立即保存并按新窗口重扫一次">触发词扫描楼层（0 = 不限）</label>
-        <input id="pp_st_scan" class="text_pole textarea_compact" type="number" min="0" max="200" step="1" />
-        <label class="pp-label">条目列表</label>
-        <div id="pp_st_list"></div>`;
+            <div class="pp-muted" id="pp_st_c_loren" title="第四十三轮起 AI 玩法创作不再自动带检索命中——世界书材料只跟「剧情指导」页第 1 步「世界书自选」面板的勾选走（含常驻）；一条没勾＝本次不带世界书材料，模型不会报错但看不到这些设定"></div>
+            <div class="pp-btn-row"><span id="pp_st_c_gen" class="menu_button">生成玩法草案</span></div>
+            <div id="pp_st_c_card"></div>
+        </details>
+        <details class="pp-fold" data-stfold="list" ${stParts.list ? 'open' : ''}>
+            <summary title="条目库总览：启用 / 就地编辑 / 删除；触发词扫描窗口、立即重扫与导入导出同在本区">已有玩法（<span id="pp_st_cnt">${settings.storageItems.length}</span> 条）</summary>
+            <label class="pp-label" title="玩法条目的触发词要在最近几层对话里出现过才算命中（常驻条目不受影响）；0 = 不限（扫全部对话）。改动立即保存并按新窗口重扫一次">触发词扫描楼层（0 = 不限）</label>
+            <input id="pp_st_scan" class="text_pole textarea_compact" type="number" min="0" max="200" step="1" />
+            <div class="pp-btn-row">
+                <div id="pp_st_replay" class="menu_button" title="立刻按最近对话重查各条目的触发词：命中的注入、未命中的撤下。平时切对话/收到新消息会自动做；自己编辑或删除消息后用它手动对齐">立即重扫注入</div>
+                <div id="pp_st_export" class="menu_button">导出</div>
+                <label class="menu_button" for="pp_st_import">导入</label>
+                <input id="pp_st_import" type="file" accept=".json,application/json" hidden />
+            </div>
+            <div id="pp_st_list"></div>
+        </details>`;
     container.appendChild(fold);
 
     fold.addEventListener('toggle', () => { stFold = fold.open; });
+    // 三个子折叠区各自记忆展开状态（toggle 事件不冒泡，逐个绑——同事件库设置区的做法）
+    fold.querySelectorAll('details[data-stfold]').forEach(el =>
+        el.addEventListener('toggle', () => { stParts[el.dataset.stfold] = el.open; }));
 
     fold.querySelector('#pp_st_add').addEventListener('click', () => {
         const content = fold.querySelector('#pp_st_content').value.trim();
@@ -245,6 +260,9 @@ export function renderStorageTools(container) {
 
 function renderList(root) {
     const list = root.querySelector('#pp_st_list');
+    // 「已有玩法（N 条）」标题计数同步（增删导入后跟着变，不用重渲染整个折叠区）
+    const cnt = root.querySelector('#pp_st_cnt');
+    if (cnt) cnt.textContent = String(settings.storageItems.length);
     if (!settings.storageItems.length) {
         list.innerHTML = '<div class="pp-muted">暂无条目</div>';
         return;
